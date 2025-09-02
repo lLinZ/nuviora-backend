@@ -21,9 +21,7 @@ class AuthController extends Controller
 
         $users = User::with('role')->whereHas('status', function ($query) {
             $query->where('description', 'Activo');
-        })->whereHas('role', function ($query) {
-            $query->where('description', 'Usuario');
-        })->get();
+        })->paginate(20);
 
         return response()->json(['status' => true, 'data' => $users]);
     }
@@ -189,6 +187,43 @@ class AuthController extends Controller
         $data = $request->user();
         $user = User::with('role')->where('id', $data->id)->first();
         return response()->json(['user' => $user]);
+    }
+    public function edit_user_data(Request $request, User $user)
+    {
+        $validator = Validator::make($request->all(), [
+            'phone' => 'string|max:255',
+            'names' => 'string|max:255',
+            'surnames' => 'string|max:255',
+            'email' => 'string|email|max:255|unique:users,email,' . $user->id,
+            'password' => 'string|min:8',
+            'address' => 'string|min:8',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['status' => false, 'errors' => $validator->errors()], 400);
+        }
+        try {
+            //code...
+            if ($request->phone != '') {
+                $user->phone = $request->phone;
+            }
+            if ($request->names != '') {
+                $user->names = $request->names;
+            }
+            if ($request->surnames != '') {
+                $user->surnames = $request->surnames;
+            }
+            if ($request->email != '') {
+                $user->email = $request->email;
+            }
+            if ($request->address != '') {
+                $user->address = $request->address;
+            }
+            $user->save();
+            return response()->json(['status' => true, 'message' => 'Se ha editado el usuario', 'data' => $user], 200);
+        } catch (\Throwable $th) {
+            //throw $th;
+            return response()->json(['status' => false, 'message' => 'Error al editar el usuario', 'error' => $th->getMessage()], 500);
+        }
     }
 
     public function edit_user(Request $request, User $user)

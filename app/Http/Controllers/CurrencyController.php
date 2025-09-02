@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Currency;
 use App\Http\Controllers\Controller;
+use App\Models\Status;
 use Illuminate\Http\Request;
 
 class CurrencyController extends Controller
@@ -18,14 +19,16 @@ class CurrencyController extends Controller
 
     public function get_last_currency()
     {
-        $currency = Currency::orderBy('created_at', 'DESC')->limit(1)->get();
-        return response()->json(['status' => true, 'data' => $currency], 200);
+        $currency = Currency::whereHas('status', function ($query) {
+            $query->where('description', 'Activo');
+        })->get();
+        return response()->json(['status' => true, 'data' => $currency[0]], 200);
     }
 
     public function get_latest_currencies()
     {
         $currencies = Currency::all()->orderBy('created_at', 'DESC')->limit(5);
-        return response()->json(['status' => true, 'data' => $currencies], 200);
+        return response()->json(['status' => true, 'data' => $currencies[0]], 200);
     }
 
     /**
@@ -33,16 +36,28 @@ class CurrencyController extends Controller
      */
     public function create(Request $request)
     {
+
+        $actual_currency = Currency::whereHas('status', function ($query) {
+            $query->where('description', 'Activo');
+        })->first();
+        $status_inactivo = Status::where('description', 'Inactivo')->firstOrNew();
+        if ($actual_currency) {
+            $actual_currency->status()->associate($status_inactivo);
+            $actual_currency->save();
+        }
         //
         try {
             $currency = Currency::create([
                 'description' => $request->description,
                 'value' => $request->value,
             ]);
-            return response()->json(['data' => $currency]);
+            $status_activo = Status::where('description', 'Activo')->firstOrNew();
+            $currency->status()->associate($status_activo);
+            $currency->save();
+            return response()->json(['data' => $currency], 200);
         } catch (\Exception $e) {
             return response()->json([
-                'message' => $e->getMessage()
+                'message' => $request->all()
             ], 400);
         }
     }

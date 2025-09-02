@@ -19,11 +19,13 @@ Route::middleware('auth:sanctum')->group(function () {
      * USERS
      * ---------------------**/
     // Validacion de token
+    Route::get('users', [AuthController::class, 'get_all_users']);
+    Route::put('user/{user}', [AuthController::class, 'edit_user_data']);
     Route::get('user/data', [AuthController::class, 'get_logged_user_data']);
     // Registrar usuario
     Route::put('user/{user}/change/color', [AuthController::class, 'edit_color']);
     Route::put('user/{user}/change/theme', [AuthController::class, 'edit_theme']);
-    Route::put('user/{user}/change/password', [AuthController::class, 'edit_password']);   
+    Route::put('user/{user}/change/password', [AuthController::class, 'edit_password']);
     // Cerrar sesion
     Route::get('logout', [AuthController::class, 'logout']);
 
@@ -38,10 +40,13 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     // Crear rol nuevo
     Route::post('role', [RoleController::class, 'create']);
-    
-    
+
+
     /**---------------------
      * CURRENCY
      * ---------------------**/
+    // Crear divisa
+    Route::post('currency', [CurrencyController::class, 'create']);
+    // Obtener la ultima divisa
     Route::get('currency', [CurrencyController::class, 'get_last_currency']);
 });
