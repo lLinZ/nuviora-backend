@@ -2,14 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Department;
 use App\Models\Log;
-use App\Models\Logs;
 use App\Models\Role;
 use App\Models\Status;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
