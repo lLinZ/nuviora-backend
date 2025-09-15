@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use Illuminate\Http\Request;
@@ -51,4 +52,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('currency', [CurrencyController::class, 'create']);
     // Obtener la ultima divisa
     Route::get('currency', [CurrencyController::class, 'get_last_currency']);
+
+    Route::get('/orders/{id}/products', [OrderController::class, 'getOrderProducts']);
 });

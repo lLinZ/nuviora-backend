@@ -11,6 +11,27 @@ use Illuminate\Http\Request;
 
 class OrderController extends Controller
 {
+    public function getOrderProducts($orderId)
+    {
+        $order = Order::with(['products.product'])->findOrFail($orderId);
+
+        return response()->json([
+            'order_id'   => $order->id,
+            'order_name' => $order->name,
+            'products'   => $order->products->map(function ($op) {
+                return [
+                    'product_id'   => $op->product->id,
+                    'shopify_id'   => $op->product->product_id,
+                    'title'        => $op->product->title,
+                    'name'         => $op->product->name,
+                    'sku'          => $op->product->sku,
+                    'price'        => $op->price,
+                    'quantity'     => $op->quantity,
+                    'image'        => $op->product->image,
+                ];
+            }),
+        ]);
+    }
     public function handleOrderCreate(Request $request, ShopifyService $shopifyService)
     {
         $orderData = $request->all();

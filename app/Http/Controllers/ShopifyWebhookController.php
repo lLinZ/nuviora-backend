@@ -7,72 +7,80 @@ use App\Models\Client;
 use App\Models\Order;
 use App\Models\OrderProducts;
 use App\Models\Product;
+use App\Services\ShopifyService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 class ShopifyWebhookController extends Controller
 {
     //
-    public function handleOrderCreate(Request $request)
+    public function handleOrderCreate(Request $request, ShopifyService $shopifyService)
     {
-        $data = $request->all();
+        $orderData = $request->all();
 
-        // 🔒 Opcional: validar firma de Shopify
+        // 🔒 0. Verificar firma HMAC de Shopify
         $hmacHeader = $request->header('X-Shopify-Hmac-Sha256');
         $calculatedHmac = base64_encode(
             hash_hmac('sha256', $request->getContent(), env('SHOPIFY_WEBHOOK_SECRET'), true)
         );
+
         if (!hash_equals($hmacHeader, $calculatedHmac)) {
             return response()->json(['error' => 'Invalid signature'], 401);
         }
 
         // 1️⃣ Guardar/actualizar cliente
         $client = Client::updateOrCreate(
-            ['customer_id' => $data['customer']['id']],
+            ['customer_id' => $orderData['customer']['id']],
             [
-                'customer_number' => $data['customer']['id'],
-                'first_name' => $data['customer']['first_name'] ?? null,
-                'last_name'  => $data['customer']['last_name'] ?? null,
-                'phone'      => $data['customer']['phone'] ?? null,
-                'email'      => $data['customer']['email'] ?? null,
-                'country_name' => $data['customer']['default_address']['country'] ?? null,
-                'country_code' => $data['customer']['default_address']['country_code'] ?? null,
-                'province'   => $data['customer']['default_address']['province'] ?? null,
-                'city'       => $data['customer']['default_address']['city'] ?? null,
-                'address1'   => $data['customer']['default_address']['address1'] ?? null,
-                'address2'   => $data['customer']['default_address']['address2'] ?? null,
+                'customer_number' => $orderData['customer']['id'],
+                'first_name'      => $orderData['customer']['first_name'] ?? null,
+                'last_name'       => $orderData['customer']['last_name'] ?? null,
+                'phone'           => $orderData['customer']['phone'] ?? null,
+                'email'           => $orderData['customer']['email'] ?? null,
+                'country_name'    => $orderData['customer']['default_address']['country'] ?? null,
+                'country_code'    => $orderData['customer']['default_address']['country_code'] ?? null,
+                'province'        => $orderData['customer']['default_address']['province'] ?? null,
+                'city'            => $orderData['customer']['default_address']['city'] ?? null,
+                'address1'        => $orderData['customer']['default_address']['address1'] ?? null,
+                'address2'        => $orderData['customer']['default_address']['address2'] ?? null,
             ]
         );
 
         // 2️⃣ Guardar/actualizar orden
         $order = Order::updateOrCreate(
-            ['order_id' => $data['id']],
+            ['order_id' => $orderData['id']],
             [
-                'name'                => $data['name'],
-                'order_number'        => $data['order_number'],
-                'current_total_price' => $data['current_total_price'],
-                'currency'            => $data['currency'],
-                'processed_at'        => $data['processed_at'] ?? null,
+                'name'                => $orderData['name'],
+                'current_total_price' => $orderData['current_total_price'],
+                'order_number'        => $orderData['order_number'],
+                'processed_at'        => $orderData['processed_at'] ?? null,
+                'currency'            => $orderData['currency'],
                 'client_id'           => $client->id,
             ]
         );
 
         // 3️⃣ Procesar productos de la orden
-        foreach ($data['line_items'] as $item) {
-            // Buscar o crear producto en catálogo
+        foreach ($orderData['line_items'] as $item) {
+            // Obtener imagen desde Shopify API
+            $imageUrl = $shopifyService->getProductImage(
+                $item['product_id'],
+                $item['variant_id'] ?? null
+            );
+
+            // Crear/actualizar producto
             $product = Product::updateOrCreate(
                 ['product_id' => $item['product_id']],
                 [
                     'variant_id' => $item['variant_id'] ?? null,
-                    'sku'        => $item['sku'] ?? null,
                     'title'      => $item['title'],
                     'name'       => $item['name'] ?? null,
                     'price'      => $item['price'],
-                    'image'      => $item['image'] ?? null,
+                    'sku'        => $item['sku'] ?? null,
+                    'image'      => $imageUrl,
                 ]
             );
 
-            // Registrar relación en order_products
+            // Relación en OrderProducts (evita duplicados)
             OrderProducts::updateOrCreate(
                 [
                     'order_id'   => $order->id,
@@ -84,7 +92,7 @@ class ShopifyWebhookController extends Controller
                     'name'           => $item['name'] ?? null,
                     'price'          => $item['price'],
                     'quantity'       => $item['quantity'],
-                    'image'          => $item['image'] ?? null,
+                    'image'          => $imageUrl,
                 ]
             );
         }
