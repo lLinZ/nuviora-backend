@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -13,6 +14,7 @@ Route::post('register/master/24548539', [AuthController::class, 'register_master
 // Login
 Route::post('login', [AuthController::class, 'login']);
 
+Route::post('/orders/webhook', [ShopifyWebhookController::class, 'handleOrderCreate']);
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
     /**---------------------
