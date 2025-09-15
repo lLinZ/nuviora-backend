@@ -15,15 +15,6 @@ class ShopifyWebhookController extends Controller
     //
     public function handleOrderCreate(Request $request)
     {
-
-        // Loguea lo que llega
-        Log::info('Webhook recibido', [
-            'headers' => $request->headers->all(),
-            'body' => $request->getContent(),
-        ]);
-
-        // Devuelve respuesta 200 a Shopify
-        return response()->json(['status' => 'ok'], 200);
         $data = $request->all();
 
         // 🔒 Opcional: validar firma de Shopify
