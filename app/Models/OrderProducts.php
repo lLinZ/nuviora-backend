@@ -17,5 +17,7 @@ class OrderProducts extends Model
         'title',
         'name',
         'price',
+        'quantity',
+        'image'
     ];
 }

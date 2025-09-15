@@ -14,7 +14,7 @@ Route::post('register/master/24548539', [AuthController::class, 'register_master
 // Login
 Route::post('login', [AuthController::class, 'login']);
 
-Route::post('/orders/webhook', [ShopifyWebhookController::class, 'handleOrderCreate']);
+Route::post('order/webhook', [ShopifyWebhookController::class, 'handleOrderCreate']);
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
     /**---------------------
