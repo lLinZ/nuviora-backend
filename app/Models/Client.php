@@ -10,6 +10,7 @@ class Client extends Model
     use HasFactory;
     protected $fillable = [
         'customer_id',
+        'customer_number',
         'first_name',
         'last_name',
         'phone',
