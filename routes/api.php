@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use Illuminate\Support\Facades\Route;
@@ -28,9 +29,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('user/{user}/change/color', [AuthController::class, 'edit_color']);
     Route::put('user/{user}/change/theme', [AuthController::class, 'edit_theme']);
     Route::put('user/{user}/change/password', [AuthController::class, 'edit_password']);
+    Route::post('register/agent', [AuthController::class, 'register_agent']);
     // Cerrar sesion
     Route::get('logout', [AuthController::class, 'logout']);
-
+    Route::get('users/agents', [AuthController::class, 'agents']);
+    Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent']);
     /**---------------------
      * STATUS
      * ---------------------**/
@@ -43,7 +46,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Crear rol nuevo
     Route::post('role', [RoleController::class, 'create']);
 
-
+    Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
+    Route::get('/orders/{order}', [OrderUpdateController::class, 'show']);
+    Route::post('/orders/{order}/updates', [OrderUpdateController::class, 'store']);
     /**---------------------
      * CURRENCY
      * ---------------------**/

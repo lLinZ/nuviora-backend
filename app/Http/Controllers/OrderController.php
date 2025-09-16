@@ -4,30 +4,50 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\Client;
-use App\Models\OrderProducts;
+use App\Models\OrderProduct;
 use App\Models\Product;
+use App\Models\Status;
+use App\Models\User;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
 
 class OrderController extends Controller
 {
+    public function updateStatus(Request $request, Order $order)
+    {
+        $request->validate([
+            'status_id' => 'required|exists:statuses,id'
+        ]);
+
+        $status = Status::find($request->status_id);
+
+        $order->status_id = $status->id;
+        $order->save();
+
+        $newOrder = Order::with('status', 'client', 'agent')->find($order->id);
+        return response()->json([
+            'status' => true,
+            'message' => 'Estado actualizado correctamente',
+            'order' => $newOrder
+        ]);
+    }
     public function getOrderProducts($orderId)
     {
-        $order = Order::with(['products.product'])->findOrFail($orderId);
+        $order = Order::with('products.product')->findOrFail($orderId);
 
         return response()->json([
             'order_id'   => $order->id,
             'order_name' => $order->name,
             'products'   => $order->products->map(function ($op) {
                 return [
-                    'product_id'   => $op->product->id,
-                    'shopify_id'   => $op->product->product_id,
-                    'title'        => $op->product->title,
-                    'name'         => $op->product->name,
-                    'sku'          => $op->product->sku,
+                    'product_id'   => $op->product_id,
+                    'shopify_id'   => $op->product_number,
+                    'title'        => $op->title,
+                    'name'         => $op->name,
+                    'sku'          => $op->product->sku ?? null,
                     'price'        => $op->price,
                     'quantity'     => $op->quantity,
-                    'image'        => $op->product->image,
+                    'image'        => $op->image,
                 ];
             }),
         ]);
@@ -99,7 +119,7 @@ class OrderController extends Controller
             );
 
             // Relación en OrderProducts (evita duplicados)
-            OrderProducts::updateOrCreate(
+            OrderProduct::updateOrCreate(
                 [
                     'order_id'   => $order->id,
                     'product_id' => $product->id,
@@ -121,8 +141,34 @@ class OrderController extends Controller
     // Resto de métodos resource (vacíos por ahora)
     public function index()
     {
-        $orders = Order::with('client', 'status')->get();
+        $orders = Order::with('client', 'status', 'agent')->get();
         return response()->json(['data' => $orders], 200);
+    }
+    public function assignAgent(Request $request, Order $order)
+    {
+        $request->validate([
+            'agent_id' => 'required|exists:users,id'
+        ]);
+
+        $agent = User::with('role')->find($request->agent_id);
+
+        // Validar que sea vendedor
+        if (!$agent || $agent->role?->description !== 'Vendedor') {
+            return response()->json([
+                'status' => false,
+                'message' => "El usuario no es un vendedor válido"
+            ], 422);
+        }
+
+        $order->agent_id = $agent->id;
+        $order->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Vendedor asignado correctamente',
+            'agent' => $agent,
+            'order' => $order->load('agent')
+        ]);
     }
     public function create() {}
     public function store(Request $request) {}

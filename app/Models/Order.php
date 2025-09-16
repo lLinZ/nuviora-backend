@@ -11,7 +11,7 @@ class Order extends Model
     use HasFactory;
     public function products()
     {
-        return $this->hasMany(OrderProducts::class);
+        return $this->hasMany(OrderProduct::class);
     }
     public function client()
     {
@@ -21,6 +21,14 @@ class Order extends Model
     {
         return $this->belongsTo(Status::class, 'status_id');
     }
+    public function agent()
+    {
+        return $this->belongsTo(User::class, 'agent_id');
+    }
+    public function updates()
+    {
+        return $this->hasMany(OrderUpdate::class);
+    }
     protected $fillable = [
         'order_id',
         'name',
@@ -29,6 +37,7 @@ class Order extends Model
         'processed_at',
         'currency',
         'client_id',
-        'status_id'
+        'status_id',
+        'agent_id'
     ];
 }

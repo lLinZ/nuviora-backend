@@ -11,7 +11,7 @@ class Product extends Model
     use HasFactory;
     public function orderProducts()
     {
-        return $this->hasMany(OrderProducts::class);
+        return $this->hasMany(OrderProduct::class);
     }
     protected $fillable = [
         'product_id',

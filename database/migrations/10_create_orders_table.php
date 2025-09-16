@@ -33,7 +33,7 @@ return new class extends Migration
             $table->foreignId('status_id')
                 ->constrained('statuses')
                 ->onDelete('cascade');
-
+            $table->foreignId('agent_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();
         });
     }

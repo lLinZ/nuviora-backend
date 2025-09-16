@@ -18,14 +18,14 @@ class User extends Authenticatable
      */
     public function status()
     {
-        return $this->belongsTo(Status::class);
+        return $this->belongsTo(Status::class, 'status_id');
     }
     /**
      * Get the role that owns the user.
      */
     public function role()
     {
-        return $this->belongsTo(Role::class);
+        return $this->belongsTo(Role::class, 'role_id');
     }
 
     /**
@@ -42,6 +42,8 @@ class User extends Authenticatable
         'color',
         'email',
         'password',
+        'role_id',
+        'status_id'
     ];
 
     /**

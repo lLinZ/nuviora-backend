@@ -66,6 +66,17 @@ class AuthController extends Controller
             'message' => 'Has cerrado sesion exitosamente'
         ];
     }
+    public function agents()
+    {
+        $agents = User::whereHas('role', function ($q) {
+            $q->where('description', 'Vendedor');
+        })->get();
+
+        return response()->json([
+            'status' => true,
+            'data' => $agents
+        ]);
+    }
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -146,6 +157,53 @@ class AuthController extends Controller
 
         // Obtener rol cliente o crear rol si no existe
         $role = Role::firstOrNew(['description' => 'Master']);
+        $role->save();
+
+        // Se asocia el rol al usuario
+        $user->role()->associate($role);
+        // Se guarda el usuario
+        $user->save();
+
+        // Token de auth
+        $token = $user->createToken("auth_token")->plainTextToken;
+
+        return response()->json(['data' => $user, 'token' => $token, 'token_type' => 'Bearer', 'status' => true]);
+    }
+    /**
+     * Registrar administrador de condominios
+     */
+    public function register_agent(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'names' => 'required|string|max:255',
+            'surnames' => 'string|max:255',
+            'email' => 'required|string|email|max:255|unique:users',
+            'password' => 'required|string|min:8',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['status' => false, 'errors' => $validator->errors()], 400);
+        }
+
+        $user = User::create([
+            'names' => $request->names,
+            'surnames' => $request->surnames,
+            'email' => $request->email,
+            'address' => $request->address,
+            'phone' => $request->phone,
+            'password' => Hash::make($request->password),
+            'theme' => 'light',
+            'color' => '#0073ff',
+        ]);
+        // Obtener status activo o crear status si no existe
+        $status = Status::firstOrNew(['description' => 'Activo']);
+        $status->save();
+
+        // Se asocia el status al usuario
+        $user->status()->associate($status);
+
+        // Obtener rol cliente o crear rol si no existe
+        $role = Role::firstOrNew(['description' => 'Vendedor']);
         $role->save();
 
         // Se asocia el rol al usuario
