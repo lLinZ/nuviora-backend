@@ -13,6 +13,14 @@ class Order extends Model
     {
         return $this->hasMany(OrderProducts::class);
     }
+    public function client()
+    {
+        return $this->belongsTo(Client::class, 'client_id');
+    }
+    public function status()
+    {
+        return $this->belongsTo(Status::class, 'status_id');
+    }
     protected $fillable = [
         'order_id',
         'name',
@@ -20,6 +28,7 @@ class Order extends Model
         'order_number',
         'processed_at',
         'currency',
-        'client_id'
+        'client_id',
+        'status_id'
     ];
 }

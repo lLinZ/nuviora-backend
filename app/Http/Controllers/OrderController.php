@@ -119,7 +119,11 @@ class OrderController extends Controller
     }
 
     // Resto de métodos resource (vacíos por ahora)
-    public function index() {}
+    public function index()
+    {
+        $orders = Order::with('client', 'status')->get();
+        return response()->json(['data' => $orders], 200);
+    }
     public function create() {}
     public function store(Request $request) {}
     public function show(Order $order) {}

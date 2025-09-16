@@ -29,6 +29,11 @@ return new class extends Migration
                 ->constrained('clients')
                 ->onDelete('cascade');
 
+            // Relación con status
+            $table->foreignId('status_id')
+                ->constrained('statuses')
+                ->onDelete('cascade');
+
             $table->timestamps();
         });
     }
