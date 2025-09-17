@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\OrderCancellationController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ShopifyWebhookController;
@@ -56,7 +57,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('currency', [CurrencyController::class, 'create']);
     // Obtener la ultima divisa
     Route::get('currency', [CurrencyController::class, 'get_last_currency']);
-
+    Route::post('/orders/{order}/cancel', [OrderCancellationController::class, 'store']);
+    Route::patch('/cancellations/{cancellation}/review', [OrderCancellationController::class, 'review']);
     Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
     Route::get('orders', [OrderController::class, 'index']);
 });
