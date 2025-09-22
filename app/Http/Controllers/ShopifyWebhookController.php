@@ -5,11 +5,12 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Order;
-use App\Models\OrderProducts;
+use App\Models\OrderProduct;
 use App\Models\Product;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Http;
 
 class ShopifyWebhookController extends Controller
 {
@@ -81,7 +82,7 @@ class ShopifyWebhookController extends Controller
             );
 
             // Relación en OrderProducts (evita duplicados)
-            OrderProducts::updateOrCreate(
+            OrderProduct::updateOrCreate(
                 [
                     'order_id'   => $order->id,
                     'product_id' => $product->id,
@@ -98,5 +99,62 @@ class ShopifyWebhookController extends Controller
         }
 
         return response()->json(['success' => true], 200);
+    }
+    public function orderCreated(Request $request)
+    {
+        $pixelId = Config::get('services.facebook.pixel_id');
+        $accessToken = Config::get('services.facebook.access_token');
+
+        $order = $request->all();
+
+        // Generamos un event_id único (puede ser el ID de la orden)
+        $eventId = 'order_' . $order['id'];
+
+        // Extraemos datos del cliente
+        $email = $order['email'] ?? null;
+        $phone = $order['phone'] ?? null;
+        $firstName = $order['customer']['first_name'] ?? null;
+        $lastName = $order['customer']['last_name'] ?? null;
+
+        // Datos custom de la orden
+        $value = $order['total_price'] ?? 0;
+        $currency = $order['currency'] ?? 'USD';
+        $contentIds = collect($order['line_items'])->pluck('product_id')->map(fn($id) => (string)$id)->toArray();
+
+        // Payload para Facebook CAPI
+        $payload = [
+            'data' => [
+                [
+                    'event_name'       => 'Purchase',
+                    'event_time'       => now()->timestamp,
+                    'event_source_url' => $order['landing_site'] ?? null,
+                    'event_id'         => $eventId,
+                    'action_source'    => 'website',
+                    'user_data'        => [
+                        'em' => $email ? hash('sha256', strtolower(trim($email))) : null,
+                        'ph' => $phone ? hash('sha256', preg_replace('/\D+/', '', $phone)) : null,
+                        'fn' => $firstName ? hash('sha256', strtolower(trim($firstName))) : null,
+                        'ln' => $lastName ? hash('sha256', strtolower(trim($lastName))) : null,
+                        'client_user_agent' => $request->header('User-Agent'),
+                        'ip_address'        => $request->ip(),
+                    ],
+                    'custom_data' => [
+                        'currency'      => $currency,
+                        'value'         => $value,
+                        'content_type'  => 'product',
+                        'content_ids'   => $contentIds,
+                    ],
+                ],
+            ],
+            'access_token' => $accessToken,
+        ];
+
+        // Enviar evento a Facebook
+        $response = Http::post("https://graph.facebook.com/v17.0/{$pixelId}/events", $payload);
+
+        return response()->json([
+            'status' => 'ok',
+            'facebook_response' => $response->json(),
+        ]);
     }
 }

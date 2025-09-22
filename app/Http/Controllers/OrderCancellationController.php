@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Controllers;
 
 use App\Models\Order;
@@ -9,25 +8,52 @@ use Illuminate\Support\Facades\Auth;
 
 class OrderCancellationController extends Controller
 {
-    // solicitar cancelación
-    public function store(Request $request, Order $order)
+    public function index(Request $request)
     {
-        $request->validate([
-            'reason' => 'required|string|max:1000',
-        ]);
+        $query = \App\Models\OrderCancellation::with(['order', 'user'])
+            ->orderBy('created_at', 'desc');
 
-        $cancellation = OrderCancellation::create([
-            'order_id' => $order->id,
-            'user_id'  => Auth::id(),
-            'reason'   => $request->reason,
-        ]);
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
 
         return response()->json([
             'status' => true,
-            'message' => 'Cancelación solicitada',
-            'cancellation' => $cancellation
+            'data' => $query->get()
         ]);
     }
+    // solicitar cancelación
+public function store(Request $request, Order $order)
+{
+    $request->validate([
+        'reason' => 'required|string|max:1000',
+    ]);
+
+    // Crear la solicitud de cancelación
+    $cancellation = OrderCancellation::create([
+        'order_id' => $order->id,
+        'user_id'  => Auth::id(),
+        'reason'   => $request->reason,
+    ]);
+
+    // Buscar o crear el status "Pendiente Cancelación"
+    $pendingStatus = \App\Models\Status::firstOrCreate([
+        'description' => 'Pendiente Cancelación'
+    ]);
+
+    // Actualizar la orden a ese status
+    $order->update([
+        'status_id' => $pendingStatus->id,
+    ]);
+
+    return response()->json([
+        'status' => true,
+        'message' => 'Cancelación solicitada',
+        'cancellation' => $cancellation,
+        'order' => $order->fresh('status') // 👈 devuelve la orden con status actualizado
+    ]);
+}
+
 
     // aprobar/rechazar
     public function review(Request $request, OrderCancellation $cancellation)

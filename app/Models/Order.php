@@ -29,6 +29,9 @@ class Order extends Model
     {
         return $this->hasMany(OrderUpdate::class);
     }
+    public function cancellations() {
+        return $this->hasMany(OrderCancellation::class);
+    }
     protected $fillable = [
         'order_id',
         'name',

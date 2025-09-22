@@ -147,27 +147,29 @@ class OrderController extends Controller
     public function assignAgent(Request $request, Order $order)
     {
         $request->validate([
-            'agent_id' => 'required|exists:users,id'
+            'agent_id' => 'required|exists:users,id',
         ]);
 
-        $agent = User::with('role')->find($request->agent_id);
+        $agent = User::findOrFail($request->agent_id);
 
-        // Validar que sea vendedor
-        if (!$agent || $agent->role?->description !== 'Vendedor') {
+        if ($agent->role->description !== 'Vendedor') {
             return response()->json([
                 'status' => false,
-                'message' => "El usuario no es un vendedor válido"
+                'message' => 'El usuario seleccionado no es un vendedor válido'
             ], 422);
         }
 
-        $order->agent_id = $agent->id;
-        $order->save();
+        // Buscar el status "Asignado a vendedora"
+        $statusId = Status::where('description', 'Asignado a vendedora')->first()?->id;
+
+        $order->update([
+            'agent_id' => $agent->id,
+            'status_id' => $statusId
+        ]);
 
         return response()->json([
             'status' => true,
-            'message' => 'Vendedor asignado correctamente',
-            'agent' => $agent,
-            'order' => $order->load('agent')
+            'order' => $order->load('agent', 'status', 'client'),
         ]);
     }
     public function create() {}

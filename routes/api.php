@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\FacebookEventController;
 use App\Http\Controllers\OrderCancellationController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OrderUpdateController;
@@ -22,18 +23,25 @@ Route::middleware('auth:sanctum')->group(function () {
     /**---------------------
      * USERS
      * ---------------------**/
-    // Validacion de token
+    // Listar usuarios
     Route::get('users', [AuthController::class, 'get_all_users']);
+    // Editar datos del usuario
     Route::put('user/{user}', [AuthController::class, 'edit_user_data']);
+    // Validar token y obtener datos del usuario logueado
     Route::get('user/data', [AuthController::class, 'get_logged_user_data']);
-    // Registrar usuario
+    // Cambiar color
     Route::put('user/{user}/change/color', [AuthController::class, 'edit_color']);
+    // Cambiar tema
     Route::put('user/{user}/change/theme', [AuthController::class, 'edit_theme']);
+    // Cambiar password
     Route::put('user/{user}/change/password', [AuthController::class, 'edit_password']);
+    // Registrar agente
     Route::post('register/agent', [AuthController::class, 'register_agent']);
     // Cerrar sesion
     Route::get('logout', [AuthController::class, 'logout']);
+    // Listar agentes
     Route::get('users/agents', [AuthController::class, 'agents']);
+    // Asignar agente a la orden
     Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent']);
     /**---------------------
      * STATUS
@@ -47,9 +55,22 @@ Route::middleware('auth:sanctum')->group(function () {
     // Crear rol nuevo
     Route::post('role', [RoleController::class, 'create']);
 
+    /**---------------------
+     * ORDERS
+     * ---------------------**/
+    // Actualizar estado de la orden    
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
+    // Ver detalles de la orden
     Route::get('/orders/{order}', [OrderUpdateController::class, 'show']);
+    // Agregar nota a la orden
     Route::post('/orders/{order}/updates', [OrderUpdateController::class, 'store']);
+    // Solicitar cancelación
+    Route::post('orders/{order}/cancel', [OrderCancellationController::class, 'store']);
+    // Obtener productos de la orden
+    Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
+    // Listar ordenes
+    Route::get('orders', [OrderController::class, 'index']);
+
     /**---------------------
      * CURRENCY
      * ---------------------**/
@@ -57,8 +78,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('currency', [CurrencyController::class, 'create']);
     // Obtener la ultima divisa
     Route::get('currency', [CurrencyController::class, 'get_last_currency']);
-    Route::post('/orders/{order}/cancel', [OrderCancellationController::class, 'store']);
-    Route::patch('/cancellations/{cancellation}/review', [OrderCancellationController::class, 'review']);
-    Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
-    Route::get('orders', [OrderController::class, 'index']);
+
+    /*---------------------
+     * CANCELACIONES DE ORDEN
+     * ---------------------**/
+    // Aprobar / Rechazar
+    Route::patch('cancellations/{cancellation}/review', [OrderCancellationController::class, 'review']);
+    // Listar cancelaciones
+    Route::get('cancellations', [OrderCancellationController::class, 'index']);
+
+    Route::post('facebook/events', [FacebookEventController::class, 'sendEvent']);
+    Route::post('shopify/orders/create', [ShopifyWebhookController::class, 'orderCreated']);
 });
