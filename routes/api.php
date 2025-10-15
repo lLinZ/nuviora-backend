@@ -70,7 +70,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
     // Listar ordenes
     Route::get('orders', [OrderController::class, 'index']);
-
+    Route::get('/agents/{agent}/orders', [OrderController::class, 'byAgent']);
     /**---------------------
      * CURRENCY
      * ---------------------**/

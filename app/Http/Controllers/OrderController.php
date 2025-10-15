@@ -139,10 +139,51 @@ class OrderController extends Controller
     }
 
     // Resto de métodos resource (vacíos por ahora)
-    public function index()
+    public function index(Request $request)
     {
-        $orders = Order::with('client', 'status', 'agent')->get();
-        return response()->json(['data' => $orders], 200);
+        $perPage = (int) ($request->get('per_page', 50));
+
+        $query = Order::with(['client', 'agent', 'status'])
+            ->latest('id');
+
+        if ($request->filled('agent_id')) {
+            $query->where('agent_id', $request->agent_id);
+        }
+
+        $orders = $query->paginate($perPage);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $orders->items(),
+            'meta'   => [
+                'current_page' => $orders->currentPage(),
+                'per_page'     => $orders->perPage(),
+                'total'        => $orders->total(),
+                'last_page'    => $orders->lastPage(),
+            ],
+        ]);
+    }
+
+    // GET /agents/{agent}/orders
+    public function byAgent(User $agent, Request $request)
+    {
+        $perPage = (int) ($request->get('per_page', 50));
+
+        $orders = Order::with(['client', 'agent', 'status'])
+            ->where('agent_id', $agent->id)
+            ->latest('id')
+            ->paginate($perPage);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $orders->items(),
+            'meta'   => [
+                'current_page' => $orders->currentPage(),
+                'per_page'     => $orders->perPage(),
+                'total'        => $orders->total(),
+                'last_page'    => $orders->lastPage(),
+            ],
+        ]);
     }
     public function assignAgent(Request $request, Order $order)
     {
