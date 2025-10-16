@@ -10,9 +10,54 @@ use App\Models\Status;
 use App\Models\User;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class OrderController extends Controller
 {
+    public function show($id)
+    {
+        $order = \App\Models\Order::with([
+            'client',
+            'agent',
+            'status',
+            'products.product',   // 👈 importante
+            'updates.user',
+            'cancellations.user',
+        ])->findOrFail($id);
+
+        // Si quieres devolver items “planchados” (recomendado para front):
+        $items = $order->products->map(function ($op) {
+            return [
+                'id'        => $op->id,
+                'product_id' => $op->product_id,
+                'title'     => $op->title ?? ($op->product->title ?? $op->product->name ?? 'Producto'),
+                'sku'       => $op->product->sku ?? null,
+                'image'     => $op->image ?? $op->product->image ?? null,
+                'price'     => (float) $op->price,
+                'quantity'  => (int) $op->quantity,
+                'subtotal'  => (float) $op->price * (int) $op->quantity,
+            ];
+        });
+
+        // Total calculado desde los items (si quieres validar el current_total_price)
+        $computedTotal = $items->sum('subtotal');
+
+        return response()->json([
+            'status' => true,
+            'order'  => [
+                'id'                   => $order->id,
+                'name'                 => $order->name,
+                'currency'             => $order->currency,
+                'current_total_price'  => $order->current_total_price ?? $computedTotal,
+                'client'               => $order->client,
+                'agent'                => $order->agent,
+                'status'               => $order->status,
+                'products'             => $items, // 👈 ya listo para el front
+                'updates'              => $order->updates,
+                'cancellations'        => $order->cancellations,
+            ]
+        ]);
+    }
     public function updateStatus(Request $request, Order $order)
     {
         $request->validate([
@@ -139,10 +184,54 @@ class OrderController extends Controller
     }
 
     // Resto de métodos resource (vacíos por ahora)
-    public function index()
+    public function index(Request $request)
     {
-        $orders = Order::with('client', 'status', 'agent')->get();
-        return response()->json(['data' => $orders], 200);
+        $user = Auth::user();
+        $perPage = (int) $request->get('per_page', 50);
+
+        $query = Order::with(['client', 'agent', 'status'])->latest('id');
+
+        // 🔒 Reglas por rol
+        $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
+
+        if ($role === 'Vendedor') {
+            // Ventana: HOY + AYER (según timezone de app)
+            $yesterdayStart = now()->subDay()->startOfDay();
+            $now = now();
+
+            $query->where(function ($q) use ($user, $yesterdayStart, $now) {
+                // 1) Órdenes asignadas a ese vendedor
+                $q->where('agent_id', $user->id)
+                    // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
+                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
+            });
+
+            // Nota: no aceptamos filtros extra desde el front de vendedor (se ignoran)
+        } else {
+            // Gerente/Admin → filtros opcionales
+            if ($request->filled('agent_id')) {
+                $query->where('agent_id', $request->agent_id);
+            }
+            if ($request->filled('date_from')) {
+                $query->whereDate('created_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $query->whereDate('created_at', '<=', $request->date_to);
+            }
+        }
+
+        $orders = $query->paginate($perPage);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $orders->items(),
+            'meta'   => [
+                'current_page' => $orders->currentPage(),
+                'per_page'     => $orders->perPage(),
+                'total'        => $orders->total(),
+                'last_page'    => $orders->lastPage(),
+            ],
+        ]);
     }
     public function assignAgent(Request $request, Order $order)
     {
@@ -172,9 +261,9 @@ class OrderController extends Controller
             'order' => $order->load('agent', 'status', 'client'),
         ]);
     }
+
     public function create() {}
     public function store(Request $request) {}
-    public function show(Order $order) {}
     public function edit(Order $order) {}
     public function update(Request $request, Order $order) {}
     public function destroy(Order $order) {}

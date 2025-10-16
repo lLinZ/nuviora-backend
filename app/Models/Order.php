@@ -9,6 +9,10 @@ class Order extends Model
 {
     //
     use HasFactory;
+    public function postponements()
+    {
+        return $this->hasMany(\App\Models\OrderPostponement::class);
+    }
     public function products()
     {
         return $this->hasMany(OrderProduct::class);
@@ -29,7 +33,8 @@ class Order extends Model
     {
         return $this->hasMany(OrderUpdate::class);
     }
-    public function cancellations() {
+    public function cancellations()
+    {
         return $this->hasMany(OrderCancellation::class);
     }
     protected $fillable = [

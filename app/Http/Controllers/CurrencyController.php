@@ -22,7 +22,7 @@ class CurrencyController extends Controller
         $currency = Currency::whereHas('status', function ($query) {
             $query->where('description', 'Activo');
         })->get();
-        return response()->json(['status' => true, 'data' => $currency[0]], 200);
+        return response()->json(['status' => true, 'data' => $currency], 200);
     }
 
     public function get_latest_currencies()
