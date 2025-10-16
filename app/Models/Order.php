@@ -37,6 +37,11 @@ class Order extends Model
     {
         return $this->hasMany(OrderCancellation::class);
     }
+    public function deliverer()
+    {
+        return $this->belongsTo(\App\Models\User::class, 'deliverer_id');
+    }
+
     protected $fillable = [
         'order_id',
         'name',

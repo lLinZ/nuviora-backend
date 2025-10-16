@@ -13,6 +13,49 @@ use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
+
+    public function deliverers()
+    {
+        $roleId = Role::where('description', 'Repartidor')->value('id');
+
+        $users = User::query()
+            ->where('role_id', $roleId)
+            ->select('id', 'names', 'surnames', 'email')
+            ->orderBy('names')
+            ->get();
+
+        return response()->json([
+            'status' => true,
+            'data'   => $users,
+        ]);
+    }
+
+    // POST /users/deliverers
+    public function storeDeliverer(Request $request)
+    {
+        $request->validate([
+            'names'    => 'required|string|max:100',
+            'surnames' => 'nullable|string|max:100',
+            'email'    => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+        ]);
+
+        $roleId = Role::where('description', 'Repartidor')->value('id');
+
+        $user = User::create([
+            'names'     => $request->names,
+            'surnames'  => $request->surnames,
+            'email'     => $request->email,
+            'password'  => Hash::make($request->password),
+            'role_id'   => $roleId,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Repartidor creado',
+            'user'   => $user,
+        ], 201);
+    }
     public function get_all_users(Request $request)
     {
 

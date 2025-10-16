@@ -6,6 +6,7 @@ use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\FacebookEventController;
 use App\Http\Controllers\OrderCancellationController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\OrderDelivererController;
 use App\Http\Controllers\OrderPostponementController;
 use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ShopifyWebhookController;
@@ -56,6 +57,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Crear rol nuevo
     Route::post('role', [RoleController::class, 'create']);
 
+
+    Route::get('/users/deliverers', [AuthController::class, 'deliverers']);
+    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']); // crear repartidor
+    Route::put('/orders/{order}/assign-deliverer', [OrderDelivererController::class, 'assign']);
     /**---------------------
      * ORDERS
      * ---------------------**/
