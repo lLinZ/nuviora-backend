@@ -9,6 +9,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OrderDelivererController;
 use App\Http\Controllers\OrderPostponementController;
 use App\Http\Controllers\OrderUpdateController;
+use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use Illuminate\Support\Facades\Route;
@@ -61,9 +62,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
     Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer']); // eliminar
 
+    Route::get('/products', [ProductController::class, 'index']);
+
     Route::get('/users/deliverers', [AuthController::class, 'deliverers']);
     Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']); // crear repartidor
     Route::put('/orders/{order}/assign-deliverer', [OrderDelivererController::class, 'assign']);
+    Route::get('/users/deliverers', [AuthController::class, 'deliverers']);       // listar + buscar
+    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']);  // crear
+    Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
+    Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer']); // eliminar
     /**---------------------
      * ORDERS
      * ---------------------**/

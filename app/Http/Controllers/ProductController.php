@@ -1,66 +1,40 @@
 <?php
 
+// app/Http/Controllers/ProductController.php
 namespace App\Http\Controllers;
 
-use App\Models\Product;
-use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use App\Models\Product;
 
 class ProductController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    // GET /products?search=term&page=1
+    public function index(Request $request)
     {
-        //
-    }
+        $q = trim((string) $request->get('search', ''));
+        $perPage = (int) $request->get('per_page', 20);
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
-    {
-        //
-    }
+        $query = Product::query()
+            ->select('id', 'name', 'title', 'sku', 'price', 'image', 'stock', 'created_at');
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
-    {
-        //
-    }
+        if ($q !== '') {
+            $query->where(function ($qq) use ($q) {
+                $qq->where('name', 'like', "%$q%")
+                    ->orWhere('title', 'like', "%$q%")
+                    ->orWhere('sku', 'like', "%$q%");
+            });
+        }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(Product $product)
-    {
-        //
-    }
+        $products = $query->orderBy('name')->paginate($perPage);
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Product $product)
-    {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Product $product)
-    {
-        //
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Product $product)
-    {
-        //
+        return response()->json([
+            'status' => true,
+            'data'   => $products->items(),
+            'meta'   => [
+                'current_page' => $products->currentPage(),
+                'total'        => $products->total(),
+                'last_page'    => $products->lastPage(),
+            ],
+        ]);
     }
 }

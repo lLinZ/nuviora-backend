@@ -117,16 +117,6 @@ class AuthController extends Controller
             'message' => 'Repartidor eliminado',
         ]);
     }
-    // POST /users/deliverers
-    public function get_all_users(Request $request)
-    {
-
-        $users = User::with('role')->whereHas('status', function ($query) {
-            $query->where('description', 'Activo');
-        })->paginate(20);
-
-        return response()->json(['status' => true, 'data' => $users]);
-    }
     /**
      * Login de usuario
      */
