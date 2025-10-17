@@ -56,7 +56,10 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     // Crear rol nuevo
     Route::post('role', [RoleController::class, 'create']);
-
+    Route::get('/users/deliverers', [AuthController::class, 'deliverers']);       // listar + buscar
+    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']);  // crear
+    Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
+    Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer']); // eliminar
 
     Route::get('/users/deliverers', [AuthController::class, 'deliverers']);
     Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']); // crear repartidor
