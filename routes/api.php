@@ -71,6 +71,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']);  // crear
     Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
     Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer']); // eliminar
+
     /**---------------------
      * ORDERS
      * ---------------------**/

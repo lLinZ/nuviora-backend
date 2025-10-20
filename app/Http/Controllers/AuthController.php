@@ -14,6 +14,15 @@ use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
+    public function get_all_users(Request $request)
+    {
+
+        $users = User::with('role')->whereHas('status', function ($query) {
+            $query->where('description', 'Activo');
+        })->paginate(20);
+
+        return response()->json(['status' => true, 'data' => $users]);
+    }
     public function deliverers(Request $request)
     {
         $roleId = Role::where('description', 'Repartidor')->value('id');
@@ -49,6 +58,7 @@ class AuthController extends Controller
         $request->validate([
             'names'    => 'required|string|max:100',
             'surnames' => 'nullable|string|max:100',
+            'phone' => 'required|string|max:100',
             'email'    => 'required|email|unique:users,email',
             'password' => 'required|string|min:6',
         ]);
@@ -59,6 +69,7 @@ class AuthController extends Controller
             'names'     => $request->names,
             'surnames'  => $request->surnames,
             'email'     => $request->email,
+            'phone'     => $request->phone,
             'password'  => Hash::make($request->password),
             'role_id'   => $roleId,
         ]);
