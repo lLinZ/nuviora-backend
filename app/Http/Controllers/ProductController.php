@@ -1,14 +1,14 @@
 <?php
-
 // app/Http/Controllers/ProductController.php
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Product;
+use App\Models\StockMovement;
+use Illuminate\Support\Facades\Auth;
 
 class ProductController extends Controller
 {
-    // GET /products?search=term&page=1
     public function index(Request $request)
     {
         $q = trim((string) $request->get('search', ''));
@@ -35,6 +35,46 @@ class ProductController extends Controller
                 'total'        => $products->total(),
                 'last_page'    => $products->lastPage(),
             ],
+        ]);
+    }
+
+    // PUT /products/{product}/stock
+    public function updateStock(Request $request, Product $product)
+    {
+        $data = $request->validate([
+            'type'     => 'required|in:in,out,adjust',
+            'quantity' => 'required|integer',
+            'note'     => 'nullable|string|max:255',
+        ]);
+
+        $before = (int) $product->stock;
+        $after  = $before;
+
+        if ($data['type'] === 'in')  $after = $before + abs($data['quantity']);
+        if ($data['type'] === 'out') $after = $before - abs($data['quantity']);
+        if ($data['type'] === 'adjust') $after = (int) $data['quantity']; // set absoluto
+
+        if ($after < 0) {
+            return response()->json(['status' => false, 'message' => 'El stock no puede ser negativo'], 422);
+        }
+
+        $product->update(['stock' => $after]);
+
+        $movement = StockMovement::create([
+            'product_id' => $product->id,
+            'user_id'    => Auth::id(),
+            'type'       => $data['type'],
+            'quantity'   => ($data['type'] === 'adjust') ? ($after - $before) : ($data['type'] === 'out' ? -abs($data['quantity']) : abs($data['quantity'])),
+            'before'     => $before,
+            'after'      => $after,
+            'note'       => $data['note'] ?? null,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Stock actualizado',
+            'product' => $product,
+            'movement' => $movement,
         ]);
     }
 }

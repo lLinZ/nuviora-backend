@@ -12,6 +12,7 @@ use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
+use App\Http\Controllers\StockMovementController;
 use Illuminate\Support\Facades\Route;
 
 // Crear Admin
@@ -51,7 +52,6 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     // Crear status nuevo
     Route::post('status', [StatusController::class, 'create']);
-
     /**---------------------
      * ROLES
      * ---------------------**/
@@ -100,9 +100,16 @@ Route::middleware('auth:sanctum')->group(function () {
      * CANCELACIONES DE ORDEN
      * ---------------------**/
     // Aprobar / Rechazar
-    Route::patch('cancellations/{cancellation}/review', [OrderCancellationController::class, 'review']);
+    Route::put('cancellations/{cancellation}/review', [OrderCancellationController::class, 'review']);
     // Listar cancelaciones
     Route::get('cancellations', [OrderCancellationController::class, 'index']);
+
+    // Productos (listado ya lo teníamos)
+    Route::get('/products', [ProductController::class, 'index']);
+
+    // Stock
+    Route::put('/products/{product}/stock', [ProductController::class, 'updateStock']);
+    Route::get('/products/{product}/movements', [StockMovementController::class, 'index']);
 
     Route::post('facebook/events', [FacebookEventController::class, 'sendEvent']);
     Route::post('shopify/orders/create', [ShopifyWebhookController::class, 'orderCreated']);

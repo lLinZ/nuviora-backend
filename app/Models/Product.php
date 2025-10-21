@@ -9,6 +9,11 @@ class Product extends Model
 {
     //
     use HasFactory;
+    public function stockMovements()
+    {
+        return $this->hasMany(\App\Models\StockMovement::class);
+    }
+
     public function orderProducts()
     {
         return $this->hasMany(OrderProduct::class);
