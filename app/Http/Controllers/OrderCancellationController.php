@@ -12,7 +12,7 @@ class OrderCancellationController extends Controller
 {
     public function index(Request $request)
     {
-        $query = \App\Models\OrderCancellation::with(['order', 'user'])
+        $query = OrderCancellation::with(['order', 'user'])
             ->orderBy('created_at', 'desc');
 
         if ($request->has('status')) {
