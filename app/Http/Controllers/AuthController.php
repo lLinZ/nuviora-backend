@@ -262,7 +262,7 @@ class AuthController extends Controller
         $user->status()->associate($status);
 
         // Obtener rol cliente o crear rol si no existe
-        $role = Role::firstOrNew(['description' => 'Master']);
+        $role = Role::firstOrNew(['description' => 'Admin']);
         $role->save();
 
         // Se asocia el rol al usuario
