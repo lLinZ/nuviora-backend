@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AssignmentController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
@@ -10,6 +11,7 @@ use App\Http\Controllers\OrderDelivererController;
 use App\Http\Controllers\OrderPostponementController;
 use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\RosterController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\StockMovementController;
@@ -113,4 +115,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('facebook/events', [FacebookEventController::class, 'sendEvent']);
     Route::post('shopify/orders/create', [ShopifyWebhookController::class, 'orderCreated']);
+
+
+    Route::get('/roster/today', [RosterController::class, 'today']); // GET roster actual
+    Route::post('/roster/today', [RosterController::class, 'setToday']); // POST lista de agent_ids
+    Route::post('/orders/assign-backlog', [AssignmentController::class, 'assignBacklog']);
 });
