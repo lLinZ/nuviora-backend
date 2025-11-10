@@ -2,9 +2,13 @@
 
 use App\Http\Controllers\AssignmentController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BusinessController;
+use App\Http\Controllers\CommissionController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\DelivererStockController;
 use App\Http\Controllers\FacebookEventController;
+use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\OrderCancellationController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OrderDelivererController;
@@ -12,6 +16,7 @@ use App\Http\Controllers\OrderPostponementController;
 use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\RosterController;
+use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\StockMovementController;
@@ -120,4 +125,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/roster/today', [RosterController::class, 'today']); // GET roster actual
     Route::post('/roster/today', [RosterController::class, 'setToday']); // POST lista de agent_ids
     Route::post('/orders/assign-backlog', [AssignmentController::class, 'assignBacklog']);
+
+    Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
+    Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
+    Route::get('/business/status', [BusinessController::class, 'status']); // estado actual
+    Route::post('/business/open',   [BusinessController::class, 'open']);   // abrir jornada (ahora)
+    Route::post('/business/close',  [BusinessController::class, 'close']);  // cerrar jornada (ahora)
+
+    Route::get('/inventory', [InventoryController::class, 'index']);
+    Route::put('/inventory/{product}/adjust', [InventoryController::class, 'adjust']); // IN/OUT
+
+    Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']); // para repartidor
+    Route::post('/deliverer/stock/assign', [DelivererStockController::class, 'assign']);
+    Route::post('/deliverer/stock/return', [DelivererStockController::class, 'return']);
+
+    Route::get('/commissions/me/today', [CommissionController::class, 'myToday']);
+    Route::get('/commissions/admin/summary', [CommissionController::class, 'adminSummary']); // ?from=YYYY-MM-DD&to=...
+
 });

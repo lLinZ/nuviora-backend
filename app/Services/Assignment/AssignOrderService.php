@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\OrderAssignmentLog;
 use App\Models\Setting;
 use App\Models\Status;
+use App\Models\BusinessDay;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -30,29 +31,25 @@ class AssignOrderService
      */
     public function assignOne(Order $order): ?User
     {
-        if ($order->agent_id) return $order->agent; // ya asignada
+        if ($order->agent_id) return $order->agent;
 
-        $now = now();
-        $open  = Setting::get('business_open_at', '09:00');
-        $close = Setting::get('business_close_at', '18:00');
+        // si quieres bloquear fuera de jornada:
+        if (!$this->isBusinessOpen()) {
+            return null; // fuera de jornada, no auto-asigna
+        }
 
-        $inWindow = $this->isWithinWindow($now, $open, $close);
-        // Para backlog también lo usamos sin ventana; aquí se puede forzar
-        $agents = $this->activeAgentsForDate($now->toDateString());
-
+        $agents = $this->activeAgentsForDate(now()->toDateString());
         if ($agents->isEmpty()) return null;
 
         return DB::transaction(function () use ($order, $agents) {
-            // lock de la orden para evitar carreras si múltiples workers
             $ord = Order::where('id', $order->id)->lockForUpdate()->first();
             if ($ord->agent_id) return $ord->agent;
 
-            // pick según estrategia
             $agentId = $this->strategy->pickAgentId($agents, $ord);
 
             $ord->update(['agent_id' => $agentId]);
 
-            OrderAssignmentLog::create([
+            \App\Models\OrderAssignmentLog::create([
                 'order_id'    => $ord->id,
                 'agent_id'    => $agentId,
                 'strategy'    => (new \ReflectionClass($this->strategy))->getShortName(),
@@ -117,8 +114,23 @@ class AssignOrderService
 
     protected function isWithinWindow($now, string $open, string $close): bool
     {
+        // Soporta casos "normales" (09:00–18:00) y "nocturnos" (20:00–06:00)
         $start = $now->copy()->setTimeFromTimeString($open);
         $end   = $now->copy()->setTimeFromTimeString($close);
+
+        // Si cierra al día siguiente (overnight)
+        if ($end->lessThanOrEqualTo($start)) {
+            // Ventana: [start, 23:59:59] ∪ [00:00, end]
+            return $now->greaterThanOrEqualTo($start) || $now->lessThanOrEqualTo($end);
+        }
+
         return $now->betweenIncluded($start, $end);
+    }
+
+
+    protected function isBusinessOpen(): bool
+    {
+        $day = BusinessDay::where('date', now()->toDateString())->first();
+        return $day && $day->open_at && is_null($day->close_at);
     }
 }
