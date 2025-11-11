@@ -141,5 +141,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/commissions/me/today', [CommissionController::class, 'myToday']);
     Route::get('/commissions/admin/summary', [CommissionController::class, 'adminSummary']); // ?from=YYYY-MM-DD&to=...
+    // Productos
+    Route::get('/inventory/products', [ProductController::class, 'index']);
+    Route::post('/inventory/products', [ProductController::class, 'store']);
+    Route::put('/inventory/products/{id}', [ProductController::class, 'update']);
 
+    // Movimientos de stock
+    Route::get('/inventory/movements', [StockMovementController::class, 'index']); // opcional: filtro por fechas/sku
+    Route::post('/inventory/adjust', [StockMovementController::class, 'adjust']);  // IN/OUT
+
+
+    Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']);
+    Route::post('/deliverer/stock/open', [DelivererStockController::class, 'open']); // abre jornada y asigna items
+    Route::post('/deliverer/stock/add-items', [DelivererStockController::class, 'addItems']); // agrega más durante el día
+    Route::post('/deliverer/stock/deliver', [DelivererStockController::class, 'registerDeliver']); // marcar entregado por producto
+    Route::post('/deliverer/stock/close', [DelivererStockController::class, 'close']); // devolver sobrante y cerrar
+
+    // Gerente/Admin (ver por repartidor / fecha)
+    Route::get('/deliverer/stock', [DelivererStockController::class, 'index']); // ?date=YYYY-MM-DD&deliverer_id=...
 });

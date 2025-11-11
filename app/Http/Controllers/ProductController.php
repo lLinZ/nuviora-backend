@@ -11,33 +11,54 @@ class ProductController extends Controller
 {
     public function index(Request $request)
     {
-        $q = trim((string) $request->get('search', ''));
-        $perPage = (int) $request->get('per_page', 20);
+        $q = Product::query();
 
-        $query = Product::query()
-            ->select('id', 'name', 'title', 'sku', 'price', 'image', 'stock', 'created_at');
-
-        if ($q !== '') {
-            $query->where(function ($qq) use ($q) {
-                $qq->where('name', 'like', "%$q%")
-                    ->orWhere('title', 'like', "%$q%")
-                    ->orWhere('sku', 'like', "%$q%");
+        if ($s = $request->get('search')) {
+            $q->where(function ($w) use ($s) {
+                $w->where('title', 'like', "%$s%")
+                    ->orWhere('name', 'like', "%$s%")
+                    ->orWhere('sku', 'like', "%$s%");
             });
         }
 
-        $products = $query->orderBy('name')->paginate($perPage);
+        $products = $q->orderBy('title')->get();
 
-        return response()->json([
-            'status' => true,
-            'data'   => $products->items(),
-            'meta'   => [
-                'current_page' => $products->currentPage(),
-                'total'        => $products->total(),
-                'last_page'    => $products->lastPage(),
-            ],
-        ]);
+        return response()->json(['status' => true, 'data' => $products]);
     }
 
+    public function store(Request $request)
+    {
+        $data = $request->validate([
+            'sku' => 'nullable|string|unique:products,sku',
+            'title' => 'nullable|string',
+            'name' => 'nullable|string',
+            'price' => 'required|numeric',
+            'cost' => 'required|numeric',
+            'currency' => 'required|string|max:8',
+            'stock' => 'required|integer',
+            'image' => 'nullable|string',
+        ]);
+
+        $p = Product::create($data);
+        return response()->json(['status' => true, 'product' => $p, 'message' => 'Producto creado']);
+    }
+
+    public function update(Request $request, $id)
+    {
+        $p = Product::findOrFail($id);
+        $data = $request->validate([
+            'sku' => 'nullable|string|unique:products,sku,' . $p->id,
+            'title' => 'nullable|string',
+            'name' => 'nullable|string',
+            'price' => 'required|numeric',
+            'cost' => 'required|numeric',
+            'currency' => 'required|string|max:8',
+            'stock' => 'required|integer',
+            'image' => 'nullable|string',
+        ]);
+        $p->update($data);
+        return response()->json(['status' => true, 'product' => $p, 'message' => 'Producto actualizado']);
+    }
     // PUT /products/{product}/stock
     public function updateStock(Request $request, Product $product)
     {
