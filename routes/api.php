@@ -7,6 +7,7 @@ use App\Http\Controllers\CommissionController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\DelivererStockController;
+use App\Http\Controllers\EarningsController;
 use App\Http\Controllers\FacebookEventController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\OrderCancellationController;
@@ -121,17 +122,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('facebook/events', [FacebookEventController::class, 'sendEvent']);
     Route::post('shopify/orders/create', [ShopifyWebhookController::class, 'orderCreated']);
 
-
     Route::get('/roster/today', [RosterController::class, 'today']); // GET roster actual
     Route::post('/roster/today', [RosterController::class, 'setToday']); // POST lista de agent_ids
     Route::post('/orders/assign-backlog', [AssignmentController::class, 'assignBacklog']);
 
     Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
     Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
+    Route::get('/business/today', [BusinessController::class, 'status']); // estado actual
     Route::get('/business/status', [BusinessController::class, 'status']); // estado actual
     Route::post('/business/open',   [BusinessController::class, 'open']);   // abrir jornada (ahora)
     Route::post('/business/close',  [BusinessController::class, 'close']);  // cerrar jornada (ahora)
-
     Route::get('/inventory', [InventoryController::class, 'index']);
     Route::put('/inventory/{product}/adjust', [InventoryController::class, 'adjust']); // IN/OUT
 
@@ -159,4 +159,21 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Gerente/Admin (ver por repartidor / fecha)
     Route::get('/deliverer/stock', [DelivererStockController::class, 'index']); // ?date=YYYY-MM-DD&deliverer_id=...
+
+    Route::get('/deliverer/stock/own', [DelivererStockController::class, 'myStock']);            // resumen por producto
+    Route::post('/deliverer/stock/assign', [DelivererStockController::class, 'assign']);     // “tomar” de bodega
+    Route::post('/deliverer/stock/return', [DelivererStockController::class, 'return']);     // devolver a bodega
+    Route::get('/deliverer/stock/movements', [DelivererStockController::class, 'myMovements']);
+
+    Route::get('/earnings/summary', [EarningsController::class, 'summary']);
+    Route::get('/earnings/me', [EarningsController::class, 'me']);
+
+    // Ver stock de un repartidor (admin/gerente o el repartidor mismo)
+    Route::get('/deliverers/{id}/stock', [DelivererStockController::class, 'show']);
+
+    // Asignar stock (solo Admin/Gerente)
+    Route::post('/deliverers/{id}/stock/assign', [DelivererStockController::class, 'assign']);
+
+    // Registrar devolución
+    Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
 });

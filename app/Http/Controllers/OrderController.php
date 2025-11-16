@@ -8,6 +8,7 @@ use App\Models\OrderProduct;
 use App\Models\Product;
 use App\Models\Status;
 use App\Models\User;
+use App\Services\CommissionService;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -58,22 +59,33 @@ class OrderController extends Controller
             ]
         ]);
     }
-    public function updateStatus(Request $request, Order $order)
+    public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
     {
         $request->validate([
-            'status_id' => 'required|exists:statuses,id'
+            'status_id' => 'required|exists:statuses,id',
         ]);
 
-        $status = Status::find($request->status_id);
+        $oldStatusId = $order->status_id;
 
-        $order->status_id = $status->id;
+        $order->status_id = $request->status_id;
         $order->save();
 
-        $newOrder = Order::with('status', 'client', 'agent')->find($order->id);
+        $order->load(['status', 'agent', 'deliverer', 'client', 'products']);
+
+        // Buscamos el status "Entregado"
+        $statusEntregado = Status::where('description', 'Entregado')->first();
+
+        if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
+            // Solo generamos ganancias cuando CAMBIA a Entregado
+            if ($oldStatusId !== $order->status_id) {
+                $commissionService->generateForDeliveredOrder($order);
+            }
+        }
+
         return response()->json([
             'status' => true,
             'message' => 'Estado actualizado correctamente',
-            'order' => $newOrder
+            'order' => $order,
         ]);
     }
     public function getOrderProducts($orderId)

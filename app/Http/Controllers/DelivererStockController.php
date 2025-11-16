@@ -7,13 +7,279 @@ use App\Models\DelivererStockItem;
 use App\Models\Inventory;
 use App\Models\Product;
 use App\Models\StockMovement;
+use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 class DelivererStockController extends Controller
 {
+    protected function ensureManagerOrAdmin(): void
+    {
+        $role = Auth::user()->role?->description;
+        if (!in_array($role, ['Admin', 'Gerente'])) {
+            abort(403, 'No autorizado');
+        }
+    }
 
+    /**
+     * Stock actual de un repartidor (para hoy, o por fecha).
+     */
+    public function show(Request $request, $delivererId)
+    {
+        $user = Auth::user();
+
+        // Repartidor solo puede ver su propio stock
+        if ($user->role?->description === 'Repartidor' && (int)$user->id !== (int)$delivererId) {
+            abort(403, 'No autorizado');
+        }
+
+        $date = $request->query('date')
+            ? Carbon::parse($request->query('date'))->toDateString()
+            : now()->toDateString();
+
+        $movs = StockMovement::where('deliverer_id', $delivererId)
+            ->whereDate('created_at', $date)
+            ->get()
+            ->groupBy('product_id');
+
+        $items = [];
+
+        foreach ($movs as $productId => $group) {
+            $assigned = $group->where('type', 'ASSIGN')->sum('quantity');
+            $returned = $group->where('type', 'RETURN')->sum('quantity');
+            $sold     = $group->where('type', 'SALE')->sum('quantity');
+
+            $qty = $assigned - $returned - $sold;
+
+            if ($qty > 0) {
+                $product = Product::find($productId);
+                if ($product) {
+                    $items[] = [
+                        'product_id' => $product->id,
+                        'name'       => $product->name,
+                        'sku'        => $product->sku,
+                        'quantity'   => $qty,
+                    ];
+                }
+            }
+        }
+
+        return response()->json([
+            'status' => true,
+            'data'   => [
+                'date'   => $date,
+                'items'  => $items,
+            ]
+        ]);
+    }
+
+    /**
+     * Asignar stock a un repartidor (solo Admin/Gerente).
+     */
+    public function assign(Request $request, $delivererId)
+    {
+        $this->ensureManagerOrAdmin();
+
+        $request->validate([
+            'items'               => 'required|array|min:1',
+            'items.*.product_id'  => 'required|integer|exists:products,id',
+            'items.*.quantity'    => 'required|integer|min:1',
+        ]);
+
+        $deliverer = User::findOrFail($delivererId);
+
+        if ($deliverer->role?->description !== 'Repartidor') {
+            return response()->json([
+                'status'  => false,
+                'message' => 'El usuario seleccionado no es repartidor',
+            ], 422);
+        }
+
+        $createdBy = Auth::id();
+
+        // Validar stock general suficiente
+        foreach ($request->items as $item) {
+            $available = $this->getWarehouseStock($item['product_id']);
+            if ($available < $item['quantity']) {
+                return response()->json([
+                    'status'  => false,
+                    'message' => "Stock insuficiente para el producto ID {$item['product_id']}",
+                ], 422);
+            }
+        }
+
+        // Crear movimientos ASSIGN
+        foreach ($request->items as $item) {
+            StockMovement::create([
+                'product_id'   => $item['product_id'],
+                'type'         => 'ASSIGN',
+                'quantity'     => $item['quantity'],
+                'deliverer_id' => $delivererId,
+                'order_id'     => null,
+                'created_by'   => $createdBy,
+            ]);
+        }
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Stock asignado al repartidor correctamente',
+        ]);
+    }
+
+    /**
+     * Registrar devolución de stock desde el repartidor al inventario general.
+     */
+    public function return(Request $request, $delivererId)
+    {
+        $user = Auth::user();
+
+        // Puede hacerlo el propio repartidor o Admin/Gerente
+        if (
+            !in_array($user->role?->description, ['Admin', 'Gerente']) &&
+            !($user->role?->description === 'Repartidor' && (int)$user->id === (int)$delivererId)
+        ) {
+            abort(403, 'No autorizado');
+        }
+
+        $request->validate([
+            'items'               => 'required|array|min:1',
+            'items.*.product_id'  => 'required|integer|exists:products,id',
+            'items.*.quantity'    => 'required|integer|min:1',
+        ]);
+
+        $createdBy = Auth::id();
+
+        foreach ($request->items as $item) {
+            // Podrías validar que no devuelva más de lo que tiene, pero lo dejamos simple
+            StockMovement::create([
+                'product_id'   => $item['product_id'],
+                'type'         => 'RETURN',
+                'quantity'     => $item['quantity'],
+                'deliverer_id' => $delivererId,
+                'order_id'     => null,
+                'created_by'   => $createdBy,
+            ]);
+        }
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Devolución registrada correctamente',
+        ]);
+    }
+
+    /**
+     * Stock general en bodega.
+     */
+    protected function getWarehouseStock(int $productId): int
+    {
+        $movs = StockMovement::where('product_id', $productId)->get();
+
+        $in      = $movs->where('type', 'IN')->sum('quantity');
+        $out     = $movs->where('type', 'OUT')->sum('quantity');
+        $assign  = $movs->where('type', 'ASSIGN')->sum('quantity');
+        $return  = $movs->where('type', 'RETURN')->sum('quantity');
+
+        return $in - $out - $assign + $return;
+    }
+    protected function ensureRole(array $roles)
+    {
+        $role = Auth::user()->role?->description;
+        if (!in_array($role, $roles)) abort(403, 'No autorizado');
+    }
+
+    // ============== Helpers ==============
+
+    protected function currentDelivererStockQuery($delivererId)
+    {
+        // stock del repartidor = ASSIGN - RETURN - SALE por producto
+        return StockMovement::select(
+            'product_id',
+            DB::raw("SUM(CASE WHEN type='ASSIGN' THEN quantity ELSE 0 END)
+                        - SUM(CASE WHEN type='RETURN' THEN quantity ELSE 0 END)
+                        - SUM(CASE WHEN type='SALE'   THEN quantity ELSE 0 END) as qty")
+        )
+            ->where('deliverer_id', $delivererId)
+            ->groupBy('product_id');
+    }
+
+    protected function warehouseAvailableQuery()
+    {
+        // stock disponible en bodega: simplemente Product.stock (si descuentas al asignar)
+        // Si prefieres calcular “bodega = IN-OUT-ASSIGN+RETURN”, cambia esta lógica.
+        return Product::select('id as product_id', 'stock as available');
+    }
+
+    // ============== Repartidor: ver su stock ==============
+
+    public function myStock()
+    {
+        $this->ensureRole(['Repartidor', 'Admin', 'Gerente']);
+
+        $me = Auth::id();
+
+        $my = $this->currentDelivererStockQuery($me);
+        $wh = $this->warehouseAvailableQuery();
+
+        $rows = Product::leftJoinSub($my, 'm', 'm.product_id', '=', 'products.id')
+            ->leftJoinSub($wh, 'w', 'w.product_id', '=', 'products.id')
+            ->select(
+                'products.id',
+                'products.title',
+                'products.sku',
+                'products.image',
+                DB::raw('COALESCE(m.qty,0) as my_qty'),
+                DB::raw('COALESCE(w.available,0) as warehouse_qty')
+            )
+            ->orderBy('products.title')
+            ->get();
+
+        return response()->json(['status' => true, 'data' => $rows]);
+    }
+
+    // ============== Gerente/Admin: ver stock de un repartidor específico ==============
+
+    public function byDeliverer($delivererId)
+    {
+        $this->ensureRole(['Admin', 'Gerente']);
+
+        $my = $this->currentDelivererStockQuery($delivererId);
+        $wh = $this->warehouseAvailableQuery();
+
+        $rows = Product::leftJoinSub($my, 'm', 'm.product_id', '=', 'products.id')
+            ->leftJoinSub($wh, 'w', 'w.product_id', '=', 'products.id')
+            ->select(
+                'products.id',
+                'products.title',
+                'products.sku',
+                'products.image',
+                DB::raw('COALESCE(m.qty,0) as my_qty'),
+                DB::raw('COALESCE(w.available,0) as warehouse_qty')
+            )
+            ->orderBy('products.title')
+            ->get();
+
+        return response()->json(['status' => true, 'data' => $rows]);
+    }
+
+
+    // ============== Repartidor: ver movimientos ==============
+
+    public function myMovements()
+    {
+        $this->ensureRole(['Repartidor', 'Admin', 'Gerente']);
+
+        $delivererId = Auth::id();
+
+        $rows = StockMovement::with('product:id,title,sku')
+            ->where('deliverer_id', $delivererId)
+            ->orderByDesc('id')
+            ->limit(200)
+            ->get();
+
+        return response()->json(['status' => true, 'data' => $rows]);
+    }
     protected function role(): ?string
     {
         return Auth::user()->role?->description;
@@ -213,49 +479,7 @@ class DelivererStockController extends Controller
         ]);
     }
 
-    public function assign(Request $r)
-    {
-        $this->authorizeManager(); // o valida rol
-        $r->validate(['deliverer_id' => 'required|integer|exists:users,id', 'items' => 'required|array|min:1', 'items.*.product_id' => 'required|integer|exists:products,id', 'items.*.qty' => 'required|integer|min:1']);
-        $today = now()->toDateString();
 
-        DB::transaction(function () use ($r, $today) {
-            foreach ($r->items as $it) {
-                $inv = Inventory::firstOrCreate(['product_id' => $it['product_id']]);
-                if ($inv->quantity < $it['qty']) abort(422, 'Stock insuficiente');
-                $inv->decrement('quantity', $it['qty']);
-
-                $row = DelivererStock::firstOrCreate(['date' => $today, 'deliverer_id' => $r->deliverer_id, 'product_id' => $it['product_id']]);
-                $row->increment('qty_assigned', $it['qty']);
-
-                StockMovement::create(['product_id' => $it['product_id'], 'type' => 'ASSIGN', 'quantity' => $it['qty'], 'deliverer_id' => $r->deliverer_id, 'created_by' => Auth::id()]);
-            }
-        });
-
-        return response()->json(['status' => true, 'message' => 'Stock asignado']);
-    }
-
-    public function return(Request $r)
-    {
-        $r->validate(['items' => 'required|array|min:1', 'items.*.product_id' => 'required|integer|exists:products,id', 'items.*.qty' => 'required|integer|min:1']);
-        $today = now()->toDateString();
-        $delivererId = Auth::id();
-
-        DB::transaction(function () use ($r, $today, $delivererId) {
-            foreach ($r->items as $it) {
-                $row = DelivererStock::where(['date' => $today, 'deliverer_id' => $delivererId, 'product_id' => $it['product_id']])->lockForUpdate()->first();
-                if (!$row) abort(422, 'No tienes asignación para este producto hoy');
-                $row->increment('qty_returned', $it['qty']);
-
-                $inv = \App\Models\Inventory::firstOrCreate(['product_id' => $it['product_id']]);
-                $inv->increment('quantity', $it['qty']);
-
-                StockMovement::create(['product_id' => $it['product_id'], 'type' => 'RETURN', 'quantity' => $it['qty'], 'deliverer_id' => $delivererId, 'created_by' => $delivererId]);
-            }
-        });
-
-        return response()->json(['status' => true, 'message' => 'Devolución registrada']);
-    }
 
     protected function authorizeManager()
     {
