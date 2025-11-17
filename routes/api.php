@@ -176,4 +176,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Registrar devolución
     Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
+
+    Route::put('/orders/{order}/payment', [OrderController::class, 'update']);
 });

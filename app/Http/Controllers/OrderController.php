@@ -15,6 +15,37 @@ use Illuminate\Support\Facades\Auth;
 
 class OrderController extends Controller
 {
+    public function updatePayment(Request $request, Order $order)
+    {
+        $request->validate([
+            'payment_method' => 'required|in:DOLARES_EFECTIVO,BOLIVARES_TRANSFERENCIA,BINANCE_DOLARES,ZELLE_DOLARES',
+            'payment_rate'   => 'nullable|numeric|min:0',
+        ]);
+
+        $order->payment_method = $request->payment_method;
+
+        // Sólo exigimos tasa si el pago fue en Bs
+        if ($request->payment_method === 'BOLIVARES_TRANSFERENCIA') {
+            $request->validate([
+                'payment_rate' => 'required|numeric|min:0.0001',
+            ]);
+            $order->payment_rate = $request->payment_rate;
+        } else {
+            // para pagos en USD no necesitamos tasa
+            $order->payment_rate = null;
+        }
+
+        $order->save();
+
+        // recargamos relaciones para que el front tenga todo actualizado
+        $order->load(['client', 'agent', 'status', 'products', 'updates.user']);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Método de pago actualizado',
+            'order' => $order,
+        ]);
+    }
     public function show($id)
     {
         $order = \App\Models\Order::with([
@@ -277,6 +308,5 @@ class OrderController extends Controller
     public function create() {}
     public function store(Request $request) {}
     public function edit(Order $order) {}
-    public function update(Request $request, Order $order) {}
     public function destroy(Order $order) {}
 }

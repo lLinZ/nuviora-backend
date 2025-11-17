@@ -44,13 +44,18 @@ class Order extends Model
 
     protected $fillable = [
         'order_id',
+        'order_number',
         'name',
         'current_total_price',
-        'order_number',
-        'processed_at',
         'currency',
+        'processed_at',
         'client_id',
         'status_id',
-        'agent_id'
+        'cancelled_at',
+        'scheduled_for',
+        'agent_id',
+        'deliverer_id',
+        'payment_method',
+        'exchange_rate',
     ];
 }
