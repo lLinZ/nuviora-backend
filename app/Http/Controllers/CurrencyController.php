@@ -11,37 +11,38 @@ use Illuminate\Support\Facades\Auth;
 
 class CurrencyController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    protected function ensureManagerOrAdmin()
     {
-        //
-    }
-    public function show()
-    {
-        // Solo admin / gerente ven y editan esto (puedes ajustar si quieres)
         $role = Auth::user()->role?->description;
         if (!in_array($role, ['Admin', 'Gerente'])) {
-            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
+            abort(403, 'No autorizado');
         }
+    }
+
+    public function show()
+    {
+        $this->ensureManagerOrAdmin();
+
+        $bcvUsd     = Setting::get('rate_bcv_usd');       // DÓLAR BCV
+        $bcvEur     = Setting::get('rate_bcv_eur');       // EURO BCV
+        $binanceUsd = Setting::get('rate_binance_usd');   // DÓLAR BINANCE
+        $updatedAt  = Setting::get('rate_updated_at');    // opcional
 
         return response()->json([
             'status' => true,
-            'data' => [
-                'bcv_usd'     => (float) Setting::get('rate_bcv_usd', 1),
-                'bcv_eur'     => (float) Setting::get('rate_bcv_eur', 1),
-                'binance_usd' => (float) Setting::get('rate_binance_usd', 1),
+            'data'   => [
+                'bcv_usd'      => $bcvUsd !== null ? (float) $bcvUsd : null,
+                'bcv_eur'      => $bcvEur !== null ? (float) $bcvEur : null,
+                'binance_usd'  => $binanceUsd !== null ? (float) $binanceUsd : null,
+                'updated_at'   => $updatedAt, // string o null
+                'has_values'   => $bcvUsd !== null || $bcvEur !== null || $binanceUsd !== null,
             ],
         ]);
     }
 
     public function update(Request $request)
     {
-        $role = Auth::user()->role?->description;
-        if (!in_array($role, ['Admin', 'Gerente'])) {
-            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
-        }
+        $this->ensureManagerOrAdmin();
 
         $data = $request->validate([
             'bcv_usd'     => ['required', 'numeric', 'min:0'],
@@ -52,11 +53,17 @@ class CurrencyController extends Controller
         Setting::set('rate_bcv_usd', $data['bcv_usd']);
         Setting::set('rate_bcv_eur', $data['bcv_eur']);
         Setting::set('rate_binance_usd', $data['binance_usd']);
+        Setting::set('rate_updated_at', now()->toDateTimeString());
 
         return response()->json([
             'status'  => true,
             'message' => 'Tasas actualizadas correctamente',
-            'data'    => $data,
+            'data'    => [
+                'bcv_usd'     => (float) $data['bcv_usd'],
+                'bcv_eur'     => (float) $data['bcv_eur'],
+                'binance_usd' => (float) $data['binance_usd'],
+                'updated_at'  => now()->toDateTimeString(),
+            ],
         ]);
     }
     public function get_last_currency()
