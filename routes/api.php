@@ -100,9 +100,9 @@ Route::middleware('auth:sanctum')->group(function () {
      * CURRENCY
      * ---------------------**/
     // Crear divisa
-    Route::post('currency', [CurrencyController::class, 'create']);
+    // Route::post('currency', [CurrencyController::class, 'create']);
     // Obtener la ultima divisa
-    Route::get('currency', [CurrencyController::class, 'get_last_currency']);
+    // Route::get('currency', [CurrencyController::class, 'get_last_currency']);
 
     /*---------------------
      * CANCELACIONES DE ORDEN
@@ -178,4 +178,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
 
     Route::put('/orders/{order}/payment', [OrderController::class, 'update']);
+
+    Route::get('/currency', [CurrencyController::class, 'show']);
+    Route::put('/currency', [CurrencyController::class, 'update']);
 });

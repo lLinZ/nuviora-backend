@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Models\Currency;
 use App\Http\Controllers\Controller;
+use App\Models\Setting;
 use App\Models\Status;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class CurrencyController extends Controller
 {
@@ -16,7 +18,47 @@ class CurrencyController extends Controller
     {
         //
     }
+    public function show()
+    {
+        // Solo admin / gerente ven y editan esto (puedes ajustar si quieres)
+        $role = Auth::user()->role?->description;
+        if (!in_array($role, ['Admin', 'Gerente'])) {
+            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
+        }
 
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'bcv_usd'     => (float) Setting::get('rate_bcv_usd', 1),
+                'bcv_eur'     => (float) Setting::get('rate_bcv_eur', 1),
+                'binance_usd' => (float) Setting::get('rate_binance_usd', 1),
+            ],
+        ]);
+    }
+
+    public function update(Request $request)
+    {
+        $role = Auth::user()->role?->description;
+        if (!in_array($role, ['Admin', 'Gerente'])) {
+            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
+        }
+
+        $data = $request->validate([
+            'bcv_usd'     => ['required', 'numeric', 'min:0'],
+            'bcv_eur'     => ['required', 'numeric', 'min:0'],
+            'binance_usd' => ['required', 'numeric', 'min:0'],
+        ]);
+
+        Setting::set('rate_bcv_usd', $data['bcv_usd']);
+        Setting::set('rate_bcv_eur', $data['bcv_eur']);
+        Setting::set('rate_binance_usd', $data['binance_usd']);
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Tasas actualizadas correctamente',
+            'data'    => $data,
+        ]);
+    }
     public function get_last_currency()
     {
         $currency = Currency::whereHas('status', function ($query) {
@@ -69,15 +111,6 @@ class CurrencyController extends Controller
     {
         //
     }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(Currency $currency)
-    {
-        //
-    }
-
     /**
      * Show the form for editing the specified resource.
      */
@@ -86,13 +119,6 @@ class CurrencyController extends Controller
         //
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Currency $currency)
-    {
-        //
-    }
 
     /**
      * Remove the specified resource from storage.

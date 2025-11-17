@@ -60,6 +60,7 @@ class ShopifyWebhookController extends Controller
                     : null,
                 'currency'            => $orderData['currency'],
                 'client_id'           => $client->id,
+                'status_id'           => 1,
             ]
         );
 
