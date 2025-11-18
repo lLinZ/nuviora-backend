@@ -16,6 +16,6 @@ class Currency extends Model
     protected $fillable = [
         'description',
         'value',
-        'status'
+        'status_id'
     ];
 }

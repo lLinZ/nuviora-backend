@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Auth;
 
 class OrderController extends Controller
 {
+    public function products(Order $order) {}
     public function updatePayment(Request $request, Order $order)
     {
         $request->validate([
