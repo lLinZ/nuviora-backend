@@ -6,6 +6,7 @@ use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 use App\Models\Role;
+use App\Models\Status;
 
 class VendedoresSeeder extends Seeder
 {
@@ -20,7 +21,8 @@ class VendedoresSeeder extends Seeder
         }
 
         // Ajusta status_id si tu app usa otro estado por defecto (1 = Activo, por ejemplo)
-        $STATUS_DEFECTO = 1;
+        $status_nuevo = Status::firstOrCreate('description', 'Activo');
+        $STATUS_DEFECTO = $status_nuevo->id;
 
         $vendedoras = [
             [

@@ -246,7 +246,7 @@ class OrderController extends Controller
                 // 1) Órdenes asignadas a ese vendedor
                 $q->where('agent_id', $user->id)
                     // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
-                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
+                    ->andWhereBetween('created_at', [$yesterdayStart, $now]);
             });
 
             // Nota: no aceptamos filtros extra desde el front de vendedor (se ignoran)

@@ -82,8 +82,10 @@ class AssignOrderService
                 $ord = Order::where('id', $id)->lockForUpdate()->first();
                 if ($ord->agent_id) return;
 
+                $status_asignado_a_vendedor = Status::where('description', 'Asignado a Vendedor')->first();
+                $asignado_id = $status_asignado_a_vendedor->id;
                 $agentId = $this->strategy->pickAgentId($agents, $ord);
-                $ord->update(['agent_id' => $agentId]);
+                $ord->update(['agent_id' => $agentId, 'status_id' => $asignado_id]);
 
                 OrderAssignmentLog::create([
                     'order_id'    => $ord->id,
