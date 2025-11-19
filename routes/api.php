@@ -178,7 +178,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
 
     Route::put('/orders/{order}/payment', [OrderController::class, 'update']);
+    Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
-    Route::put('/currency', [CurrencyController::class, 'update']);
+    Route::post('/currency', [CurrencyController::class, 'create']);
 });
