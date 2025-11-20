@@ -226,7 +226,31 @@ class OrderController extends Controller
 
         return response()->json(['success' => true], 200);
     }
-
+    public function addLocation(Request $request, Order $order)
+    {
+        $user = Auth::user();
+        $new_order = Order::with([
+            'client',
+            'agent',
+            'status',
+            'products.product',   // 👈 importante
+            'updates.user',
+            'cancellations.user',
+        ])->findOrFail($order->id);
+        $location_url = $request->location;
+        try {
+            if ($user->role?->description == 'Vendedor' || $user->role?->description == 'Gerente' || $user->role?->description == 'Admin') {
+                $new_order->location = $location_url;
+                $new_order->save();
+                return response()->json(['status' => true, 'data' => $new_order, 'message' => 'Ubicacion añadida exitosamente'], 200);
+            } else {
+                return response()->json(['status' => false], 403);
+            }
+        } catch (\Throwable $th) {
+            //throw $th;
+            return response()->json(['status' => false, 'msg' => $th->getMessage()], 400);
+        }
+    }
     // Resto de métodos resource (vacíos por ahora)
     public function index(Request $request)
     {
@@ -247,7 +271,7 @@ class OrderController extends Controller
                 // 1) Órdenes asignadas a ese vendedor
                 $q->where('agent_id', $user->id)
                     // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
-                    ->andWhereBetween('created_at', [$yesterdayStart, $now]);
+                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
             });
 
             // Nota: no aceptamos filtros extra desde el front de vendedor (se ignoran)

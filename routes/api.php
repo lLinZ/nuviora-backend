@@ -179,6 +179,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::put('/orders/{order}/payment', [OrderController::class, 'update']);
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
+    Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);
