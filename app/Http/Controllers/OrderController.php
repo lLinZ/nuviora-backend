@@ -257,7 +257,7 @@ class OrderController extends Controller
         $user = Auth::user();
         $perPage = (int) $request->get('per_page', 50);
 
-        $query = Order::with(['client', 'agent', 'status'])->latest('id');
+        $query = Order::with(['client', 'agent', 'deliverer', 'status'])->latest('id');
 
         // 🔒 Reglas por rol
         $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
@@ -275,6 +275,17 @@ class OrderController extends Controller
             });
 
             // Nota: no aceptamos filtros extra desde el front de vendedor (se ignoran)
+        } elseif ($role === 'Repartidor') {
+            // Ventana: HOY + AYER (según timezone de app)
+            $yesterdayStart = now()->subDay()->startOfDay();
+            $now = now();
+
+            $query->where(function ($q) use ($user, $yesterdayStart, $now) {
+                // 1) Órdenes asignadas a ese vendedor
+                $q->where('deliverer_id', $user->id)
+                    // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
+                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
+            });
         } else {
             // Gerente/Admin → filtros opcionales
             if ($request->filled('agent_id')) {
