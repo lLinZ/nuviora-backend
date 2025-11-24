@@ -12,8 +12,18 @@ class OrderUpdate extends Model
     protected $fillable = [
         'order_id',
         'user_id',
-        'message'
+        'message',
+        'image_path',
     ];
+
+    protected $appends = ['image_url'];
+
+    public function getImageUrlAttribute()
+    {
+        return $this->image_path
+            ? asset('storage/' . $this->image_path)
+            : null;
+    }
 
     public function order()
     {

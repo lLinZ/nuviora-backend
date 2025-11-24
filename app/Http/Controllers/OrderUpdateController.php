@@ -21,23 +21,30 @@ class OrderUpdateController extends Controller
         ]);
     }
 
-    // Crear una actualización
     public function store(Request $request, Order $order)
     {
         $request->validate([
-            'message' => 'required|string|max:1000'
+            'message' => 'required|string|max:1000',
+            'image'   => 'nullable|image|max:4096', // hasta 4MB
         ]);
 
+        $imagePath = null;
+
+        if ($request->hasFile('image')) {
+            $imagePath = $request->file('image')->store('order-updates', 'public');
+        }
+
         $update = OrderUpdate::create([
-            'order_id' => $order->id,
-            'user_id'  => Auth::id(), // o el id del usuario logueado
-            'message'  => $request->message
+            'order_id'   => $order->id,
+            'user_id'    => Auth::id(),
+            'message'    => $request->message,
+            'image_path' => $imagePath,
         ]);
 
         return response()->json([
-            'status' => true,
+            'status'  => true,
             'message' => 'Actualización creada correctamente',
-            'update' => $update->load('user')
+            'update'  => $update->load('user'),
         ]);
     }
 }
