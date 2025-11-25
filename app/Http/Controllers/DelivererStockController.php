@@ -94,7 +94,7 @@ class DelivererStockController extends Controller
             return response()->json([
                 'status'  => false,
                 'message' => 'El usuario seleccionado no es repartidor',
-            ], 422);
+            ], 400);
         }
 
         $createdBy = Auth::id();

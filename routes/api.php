@@ -112,7 +112,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Listar cancelaciones
     Route::get('cancellations', [OrderCancellationController::class, 'index']);
 
-    // Productos (listado ya lo teníamos)
+    // Productos 
     Route::get('/products', [ProductController::class, 'index']);
 
     // Stock
@@ -147,10 +147,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/inventory/products/{id}', [ProductController::class, 'update']);
 
     // Movimientos de stock
-    Route::get('/inventory/movements', [StockMovementController::class, 'index']); // opcional: filtro por fechas/sku
-    Route::post('/inventory/adjust', [StockMovementController::class, 'adjust']);  // IN/OUT
-
-
+    Route::get('/stock/movements', [StockMovementController::class, 'index']); // opcional: filtro por fechas/sku
+    Route::post('/stock/adjust', [StockMovementController::class, 'adjust']);  // IN/OUT
+    Route::post('/stock/movements', [StockMovementController::class, 'store']);
+    Route::get('/inventory', [InventoryController::class, 'index']);      // Admin / Gerente
+    Route::get('/inventory/my', [InventoryController::class, 'myStock']); // Repartidor
     Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']);
     Route::post('/deliverer/stock/open', [DelivererStockController::class, 'open']); // abre jornada y asigna items
     Route::post('/deliverer/stock/add-items', [DelivererStockController::class, 'addItems']); // agrega más durante el día
