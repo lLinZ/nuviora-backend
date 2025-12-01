@@ -10,6 +10,7 @@ use App\Http\Controllers\DelivererStockController;
 use App\Http\Controllers\EarningsController;
 use App\Http\Controllers\FacebookEventController;
 use App\Http\Controllers\InventoryController;
+use App\Http\Controllers\InventoryMovementController;
 use App\Http\Controllers\OrderCancellationController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OrderDelivererController;
@@ -21,6 +22,7 @@ use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\StockMovementController;
+use App\Http\Controllers\WarehouseController;
 use Illuminate\Support\Facades\Route;
 
 // Crear Admin
@@ -183,4 +185,25 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);
+
+    /**---------------------
+     * WAREHOUSES
+     * ---------------------**/
+    // Warehouse management
+    Route::get('warehouse-types', [WarehouseController::class, 'getTypes']);
+    Route::apiResource('warehouses', WarehouseController::class);
+    Route::get('warehouses/{warehouse}/inventory', [WarehouseController::class, 'inventory']);
+
+    /**---------------------
+     * INVENTORY MOVEMENTS
+     * ---------------------**/
+    // Inventory movements
+    Route::prefix('inventory-movements')->group(function () {
+        Route::get('/', [InventoryMovementController::class, 'index']);
+        Route::get('/{id}', [InventoryMovementController::class, 'show']);
+        Route::post('/transfer', [InventoryMovementController::class, 'transfer']);
+        Route::post('/in', [InventoryMovementController::class, 'stockIn']);
+        Route::post('/out', [InventoryMovementController::class, 'stockOut']);
+        Route::post('/adjust', [InventoryMovementController::class, 'adjust']);
+    });
 });
