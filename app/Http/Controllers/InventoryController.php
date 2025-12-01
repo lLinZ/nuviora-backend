@@ -2,26 +2,82 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Inventory;
 use App\Models\Product;
-use App\Models\StockMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class InventoryController extends Controller
 {
-    public function index()
+    // Inventario general (Admin / Gerente)
+    public function index(Request $request)
     {
-        return response()->json(['status' => true, 'data' => Inventory::with('product')->get()]);
+        $role = Auth::user()->role?->description;
+
+        if (!in_array($role, ['Admin', 'Gerente'])) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'No autorizado'
+            ], 403);
+        }
+
+        $products = Product::with('stockMovements')->get();
+
+        $data = $products->map(function ($p) {
+            $in = $p->stockMovements->whereIn('type', ['IN', 'RETURN'])->sum('quantity');
+            $out = $p->stockMovements->whereIn('type', ['OUT', 'ASSIGN', 'SALE'])->sum('quantity');
+
+            return [
+                'id'         => $p->id,
+                'name'       => $p->name,
+                'sku'        => $p->sku,
+                'price'      => $p->price ?? 0,
+                'available'  => $in - $out,
+                'in_total'   => $in,
+                'out_total'  => $out,
+            ];
+        });
+
+        return response()->json([
+            'status' => true,
+            'data'   => $data,
+        ]);
     }
-    public function adjust(Request $r, Product $product)
+
+    // Stock personal del repartidor (se puede usar después)
+    public function myStock(Request $request)
     {
-        $r->validate(['type' => 'required|in:IN,OUT', 'quantity' => 'required|integer|min:1']);
-        $inv = Inventory::firstOrCreate(['product_id' => $product->id]);
-        $inv->quantity += ($r->type === 'IN' ? $r->quantity : -$r->quantity);
-        if ($inv->quantity < 0) $inv->quantity = 0;
-        $inv->save();
-        StockMovement::create(['product_id' => $product->id, 'type' => $r->type, 'quantity' => $r->quantity, 'created_by' => Auth::id()]);
-        return response()->json(['status' => true, 'message' => 'Stock actualizado', 'inventory' => $inv]);
+        $user = Auth::user();
+        $role = $user->role?->description;
+
+        if ($role !== 'Repartidor') {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Solo repartidores pueden ver su stock personal',
+            ], 403);
+        }
+
+        // Movimientos que afectan al repartidor
+        $movs = $user->stockMovements()
+            ->with('product')
+            ->get();
+
+        $grouped = $movs->groupBy('product_id')->map(function ($items, $productId) {
+            $product = $items->first()->product;
+
+            $in = $items->whereIn('type', ['ASSIGN'])->sum('quantity');
+            $out = $items->whereIn('type', ['RETURN', 'SALE'])->sum('quantity');
+
+            return [
+                'product_id' => $productId,
+                'name'       => $product->name,
+                'sku'        => $product->sku,
+                'stock'      => $in - $out,
+            ];
+        })->values();
+
+        return response()->json([
+            'status' => true,
+            'data'   => $grouped,
+        ]);
     }
 }
