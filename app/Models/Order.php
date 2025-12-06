@@ -42,6 +42,11 @@ class Order extends Model
         return $this->belongsTo(\App\Models\User::class, 'deliverer_id');
     }
 
+    public function payments()
+    {
+        return $this->hasMany(OrderPayment::class);
+    }
+
     protected $fillable = [
         'order_id',
         'order_number',
@@ -57,5 +62,6 @@ class Order extends Model
         'deliverer_id',
         'payment_method',
         'exchange_rate',
+        'payment_receipt',
     ];
 }

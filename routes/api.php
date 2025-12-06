@@ -32,6 +32,10 @@ Route::post('register/master/24548539', [AuthController::class, 'register_master
 Route::post('login', [AuthController::class, 'login']);
 
 Route::post('order/webhook', [ShopifyWebhookController::class, 'handleOrderCreate']);
+
+// Public route for payment receipts (no auth required to view images)
+Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt']);
+
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
     /**---------------------
@@ -180,9 +184,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Registrar devolución
     Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
 
-    Route::put('/orders/{order}/payment', [OrderController::class, 'update']);
+    Route::put('/orders/{order}/payment', [OrderController::class, 'updatePayment']);
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
     Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
+    Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);

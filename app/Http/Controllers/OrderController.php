@@ -19,31 +19,46 @@ class OrderController extends Controller
     public function updatePayment(Request $request, Order $order)
     {
         $request->validate([
-            'payment_method' => 'required|in:DOLARES_EFECTIVO,BOLIVARES_TRANSFERENCIA,BINANCE_DOLARES,ZELLE_DOLARES',
-            'payment_rate'   => 'nullable|numeric|min:0',
+            'payments' => 'required|array|min:1',
+            'payments.*.method' => 'required|string',
+            'payments.*.amount' => 'required|numeric|min:0.01',
+            'payments.*.rate' => 'nullable|numeric|min:0',
         ]);
 
-        $order->payment_method = $request->payment_method;
+        // 1. Eliminar pagos anteriores (estrategia simple: borrar y crear nuevos)
+        $order->payments()->delete();
 
-        // Sólo exigimos tasa si el pago fue en Bs
-        if ($request->payment_method === 'BOLIVARES_TRANSFERENCIA') {
-            $request->validate([
-                'payment_rate' => 'required|numeric|min:0.0001',
+        // 2. Obtener las tasas de cambio activas
+        $activeCurrencies = \App\Models\Currency::whereHas('status', function($q) {
+            $q->where('description', 'Activo');
+        })->get()->keyBy('description');
+
+        $usdRate = $activeCurrencies->get('bcv_usd')?->value;
+        $eurRate = $activeCurrencies->get('euro')?->value;
+        $binanceUsdRate = $activeCurrencies->get('binance_usd')?->value;
+
+        // 3. Crear nuevos pagos con las tasas actuales
+        foreach ($request->payments as $paymentData) {
+            $order->payments()->create([
+                'method' => $paymentData['method'],
+                'amount' => $paymentData['amount'],
+                // Si es Bs, guardamos la tasa. Si no, null.
+                'rate'   => ($paymentData['method'] === 'BOLIVARES_TRANSFERENCIA' || $paymentData['method'] === 'BOLIVARES_EFECTIVO') 
+                            ? ($paymentData['rate'] ?? null) 
+                            : null,
+                // Tasas de cambio del día
+                'usd_rate' => $usdRate,
+                'eur_rate' => $eurRate,
+                'binance_usd_rate' => $binanceUsdRate,
             ]);
-            $order->payment_rate = $request->payment_rate;
-        } else {
-            // para pagos en USD no necesitamos tasa
-            $order->payment_rate = null;
         }
 
-        $order->save();
-
-        // recargamos relaciones para que el front tenga todo actualizado
-        $order->load(['client', 'agent', 'status', 'products', 'updates.user']);
+        // recargamos relaciones
+        $order->load(['client', 'agent', 'status', 'products', 'updates.user', 'payments']);
 
         return response()->json([
             'status' => true,
-            'message' => 'Método de pago actualizado',
+            'message' => 'Métodos de pago actualizados',
             'order' => $order,
         ]);
     }
@@ -56,6 +71,7 @@ class OrderController extends Controller
             'products.product',   // 👈 importante
             'updates.user',
             'cancellations.user',
+            'payments', // 👈 incluimos pagos
         ])->findOrFail($id);
 
         // Si quieres devolver items “planchados” (recomendado para front):
@@ -88,6 +104,8 @@ class OrderController extends Controller
                 'products'             => $items, // 👈 ya listo para el front
                 'updates'              => $order->updates,
                 'cancellations'        => $order->cancellations,
+                'payments'             => $order->payments, // 👈 enviamos al front
+                'payment_receipt'      => $order->payment_receipt,
             ]
         ]);
     }
@@ -97,15 +115,25 @@ class OrderController extends Controller
             'status_id' => 'required|exists:statuses,id',
         ]);
 
+        // Buscamos el status "Entregado"
+        $statusEntregado = Status::where('description', 'Entregado')->first();
+
+        // Validar que existe comprobante de pago si se intenta cambiar a Entregado
+        if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) {
+            if (empty($order->payment_receipt)) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'No se puede marcar como entregado sin un comprobante de pago',
+                ], 422);
+            }
+        }
+
         $oldStatusId = $order->status_id;
 
         $order->status_id = $request->status_id;
         $order->save();
 
         $order->load(['status', 'agent', 'deliverer', 'client', 'products']);
-
-        // Buscamos el status "Entregado"
-        $statusEntregado = Status::where('description', 'Entregado')->first();
 
         if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
             // Solo generamos ganancias cuando CAMBIA a Entregado
@@ -338,6 +366,67 @@ class OrderController extends Controller
         return response()->json([
             'status' => true,
             'order' => $order->load('agent', 'status', 'client'),
+        ]);
+    }
+
+    public function uploadPaymentReceipt(Request $request, Order $order)
+    {
+        $request->validate([
+            'payment_receipt' => 'required|image|mimes:jpeg,jpg,png|max:5120', // Max 5MB
+        ]);
+
+        try {
+            // Delete old receipt if exists
+            if ($order->payment_receipt && \Storage::disk('public')->exists($order->payment_receipt)) {
+                \Storage::disk('public')->delete($order->payment_receipt);
+            }
+
+            // Store new receipt
+            $path = $request->file('payment_receipt')->store('payment_receipts', 'public');
+
+            // Update order
+            $order->payment_receipt = $path;
+            $order->save();
+
+            // Reload relationships
+            $order->load(['client', 'agent', 'status', 'products.product', 'updates.user', 'cancellations.user', 'payments']);
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Comprobante de pago subido exitosamente',
+                'order' => $order,
+                'payment_receipt_url' => asset('storage/' . $path),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Error al subir el comprobante: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function getPaymentReceipt(Order $order)
+    {
+        if (!$order->payment_receipt) {
+            return response()->json([
+                'status' => false,
+                'message' => 'No hay comprobante de pago',
+            ], 404);
+        }
+
+        $path = storage_path('app/public/' . $order->payment_receipt);
+
+        if (!\File::exists($path)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Archivo no encontrado',
+            ], 404);
+        }
+
+        return response()->file($path, [
+            'Access-Control-Allow-Origin' => '*',
+            'Access-Control-Allow-Methods' => 'GET',
+            'Content-Type' => mime_content_type($path),
         ]);
     }
 
