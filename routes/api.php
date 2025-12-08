@@ -47,6 +47,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('user/{user}', [AuthController::class, 'edit_user_data']);
     // Validar token y obtener datos del usuario logueado
     Route::get('user/data', [AuthController::class, 'get_logged_user_data']);
+    
+    // Dashboard data
+    Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, 'index']);
+
     // Cambiar color
     Route::put('user/{user}/change/color', [AuthController::class, 'edit_color']);
     // Cambiar tema

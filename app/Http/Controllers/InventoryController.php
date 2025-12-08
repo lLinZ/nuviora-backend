@@ -13,33 +13,18 @@ class InventoryController extends Controller
     {
         $role = Auth::user()->role?->description;
 
-        if (!in_array($role, ['Admin', 'Gerente'])) {
+        if (!in_array($role, ['Admin', 'Gerente', 'Master'])) {
             return response()->json([
                 'status'  => false,
                 'message' => 'No autorizado'
             ], 403);
         }
 
-        $products = Product::with('stockMovements')->get();
-
-        $data = $products->map(function ($p) {
-            $in = $p->stockMovements->whereIn('type', ['IN', 'RETURN'])->sum('quantity');
-            $out = $p->stockMovements->whereIn('type', ['OUT', 'ASSIGN', 'SALE'])->sum('quantity');
-
-            return [
-                'id'         => $p->id,
-                'name'       => $p->name,
-                'sku'        => $p->sku,
-                'price'      => $p->price ?? 0,
-                'available'  => $in - $out,
-                'in_total'   => $in,
-                'out_total'  => $out,
-            ];
-        });
+        $inventory = \App\Models\Inventory::with(['product', 'warehouse'])->get();
 
         return response()->json([
             'status' => true,
-            'data'   => $data,
+            'data'   => $inventory,
         ]);
     }
 
