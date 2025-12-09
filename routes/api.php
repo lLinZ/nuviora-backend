@@ -70,6 +70,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
     // Listar ordenes
     Route::get('orders', [OrderController::class, 'index']);
+    // Upselling
+    Route::post('orders/{order}/upsell', [OrderController::class, 'addUpsell']);
+    Route::delete('orders/{order}/upsell/{itemId}', [OrderController::class, 'removeUpsell']);
+    // Productos
+    Route::get('products', [ProductController::class, 'index']);
 
     /**---------------------
      * CURRENCY

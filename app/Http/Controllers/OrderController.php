@@ -123,6 +123,7 @@ class OrderController extends Controller
                 [
                     'order_id'   => $order->id,
                     'product_id' => $product->id,
+                    'is_upsell'  => false,
                 ],
                 [
                     'product_number' => $product->product_id,
@@ -133,6 +134,13 @@ class OrderController extends Controller
                     'image'          => $imageUrl,
                 ]
             );
+        }
+
+        // 4️⃣ Restaurar el total incluyendo upsells
+        $upsellTotal = $order->products()->where('is_upsell', true)->get()->sum(fn($p) => $p->price * $p->quantity);
+        if ($upsellTotal > 0) {
+            $order->current_total_price += $upsellTotal;
+            $order->save();
         }
 
         return response()->json(['success' => true], 200);
@@ -172,6 +180,63 @@ class OrderController extends Controller
             'order' => $order->load('agent', 'status', 'client'),
         ]);
     }
+    public function addUpsell(Request $request, Order $order)
+    {
+        $request->validate([
+            'product_id' => 'required|exists:products,id',
+            'quantity' => 'required|integer|min:1',
+            'price' => 'required|numeric|min:0',
+        ]);
+
+        $product = Product::findOrFail($request->product_id);
+
+        OrderProduct::create([
+            'order_id' => $order->id,
+            'product_id' => $product->id,
+            'product_number' => $product->product_id,
+            'title' => $product->title,
+            'name' => $product->name,
+            'price' => $request->price,
+            'quantity' => $request->quantity,
+            'image' => $product->image,
+            'is_upsell' => true,
+            'upsell_user_id' => auth()->id(),
+        ]);
+
+        // Update total
+        $upsellAmount = $request->price * $request->quantity;
+        $order->current_total_price += $upsellAmount;
+        $order->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Upsell agregado correctamente',
+            'order' => $order->load('products.product', 'client', 'status', 'agent')
+        ]);
+    }
+
+    public function removeUpsell(Order $order, $itemId)
+    {
+        $item = OrderProduct::where('order_id', $order->id)->where('id', $itemId)->firstOrFail();
+
+        if (!$item->is_upsell) {
+            return response()->json(['status' => false, 'message' => 'No es un upsell'], 400);
+        }
+
+        $deduction = $item->price * $item->quantity;
+        $item->delete();
+
+        // Update total
+        $order->current_total_price -= $deduction;
+        $order->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Upsell eliminado correctamente',
+            'order' => $order->load('products.product', 'client', 'status', 'agent')
+        ]);
+    }
+
     public function create() {}
     public function store(Request $request) {}
     public function show(Order $order) {}

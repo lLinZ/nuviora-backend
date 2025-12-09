@@ -17,7 +17,9 @@ class OrderProduct extends Model // 👈 mejor singular
         'name',
         'price',
         'quantity',
-        'image'
+        'image',
+        'is_upsell',
+        'upsell_user_id'
     ];
 
     public function product()
