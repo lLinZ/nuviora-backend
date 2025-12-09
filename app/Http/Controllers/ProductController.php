@@ -1,10 +1,11 @@
 <?php
-
+// app/Http/Controllers/ProductController.php
 namespace App\Http\Controllers;
 
-use App\Models\Product;
-use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use App\Models\Product;
+use App\Models\StockMovement;
+use Illuminate\Support\Facades\Auth;
 
 class ProductController extends Controller
 {
@@ -25,51 +26,76 @@ class ProductController extends Controller
         return response()->json($query->paginate(20));
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
-    {
-        //
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request)
     {
-        //
+        $data = $request->validate([
+            'sku' => 'nullable|string|unique:products,sku',
+            'title' => 'nullable|string',
+            'name' => 'nullable|string',
+            'price' => 'required|numeric',
+            'cost' => 'required|numeric',
+            'currency' => 'required|string|max:8',
+            'stock' => 'required|integer',
+            'image' => 'nullable|string',
+        ]);
+
+        $p = Product::create($data);
+        return response()->json(['status' => true, 'product' => $p, 'message' => 'Producto creado']);
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(Product $product)
+    public function update(Request $request, $id)
     {
-        //
+        $p = Product::findOrFail($id);
+        $data = $request->validate([
+            'sku' => 'nullable|string|unique:products,sku,' . $p->id,
+            'title' => 'nullable|string',
+            'name' => 'nullable|string',
+            'price' => 'required|numeric',
+            'cost' => 'required|numeric',
+            'currency' => 'required|string|max:8',
+            'stock' => 'required|integer',
+            'image' => 'nullable|string',
+        ]);
+        $p->update($data);
+        return response()->json(['status' => true, 'product' => $p, 'message' => 'Producto actualizado']);
     }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Product $product)
+    // PUT /products/{product}/stock
+    public function updateStock(Request $request, Product $product)
     {
-        //
-    }
+        $data = $request->validate([
+            'type'     => 'required|in:in,out,adjust',
+            'quantity' => 'required|integer',
+            'note'     => 'nullable|string|max:255',
+        ]);
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Product $product)
-    {
-        //
-    }
+        $before = (int) $product->stock;
+        $after  = $before;
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Product $product)
-    {
-        //
+        if ($data['type'] === 'in')  $after = $before + abs($data['quantity']);
+        if ($data['type'] === 'out') $after = $before - abs($data['quantity']);
+        if ($data['type'] === 'adjust') $after = (int) $data['quantity']; // set absoluto
+
+        if ($after < 0) {
+            return response()->json(['status' => false, 'message' => 'El stock no puede ser negativo'], 422);
+        }
+
+        $product->update(['stock' => $after]);
+
+        $movement = StockMovement::create([
+            'product_id' => $product->id,
+            'user_id'    => Auth::id(),
+            'type'       => $data['type'],
+            'quantity'   => ($data['type'] === 'adjust') ? ($after - $before) : ($data['type'] === 'out' ? -abs($data['quantity']) : abs($data['quantity'])),
+            'before'     => $before,
+            'after'      => $after,
+            'note'       => $data['note'] ?? null,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Stock actualizado',
+            'product' => $product,
+            'movement' => $movement,
+        ]);
     }
 }

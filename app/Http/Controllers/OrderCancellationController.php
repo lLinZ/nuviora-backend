@@ -1,8 +1,10 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\OrderCancellation;
+use App\Models\Status;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -10,7 +12,7 @@ class OrderCancellationController extends Controller
 {
     public function index(Request $request)
     {
-        $query = \App\Models\OrderCancellation::with(['order', 'user'])
+        $query = OrderCancellation::with(['order', 'user'])
             ->orderBy('created_at', 'desc');
 
         if ($request->has('status')) {
@@ -23,36 +25,29 @@ class OrderCancellationController extends Controller
         ]);
     }
     // solicitar cancelación
-public function store(Request $request, Order $order)
-{
-    $request->validate([
-        'reason' => 'required|string|max:1000',
-    ]);
+    public function store(Request $request, Order $order)
+    {
+        $request->validate(['reason' => 'required|string|max:1000']);
 
-    // Crear la solicitud de cancelación
-    $cancellation = OrderCancellation::create([
-        'order_id' => $order->id,
-        'user_id'  => Auth::id(),
-        'reason'   => $request->reason,
-    ]);
+        $pendingId = Status::where('description', 'Pendiente Cancelación')->value('id');
+        $cancellation = OrderCancellation::create([
+            'order_id' => $order->id,
+            'user_id'  => Auth::id(),
+            'reason'   => $request->reason,
+            'status'   => 'pending',
+            'previous_status_id' => $order->status_id, // 👈 guardamos status previo
+        ]);
 
-    // Buscar o crear el status "Pendiente Cancelación"
-    $pendingStatus = \App\Models\Status::firstOrCreate([
-        'description' => 'Pendiente Cancelación'
-    ]);
+        // mover a "Pendiente Cancelación"
+        $order->update(['status_id' => $pendingId]);
 
-    // Actualizar la orden a ese status
-    $order->update([
-        'status_id' => $pendingStatus->id,
-    ]);
-
-    return response()->json([
-        'status' => true,
-        'message' => 'Cancelación solicitada',
-        'cancellation' => $cancellation,
-        'order' => $order->fresh('status') // 👈 devuelve la orden con status actualizado
-    ]);
-}
+        return response()->json([
+            'status' => true,
+            'message' => 'Cancelación solicitada',
+            'cancellation' => $cancellation,
+            'order' => $order->load('status')
+        ]);
+    }
 
 
     // aprobar/rechazar

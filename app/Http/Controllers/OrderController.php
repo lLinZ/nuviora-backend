@@ -8,27 +8,144 @@ use App\Models\OrderProduct;
 use App\Models\Product;
 use App\Models\Status;
 use App\Models\User;
+use App\Services\CommissionService;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class OrderController extends Controller
 {
-    public function updateStatus(Request $request, Order $order)
+    public function products(Order $order) {}
+    public function updatePayment(Request $request, Order $order)
     {
         $request->validate([
-            'status_id' => 'required|exists:statuses,id'
+            'payments' => 'required|array|min:1',
+            'payments.*.method' => 'required|string',
+            'payments.*.amount' => 'required|numeric|min:0.01',
+            'payments.*.rate' => 'nullable|numeric|min:0',
         ]);
 
-        $status = Status::find($request->status_id);
+        // 1. Eliminar pagos anteriores (estrategia simple: borrar y crear nuevos)
+        $order->payments()->delete();
 
-        $order->status_id = $status->id;
+        // 2. Obtener las tasas de cambio activas
+        $activeCurrencies = \App\Models\Currency::whereHas('status', function($q) {
+            $q->where('description', 'Activo');
+        })->get()->keyBy('description');
+
+        $usdRate = $activeCurrencies->get('bcv_usd')?->value;
+        $eurRate = $activeCurrencies->get('euro')?->value;
+        $binanceUsdRate = $activeCurrencies->get('binance_usd')?->value;
+
+        // 3. Crear nuevos pagos con las tasas actuales
+        foreach ($request->payments as $paymentData) {
+            $order->payments()->create([
+                'method' => $paymentData['method'],
+                'amount' => $paymentData['amount'],
+                // Si es Bs, guardamos la tasa. Si no, null.
+                'rate'   => ($paymentData['method'] === 'BOLIVARES_TRANSFERENCIA' || $paymentData['method'] === 'BOLIVARES_EFECTIVO') 
+                            ? ($paymentData['rate'] ?? null) 
+                            : null,
+                // Tasas de cambio del día
+                'usd_rate' => $usdRate,
+                'eur_rate' => $eurRate,
+                'binance_usd_rate' => $binanceUsdRate,
+            ]);
+        }
+
+        // recargamos relaciones
+        $order->load(['client', 'agent', 'status', 'products', 'updates.user', 'payments']);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Métodos de pago actualizados',
+            'order' => $order,
+        ]);
+    }
+    public function show($id)
+    {
+        $order = \App\Models\Order::with([
+            'client',
+            'agent',
+            'status',
+            'products.product',   // 👈 importante
+            'updates.user',
+            'cancellations.user',
+            'payments', // 👈 incluimos pagos
+        ])->findOrFail($id);
+
+        // Si quieres devolver items “planchados” (recomendado para front):
+        $items = $order->products->map(function ($op) {
+            return [
+                'id'        => $op->id,
+                'product_id' => $op->product_id,
+                'title'     => $op->title ?? ($op->product->title ?? $op->product->name ?? 'Producto'),
+                'sku'       => $op->product->sku ?? null,
+                'image'     => $op->image ?? $op->product->image ?? null,
+                'price'     => (float) $op->price,
+                'quantity'  => (int) $op->quantity,
+                'subtotal'  => (float) $op->price * (int) $op->quantity,
+            ];
+        });
+
+        // Total calculado desde los items (si quieres validar el current_total_price)
+        $computedTotal = $items->sum('subtotal');
+
+        return response()->json([
+            'status' => true,
+            'order'  => [
+                'id'                   => $order->id,
+                'name'                 => $order->name,
+                'currency'             => $order->currency,
+                'current_total_price'  => $order->current_total_price ?? $computedTotal,
+                'client'               => $order->client,
+                'agent'                => $order->agent,
+                'status'               => $order->status,
+                'products'             => $items, // 👈 ya listo para el front
+                'updates'              => $order->updates,
+                'cancellations'        => $order->cancellations,
+                'payments'             => $order->payments, // 👈 enviamos al front
+                'payment_receipt'      => $order->payment_receipt,
+            ]
+        ]);
+    }
+    public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
+    {
+        $request->validate([
+            'status_id' => 'required|exists:statuses,id',
+        ]);
+
+        // Buscamos el status "Entregado"
+        $statusEntregado = Status::where('description', 'Entregado')->first();
+
+        // Validar que existe comprobante de pago si se intenta cambiar a Entregado
+        if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) {
+            if (empty($order->payment_receipt)) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'No se puede marcar como entregado sin un comprobante de pago',
+                ], 422);
+            }
+        }
+
+        $oldStatusId = $order->status_id;
+
+        $order->status_id = $request->status_id;
         $order->save();
 
-        $newOrder = Order::with('status', 'client', 'agent')->find($order->id);
+        $order->load(['status', 'agent', 'deliverer', 'client', 'products']);
+
+        if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
+            // Solo generamos ganancias cuando CAMBIA a Entregado
+            if ($oldStatusId !== $order->status_id) {
+                $commissionService->generateForDeliveredOrder($order);
+            }
+        }
+
         return response()->json([
             'status' => true,
             'message' => 'Estado actualizado correctamente',
-            'order' => $newOrder
+            'order' => $order,
         ]);
     }
     public function getOrderProducts($orderId)
@@ -145,12 +262,91 @@ class OrderController extends Controller
 
         return response()->json(['success' => true], 200);
     }
-
-    // Resto de métodos resource (vacíos por ahora)
-    public function index()
+    public function addLocation(Request $request, Order $order)
     {
-        $orders = Order::with('client', 'status', 'agent')->get();
-        return response()->json(['data' => $orders], 200);
+        $user = Auth::user();
+        $new_order = Order::with([
+            'client',
+            'agent',
+            'status',
+            'products.product',   // 👈 importante
+            'updates.user',
+            'cancellations.user',
+        ])->findOrFail($order->id);
+        $location_url = $request->location;
+        try {
+            if ($user->role?->description == 'Vendedor' || $user->role?->description == 'Gerente' || $user->role?->description == 'Admin') {
+                $new_order->location = $location_url;
+                $new_order->save();
+                return response()->json(['status' => true, 'data' => $new_order, 'message' => 'Ubicacion añadida exitosamente'], 200);
+            } else {
+                return response()->json(['status' => false], 403);
+            }
+        } catch (\Throwable $th) {
+            //throw $th;
+            return response()->json(['status' => false, 'msg' => $th->getMessage()], 400);
+        }
+    }
+    // Resto de métodos resource (vacíos por ahora)
+    public function index(Request $request)
+    {
+        $user = Auth::user();
+        $perPage = (int) $request->get('per_page', 50);
+
+        $query = Order::with(['client', 'agent', 'deliverer', 'status'])->latest('id');
+
+        // 🔒 Reglas por rol
+        $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
+
+        if ($role === 'Vendedor') {
+            // Ventana: HOY + AYER (según timezone de app)
+            $yesterdayStart = now()->subDay()->startOfDay();
+            $now = now();
+
+            $query->where(function ($q) use ($user, $yesterdayStart, $now) {
+                // 1) Órdenes asignadas a ese vendedor
+                $q->where('agent_id', $user->id)
+                    // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
+                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
+            });
+
+            // Nota: no aceptamos filtros extra desde el front de vendedor (se ignoran)
+        } elseif ($role === 'Repartidor') {
+            // Ventana: HOY + AYER (según timezone de app)
+            $yesterdayStart = now()->subDay()->startOfDay();
+            $now = now();
+
+            $query->where(function ($q) use ($user, $yesterdayStart, $now) {
+                // 1) Órdenes asignadas a ese vendedor
+                $q->where('deliverer_id', $user->id)
+                    // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
+                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
+            });
+        } else {
+            // Gerente/Admin → filtros opcionales
+            if ($request->filled('agent_id')) {
+                $query->where('agent_id', $request->agent_id);
+            }
+            if ($request->filled('date_from')) {
+                $query->whereDate('created_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $query->whereDate('created_at', '<=', $request->date_to);
+            }
+        }
+
+        $orders = $query->paginate($perPage);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $orders->items(),
+            'meta'   => [
+                'current_page' => $orders->currentPage(),
+                'per_page'     => $orders->perPage(),
+                'total'        => $orders->total(),
+                'last_page'    => $orders->lastPage(),
+            ],
+        ]);
     }
     public function assignAgent(Request $request, Order $order)
     {
@@ -239,8 +435,6 @@ class OrderController extends Controller
 
     public function create() {}
     public function store(Request $request) {}
-    public function show(Order $order) {}
     public function edit(Order $order) {}
-    public function update(Request $request, Order $order) {}
     public function destroy(Order $order) {}
 }

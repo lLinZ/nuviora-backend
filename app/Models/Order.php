@@ -9,6 +9,10 @@ class Order extends Model
 {
     //
     use HasFactory;
+    public function postponements()
+    {
+        return $this->hasMany(\App\Models\OrderPostponement::class);
+    }
     public function products()
     {
         return $this->hasMany(OrderProduct::class);
@@ -29,18 +33,35 @@ class Order extends Model
     {
         return $this->hasMany(OrderUpdate::class);
     }
-    public function cancellations() {
+    public function cancellations()
+    {
         return $this->hasMany(OrderCancellation::class);
     }
+    public function deliverer()
+    {
+        return $this->belongsTo(\App\Models\User::class, 'deliverer_id');
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(OrderPayment::class);
+    }
+
     protected $fillable = [
         'order_id',
+        'order_number',
         'name',
         'current_total_price',
-        'order_number',
-        'processed_at',
         'currency',
+        'processed_at',
         'client_id',
         'status_id',
-        'agent_id'
+        'cancelled_at',
+        'scheduled_for',
+        'agent_id',
+        'deliverer_id',
+        'payment_method',
+        'exchange_rate',
+        'payment_receipt',
     ];
 }

@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\OrderProduct;
 use App\Models\Product;
 use App\Services\ShopifyService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
@@ -54,9 +55,12 @@ class ShopifyWebhookController extends Controller
                 'name'                => $orderData['name'],
                 'current_total_price' => $orderData['current_total_price'],
                 'order_number'        => $orderData['order_number'],
-                'processed_at'        => $orderData['processed_at'] ?? null,
+                'processed_at'        => $orderData['processed_at']
+                    ? Carbon::parse($orderData['processed_at'])->toDateTimeString()
+                    : null,
                 'currency'            => $orderData['currency'],
                 'client_id'           => $client->id,
+                'status_id'           => 1,
             ]
         );
 

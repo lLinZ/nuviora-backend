@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
@@ -21,6 +22,111 @@ class AuthController extends Controller
         })->paginate(20);
 
         return response()->json(['status' => true, 'data' => $users]);
+    }
+    public function deliverers(Request $request)
+    {
+        $roleId = Role::where('description', 'Repartidor')->value('id');
+        $q = trim((string) $request->get('search', ''));
+
+        $users = User::query()
+            ->where('role_id', $roleId)
+            ->when($q !== '', function ($query) use ($q) {
+                $query->where(function ($qq) use ($q) {
+                    $qq->where('names', 'like', "%$q%")
+                        ->orWhere('surnames', 'like', "%$q%")
+                        ->orWhere('email', 'like', "%$q%");
+                });
+            })
+            ->orderBy('names')
+            ->select('id', 'names', 'surnames', 'email', 'created_at')
+            ->paginate(20);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $users->items(),
+            'meta'   => [
+                'current_page' => $users->currentPage(),
+                'total'        => $users->total(),
+                'last_page'    => $users->lastPage(),
+            ],
+        ]);
+    }
+
+    // POST /users/deliverers
+    public function storeDeliverer(Request $request)
+    {
+        $request->validate([
+            'names'    => 'required|string|max:100',
+            'surnames' => 'nullable|string|max:100',
+            'phone' => 'required|string|max:100',
+            'email'    => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+        ]);
+
+        $roleId = Role::where('description', 'Repartidor')->value('id');
+
+        $user = User::create([
+            'names'     => $request->names,
+            'surnames'  => $request->surnames,
+            'email'     => $request->email,
+            'phone'     => $request->phone,
+            'password'  => Hash::make($request->password),
+            'role_id'   => $roleId,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Repartidor creado',
+            'user'   => $user,
+        ], 201);
+    }
+
+    // PUT /users/deliverers/{user}
+    public function updateDeliverer(Request $request, User $user)
+    {
+        // asegurar que realmente es repartidor
+        if ($user->role?->description !== 'Repartidor') {
+            return response()->json(['status' => false, 'message' => 'No es un repartidor'], 422);
+        }
+
+        $request->validate([
+            'names'    => 'required|string|max:100',
+            'surnames' => 'nullable|string|max:100',
+            'email'    => ['required', 'email', Rule::unique('users', 'email')->ignore($user->id)],
+            'password' => 'nullable|string|min:6',
+        ]);
+
+        $payload = [
+            'names'    => $request->names,
+            'surnames' => $request->surnames,
+            'email'    => $request->email,
+        ];
+        if ($request->filled('password')) {
+            $payload['password'] = Hash::make($request->password);
+        }
+
+        $user->update($payload);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Repartidor actualizado',
+            'user'   => $user,
+        ]);
+    }
+
+    // DELETE /users/deliverers/{user}
+    public function destroyDeliverer(User $user)
+    {
+        if ($user->role?->description !== 'Repartidor') {
+            return response()->json(['status' => false, 'message' => 'No es un repartidor'], 422);
+        }
+
+        $user->delete();
+
+        return response()->json([
+            'status'  => true,
+            'message' => 'Repartidor eliminado',
+        ]);
     }
     /**
      * Login de usuario
@@ -156,7 +262,7 @@ class AuthController extends Controller
         $user->status()->associate($status);
 
         // Obtener rol cliente o crear rol si no existe
-        $role = Role::firstOrNew(['description' => 'Master']);
+        $role = Role::firstOrNew(['description' => 'Admin']);
         $role->save();
 
         // Se asocia el rol al usuario
