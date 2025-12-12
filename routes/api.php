@@ -30,6 +30,8 @@ Route::post('register/master/24548539', [AuthController::class, 'register_master
 
 // Login
 Route::post('login', [AuthController::class, 'login']);
+Route::post('forgot-password', [\App\Http\Controllers\ForgotPasswordController::class, 'sendResetLinkEmail']);
+Route::post('reset-password', [\App\Http\Controllers\ForgotPasswordController::class, 'reset']);
 
 Route::post('order/webhook', [ShopifyWebhookController::class, 'handleOrderCreate']);
 

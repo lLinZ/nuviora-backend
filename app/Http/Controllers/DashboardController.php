@@ -79,7 +79,7 @@ class DashboardController extends Controller
         
         $totalSales = Order::whereDate('created_at', $date) // Or processed_at
             ->whereIn('status_id', [$statusCompletedId, $statusDeliveredId])
-            ->sum('total') ?? 0;
+            ->sum('current_total_price') ?? 0;
 
         return [
             'total_sales' => $totalSales,
