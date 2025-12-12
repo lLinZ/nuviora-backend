@@ -12,6 +12,7 @@ use App\Services\CommissionService;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 
 class OrderController extends Controller
 {
@@ -437,4 +438,52 @@ class OrderController extends Controller
     public function store(Request $request) {}
     public function edit(Order $order) {}
     public function destroy(Order $order) {}
+    public function uploadPaymentReceipt(Request $request, Order $order)
+    {
+        $request->validate([
+            'payment_receipt' => 'required|image|max:10240', // 10MB
+        ]);
+
+        if ($request->hasFile('payment_receipt')) {
+            // Eliminar anterior si existe
+            if ($order->payment_receipt) {
+                if (Storage::disk('public')->exists($order->payment_receipt)) {
+                    Storage::disk('public')->delete($order->payment_receipt);
+                }
+            }
+
+            $path = $request->file('payment_receipt')->store('payment_receipts', 'public');
+            
+            $order->payment_receipt = $path;
+            $order->save();
+
+            // URL para el preview inmediato en frontend
+            $url = url("api/orders/{$order->id}/payment-receipt");
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Comprobante subido exitosamente',
+                'payment_receipt_url' => $url,
+                'order' => $order
+            ]);
+        }
+
+        return response()->json(['status' => false, 'message' => 'No se recibió ninguna imagen'], 400);
+    }
+
+    public function getPaymentReceipt(Order $order)
+    {
+        if (!$order->payment_receipt) {
+            abort(404, 'No hay comprobante');
+        }
+
+        // Asegurarse de la ruta correcta en storage/app/public
+        $path = storage_path('app/public/' . $order->payment_receipt);
+
+        if (!file_exists($path)) {
+            abort(404, 'Archivo no encontrado');
+        }
+
+        return response()->file($path);
+    }
 }

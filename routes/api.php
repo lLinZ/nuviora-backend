@@ -98,7 +98,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Actualizar estado de la orden    
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
     // Ver detalles de la orden
-    Route::get('/orders/{order}', [OrderUpdateController::class, 'show']);
+    Route::get('/orders/{order}', [OrderController::class, 'show']);
     // Agregar nota a la orden
     Route::post('/orders/{order}/updates', [OrderUpdateController::class, 'store']);
     // Solicitar cancelación
