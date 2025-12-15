@@ -204,6 +204,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/currency', [CurrencyController::class, 'create']);
 
     /**---------------------
+     * DELIVERY REVIEW
+     * ---------------------**/
+    Route::put('/orders/delivery-review/{review}/approve', [\App\Http\Controllers\OrderDeliveryReviewController::class, 'approve']);
+    Route::put('/orders/delivery-review/{review}/reject', [\App\Http\Controllers\OrderDeliveryReviewController::class, 'reject']);
+
+    /**---------------------
      * WAREHOUSES
      * ---------------------**/
     // Warehouse management

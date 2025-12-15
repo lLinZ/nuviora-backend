@@ -33,6 +33,11 @@ class Order extends Model
     {
         return $this->hasMany(OrderUpdate::class);
     }
+    public function deliveryReviews()
+    {
+        return $this->hasMany(OrderDeliveryReview::class);
+    }
+
     public function cancellations()
     {
         return $this->hasMany(OrderCancellation::class);

@@ -72,6 +72,7 @@ class OrderController extends Controller
             'products.product',   // 👈 importante
             'updates.user',
             'cancellations.user',
+            'deliveryReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
         ])->findOrFail($id);
 
@@ -105,6 +106,7 @@ class OrderController extends Controller
                 'products'             => $items, // 👈 ya listo para el front
                 'updates'              => $order->updates,
                 'cancellations'        => $order->cancellations,
+                'delivery_reviews'     => $order->deliveryReviews, 
                 'payments'             => $order->payments, // 👈 enviamos al front
                 'payment_receipt'      => $order->payment_receipt,
             ]
@@ -118,6 +120,7 @@ class OrderController extends Controller
 
         // Buscamos el status "Entregado"
         $statusEntregado = Status::where('description', 'Entregado')->first();
+        $targetStatus = Status::find($request->status_id);
 
         // Validar que existe comprobante de pago si se intenta cambiar a Entregado
         if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) {
@@ -126,6 +129,40 @@ class OrderController extends Controller
                     'status' => false,
                     'message' => 'No se puede marcar como entregado sin un comprobante de pago',
                 ], 422);
+            }
+
+            // 🛑 INTERCEPCIÓN PARA APROBACIÓN 🛑
+            // Si el usuario NO es Gerente/Admin, creamos solicitud de aprobación
+            $userRole = Auth::user()->role?->description;
+            if (!in_array($userRole, ['Gerente', 'Admin'])) {
+                
+                // Verificar si ya existe una pendiente
+                $existingPending = $order->deliveryReviews()->where('status', 'pending')->first();
+                if ($existingPending) {
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'Ya existe una solicitud de aprobación pendiente para esta orden.',
+                    ], 422);
+                }
+
+                $statusPorAprobar = Status::where('description', 'Por aprobar entrega')->firstOrFail();
+                
+                // Cambiar estado a "Por aprobar entrega"
+                $order->status_id = $statusPorAprobar->id;
+                $order->save();
+
+                // Crear Review
+                \App\Models\OrderDeliveryReview::create([
+                    'order_id' => $order->id,
+                    'user_id' => Auth::id(),
+                    'status' => 'pending',
+                ]);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Solicitud enviada. Un gerente debe aprobar la entrega.',
+                    'order' => $order->load(['status', 'deliveryReviews']),
+                ]);
             }
         }
 
