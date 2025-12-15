@@ -199,6 +199,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
     Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
     Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
+    Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);
@@ -208,6 +209,8 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     Route::put('/orders/delivery-review/{review}/approve', [\App\Http\Controllers\OrderDeliveryReviewController::class, 'approve']);
     Route::put('/orders/delivery-review/{review}/reject', [\App\Http\Controllers\OrderDeliveryReviewController::class, 'reject']);
+
+    Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store']);
 
     /**---------------------
      * WAREHOUSES

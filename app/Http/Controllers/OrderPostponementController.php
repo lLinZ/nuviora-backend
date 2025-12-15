@@ -30,7 +30,7 @@ class OrderPostponementController extends Controller
         // - Si es hoy mismo => "Programado para mas tarde"
         // - Si es otro día => "Reprogramado"
         $scheduled = \Carbon\Carbon::parse($data['scheduled_for']);
-        $statusDesc = $scheduled->isToday() ? 'Programado para mas tarde' : 'Reprogramado';
+        $statusDesc = $scheduled->isToday() ? 'Programado para mas tarde' : 'Programado para otro dia';
         $statusId   = Status::where('description', $statusDesc)->value('id');
 
         // Persistimos en la orden (incluye scheduled_for si agregaste columna)

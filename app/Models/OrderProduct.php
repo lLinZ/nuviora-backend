@@ -31,4 +31,9 @@ class OrderProduct extends Model // 👈 mejor singular
     {
         return $this->belongsTo(Order::class);
     }
+
+    public function upsellUser()
+    {
+        return $this->belongsTo(User::class, 'upsell_user_id');
+    }
 }

@@ -70,6 +70,7 @@ class OrderController extends Controller
             'agent',
             'status',
             'products.product',   // 👈 importante
+            'products.upsellUser', // 👈 importante para mostrar quien hizo el upsell
             'updates.user',
             'cancellations.user',
             'deliveryReviews', // 👈 enviamos al front
@@ -87,6 +88,8 @@ class OrderController extends Controller
                 'price'     => (float) $op->price,
                 'quantity'  => (int) $op->quantity,
                 'subtotal'  => (float) $op->price * (int) $op->quantity,
+                'is_upsell' => (bool) $op->is_upsell,
+                'upsell_user_name' => $op->upsellUser?->names ?? null, // 👈 Nombre para el front
             ];
         });
 
@@ -109,6 +112,7 @@ class OrderController extends Controller
                 'delivery_reviews'     => $order->deliveryReviews, 
                 'payments'             => $order->payments, // 👈 enviamos al front
                 'payment_receipt'      => $order->payment_receipt,
+                'reminder_at'          => $order->reminder_at,
             ]
         ]);
     }
@@ -522,5 +526,22 @@ class OrderController extends Controller
         }
 
         return response()->file($path);
+    }
+
+    public function setReminder(Request $request, Order $order)
+    {
+        $request->validate([
+            'reminder_at' => 'required|date',
+        ]);
+
+        $order->update([
+            'reminder_at' => $request->reminder_at,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Recordatorio guardado',
+            'order' => $order,
+        ]);
     }
 }

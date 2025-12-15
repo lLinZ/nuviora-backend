@@ -68,5 +68,6 @@ class Order extends Model
         'payment_method',
         'exchange_rate',
         'payment_receipt',
+        'reminder_at',
     ];
 }
