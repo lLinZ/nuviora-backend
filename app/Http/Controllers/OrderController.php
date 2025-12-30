@@ -74,6 +74,7 @@ class OrderController extends Controller
             'updates.user',
             'cancellations.user',
             'deliveryReviews', // 👈 enviamos al front
+            'locationReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
         ])->findOrFail($id);
 
@@ -110,7 +111,8 @@ class OrderController extends Controller
                 'updates'              => $order->updates,
                 'cancellations'        => $order->cancellations,
                 'delivery_reviews'     => $order->deliveryReviews, 
-                'payments'             => $order->payments, // 👈 enviamos al front
+                'location_reviews'     => $order->locationReviews,
+                'payments'             => $order->payments, 
                 'payment_receipt'      => $order->payment_receipt,
                 'reminder_at'          => $order->reminder_at,
             ]
@@ -122,11 +124,11 @@ class OrderController extends Controller
             'status_id' => 'required|exists:statuses,id',
         ]);
 
-        // Buscamos el status "Entregado"
+        // Buscamos status "Entregado" para validación de comprobante
         $statusEntregado = Status::where('description', 'Entregado')->first();
-        $targetStatus = Status::find($request->status_id);
+        $statusCambioUbicacion = Status::where('description', 'Cambio de ubicacion')->first();
 
-        // Validar que existe comprobante de pago si se intenta cambiar a Entregado
+        // 1. Validar que existe comprobante de pago si se intenta cambiar a Entregado
         if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) {
             if (empty($order->payment_receipt)) {
                 return response()->json([
@@ -134,29 +136,34 @@ class OrderController extends Controller
                     'message' => 'No se puede marcar como entregado sin un comprobante de pago',
                 ], 422);
             }
+        }
 
-            // 🛑 INTERCEPCIÓN PARA APROBACIÓN 🛑
-            // Si el usuario NO es Gerente/Admin, creamos solicitud de aprobación
+        // 2. 🛑 INTERCEPCIÓN PARA APROBACIÓN DE CAMBIO DE UBICACION 🛑
+        if ($statusCambioUbicacion && (int) $statusCambioUbicacion->id === (int) $request->status_id) {
             $userRole = Auth::user()->role?->description;
             if (!in_array($userRole, ['Gerente', 'Admin'])) {
                 
                 // Verificar si ya existe una pendiente
-                $existingPending = $order->deliveryReviews()->where('status', 'pending')->first();
+                $existingPending = $order->locationReviews()->where('status', 'pending')->first();
                 if ($existingPending) {
                     return response()->json([
                         'status' => false,
-                        'message' => 'Ya existe una solicitud de aprobación pendiente para esta orden.',
+                        'message' => 'Ya existe una solicitud de aprobación de ubicación pendiente.',
                     ], 422);
                 }
 
-                $statusPorAprobar = Status::where('description', 'Por aprobar entrega')->firstOrFail();
+                $statusPorAprobar = Status::where('description', 'Por aprobar cambio de ubicacion')->first();
+                if (!$statusPorAprobar) {
+                    // Fallback si por alguna razón no existe el status
+                    return response()->json(['status' => false, 'message' => 'Error: Status de aprobación no encontrado'], 500);
+                }
                 
-                // Cambiar estado a "Por aprobar entrega"
+                // Cambiar estado a "Por aprobar cambio de ubicacion"
                 $order->status_id = $statusPorAprobar->id;
                 $order->save();
 
                 // Crear Review
-                \App\Models\OrderDeliveryReview::create([
+                \App\Models\OrderLocationReview::create([
                     'order_id' => $order->id,
                     'user_id' => Auth::id(),
                     'status' => 'pending',
@@ -164,8 +171,8 @@ class OrderController extends Controller
 
                 return response()->json([
                     'status' => true,
-                    'message' => 'Solicitud enviada. Un gerente debe aprobar la entrega.',
-                    'order' => $order->load(['status', 'deliveryReviews']),
+                    'message' => 'Solicitud enviada. Un gerente debe aprobar el cambio de ubicación.',
+                    'order' => $order->load(['status', 'locationReviews']),
                 ]);
             }
         }

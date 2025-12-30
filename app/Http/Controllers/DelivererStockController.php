@@ -39,6 +39,34 @@ class DelivererStockController extends Controller
             ? Carbon::parse($request->query('date'))->toDateString()
             : now()->toDateString();
 
+        // Check if there's a warehouse linked to this deliverer
+        $warehouse = \App\Models\Warehouse::where('user_id', $delivererId)->first();
+
+        if ($warehouse) {
+            $items = $warehouse->inventories()
+                ->with('product:id,name,title,sku')
+                ->get()
+                ->map(function ($inv) {
+                    return [
+                        'product_id' => $inv->product_id,
+                        'name'       => $inv->product->name ?? $inv->product->title,
+                        'sku'        => $inv->product->sku,
+                        'quantity'   => $inv->quantity,
+                    ];
+                });
+
+            return response()->json([
+                'status' => true,
+                'data'   => [
+                    'date'   => $date,
+                    'is_warehouse' => true,
+                    'warehouse_id' => $warehouse->id,
+                    'items'  => $items,
+                ]
+            ]);
+        }
+
+        // LEGACY LOGIC
         $movs = StockMovement::where('deliverer_id', $delivererId)
             ->whereDate('created_at', $date)
             ->get()
@@ -82,21 +110,64 @@ class DelivererStockController extends Controller
     {
         $this->ensureManagerOrAdmin();
 
-        $request->validate([
-            'items'               => 'required|array|min:1',
-            'items.*.product_id'  => 'required|integer|exists:products,id',
-            'items.*.quantity'    => 'required|integer|min:1',
-        ]);
+        // Check if there's a warehouse linked
+        $warehouse = \App\Models\Warehouse::where('user_id', $delivererId)->first();
+        if ($warehouse) {
+            $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
+            if (!$mainWarehouse) {
+                return response()->json(['status' => false, 'message' => 'Main warehouse not found'], 500);
+            }
 
-        $deliverer = User::findOrFail($delivererId);
+            $inventoryService = app(\App\Services\InventoryService::class);
+            
+            DB::beginTransaction();
+            try {
+                foreach ($request->items as $item) {
+                    $inventoryService->transferBetweenWarehouses(
+                        $item['product_id'],
+                        $mainWarehouse->id,
+                        $warehouse->id,
+                        $item['quantity'],
+                        Auth::id(),
+                        'Asignación automática vía vista de stock'
+                    );
+                }
+                DB::commit();
 
-        if ($deliverer->role?->description !== 'Repartidor') {
-            return response()->json([
-                'status'  => false,
-                'message' => 'El usuario seleccionado no es repartidor',
-            ], 400);
+                // Recargar datos para el front
+                $items = $warehouse->inventories()->with('product')->get()->map(function($inv) {
+                    return [
+                        'product_id' => $inv->product_id,
+                        'name' => $inv->product->name ?? $inv->product->title,
+                        'sku' => $inv->product->sku,
+                        'quantity' => $inv->quantity
+                    ];
+                });
+
+                // Inventario general (lo que queda en main)
+                $inventory = \App\Models\Inventory::where('warehouse_id', $mainWarehouse->id)
+                    ->with('product')
+                    ->get()
+                    ->map(fn($inv) => [
+                        'id' => $inv->product_id,
+                        'name' => $inv->product->name ?? $inv->product->title,
+                        'sku' => $inv->product->sku,
+                        'stock_available' => $inv->quantity
+                    ]);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Stock transferido al almacén del repartidor ✅',
+                    'deliverer_stock' => $items,
+                    'inventory' => $inventory
+                ]);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+            }
         }
 
+        // LEGACY ASSIGN LOGIC
         $createdBy = Auth::id();
 
         // Validar stock general suficiente
@@ -149,6 +220,64 @@ class DelivererStockController extends Controller
             'items.*.quantity'    => 'required|integer|min:1',
         ]);
 
+        // Check if there's a warehouse linked
+        $warehouse = \App\Models\Warehouse::where('user_id', $delivererId)->first();
+        if ($warehouse) {
+            $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
+            if (!$mainWarehouse) {
+                return response()->json(['status' => false, 'message' => 'Main warehouse not found'], 500);
+            }
+
+            $inventoryService = app(\App\Services\InventoryService::class);
+            
+            DB::beginTransaction();
+            try {
+                foreach ($request->items as $item) {
+                    $inventoryService->transferBetweenWarehouses(
+                        $item['product_id'],
+                        $warehouse->id,
+                        $mainWarehouse->id,
+                        $item['quantity'],
+                        Auth::id(),
+                        'Devolución automática vía vista de stock'
+                    );
+                }
+                DB::commit();
+
+                // Recargar datos para el front
+                $items = $warehouse->inventories()->with('product')->get()->map(function($inv) {
+                    return [
+                        'product_id' => $inv->product_id,
+                        'name' => $inv->product->name ?? $inv->product->title,
+                        'sku' => $inv->product->sku,
+                        'quantity' => $inv->quantity
+                    ];
+                });
+
+                // Inventario general (lo que hay en main ahora)
+                $inventory = \App\Models\Inventory::where('warehouse_id', $mainWarehouse->id)
+                    ->with('product')
+                    ->get()
+                    ->map(fn($inv) => [
+                        'id' => $inv->product_id,
+                        'name' => $inv->product->name ?? $inv->product->title,
+                        'sku' => $inv->product->sku,
+                        'stock_available' => $inv->quantity
+                    ]);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Stock devuelto a bodega ✅',
+                    'deliverer_stock' => $items,
+                    'inventory' => $inventory
+                ]);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+            }
+        }
+
+        // LEGACY RETURN LOGIC
         $createdBy = Auth::id();
 
         foreach ($request->items as $item) {

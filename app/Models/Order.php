@@ -37,6 +37,10 @@ class Order extends Model
     {
         return $this->hasMany(OrderDeliveryReview::class);
     }
+    public function locationReviews()
+    {
+        return $this->hasMany(OrderLocationReview::class);
+    }
 
     public function cancellations()
     {

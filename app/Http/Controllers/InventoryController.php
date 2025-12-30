@@ -20,11 +20,37 @@ class InventoryController extends Controller
             ], 403);
         }
 
-        $inventory = \App\Models\Inventory::with(['product', 'warehouse'])->get();
+        $query = \App\Models\Inventory::with(['product', 'warehouse']);
+
+        if ($request->has('main') && $request->main === 'true') {
+            $query->whereHas('warehouse', function ($q) {
+                $q->where('is_main', true);
+            });
+        }
+
+        $rawInventory = $query->get();
+
+        if ($request->has('overview') && $request->overview === 'true') {
+            return response()->json([
+                'status' => true,
+                'data'   => $rawInventory,
+            ]);
+        }
+
+        $mappedInventory = $rawInventory->map(function ($inv) {
+            return [
+                'id'              => $inv->product_id,
+                'product_id'      => $inv->product_id,
+                'name'            => $inv->product->name ?? $inv->product->title,
+                'sku'             => $inv->product->sku,
+                'stock_available' => $inv->quantity,
+                'warehouse_name'  => $inv->warehouse->name ?? 'N/A',
+            ];
+        });
 
         return response()->json([
             'status' => true,
-            'data'   => $inventory,
+            'data'   => $mappedInventory,
         ]);
     }
 

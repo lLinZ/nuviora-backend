@@ -210,6 +210,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/delivery-review/{review}/approve', [\App\Http\Controllers\OrderDeliveryReviewController::class, 'approve']);
     Route::put('/orders/delivery-review/{review}/reject', [\App\Http\Controllers\OrderDeliveryReviewController::class, 'reject']);
 
+    /**---------------------
+     * LOCATION REVIEW
+     * ---------------------**/
+    Route::put('/orders/location-review/{review}/approve', [\App\Http\Controllers\OrderLocationReviewController::class, 'approve']);
+    Route::put('/orders/location-review/{review}/reject', [\App\Http\Controllers\OrderLocationReviewController::class, 'reject']);
+
     Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store']);
 
     /**---------------------

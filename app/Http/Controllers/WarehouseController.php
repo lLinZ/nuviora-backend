@@ -14,7 +14,7 @@ class WarehouseController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Warehouse::with('warehouseType');
+        $query = Warehouse::with(['warehouseType', 'user']);
 
         // Filter by active status
         if ($request->has('active')) {
@@ -48,6 +48,7 @@ class WarehouseController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'warehouse_type_id' => 'required|exists:warehouse_types,id',
+            'user_id' => 'nullable|exists:users,id',
             'code' => 'required|string|max:50|unique:warehouses,code',
             'name' => 'required|string|max:100',
             'description' => 'nullable|string',
@@ -68,7 +69,7 @@ class WarehouseController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Warehouse created successfully',
-            'data' => $warehouse->load('warehouseType'),
+            'data' => $warehouse->load(['warehouseType', 'user']),
         ], 201);
     }
 
@@ -94,6 +95,7 @@ class WarehouseController extends Controller
 
         $validator = Validator::make($request->all(), [
             'warehouse_type_id' => 'sometimes|exists:warehouse_types,id',
+            'user_id' => 'nullable|exists:users,id',
             'code' => 'sometimes|string|max:50|unique:warehouses,code,' . $id,
             'name' => 'sometimes|string|max:100',
             'description' => 'nullable|string',
@@ -114,7 +116,7 @@ class WarehouseController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Warehouse updated successfully',
-            'data' => $warehouse->load('warehouseType'),
+            'data' => $warehouse->load(['warehouseType', 'user']),
         ]);
     }
 

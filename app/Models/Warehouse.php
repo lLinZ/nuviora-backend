@@ -11,6 +11,7 @@ class Warehouse extends Model
 
     protected $fillable = [
         'warehouse_type_id',
+        'user_id',
         'code',
         'name',
         'description',
@@ -30,6 +31,14 @@ class Warehouse extends Model
     public function warehouseType()
     {
         return $this->belongsTo(WarehouseType::class);
+    }
+
+    /**
+     * Get the user linked to this warehouse (repartidor)
+     */
+    public function user()
+    {
+        return $this->belongsTo(User::class);
     }
 
     /**

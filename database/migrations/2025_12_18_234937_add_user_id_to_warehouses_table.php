@@ -11,8 +11,8 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('orders', function (Blueprint $table) {
-            $table->dateTime('reminder_at')->nullable();
+        Schema::table('warehouses', function (Blueprint $table) {
+            $table->foreignId('user_id')->nullable()->after('warehouse_type_id')->constrained('users')->onDelete('set null');
         });
     }
 
@@ -21,8 +21,9 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('orders', function (Blueprint $table) {
-            $table->dropColumn('reminder_at');
+        Schema::table('warehouses', function (Blueprint $table) {
+            $table->dropForeign(['user_id']);
+            $table->dropColumn('user_id');
         });
     }
 };
