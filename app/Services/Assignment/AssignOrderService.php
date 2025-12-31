@@ -76,16 +76,17 @@ class AssignOrderService
             ->whereBetween('created_at', [$from, $to])
             ->pluck('id');
 
+        $assignmentStatus = Status::firstOrCreate(['description' => 'Asignado a Vendedor']);
+        $assignmentStatusId = $assignmentStatus->id;
+
         $count = 0;
         foreach ($ids as $id) {
-            DB::transaction(function () use ($id, $agents, &$count) {
+            DB::transaction(function () use ($id, $agents, &$count, $assignmentStatusId) {
                 $ord = Order::where('id', $id)->lockForUpdate()->first();
                 if ($ord->agent_id) return;
 
-                $status_asignado_a_vendedor = Status::where('description', 'Asignado a Vendedor')->first();
-                $asignado_id = $status_asignado_a_vendedor->id;
                 $agentId = $this->strategy->pickAgentId($agents, $ord);
-                $ord->update(['agent_id' => $agentId, 'status_id' => $asignado_id]);
+                $ord->update(['agent_id' => $agentId, 'status_id' => $assignmentStatusId]);
 
                 OrderAssignmentLog::create([
                     'order_id'    => $ord->id,

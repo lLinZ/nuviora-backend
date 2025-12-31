@@ -14,8 +14,8 @@ class RoleController extends Controller
     public function index()
     {
         //
-        $role = Role::all()->paginate();
-        return response()->json(['data' => $role, 'message' => 'Roles encontrados']);
+        $roles = Role::all();
+        return response()->json(['data' => $roles, 'message' => 'Roles encontrados']);
     }
 
     /**

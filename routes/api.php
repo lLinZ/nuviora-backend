@@ -45,6 +45,8 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     // Listar usuarios
     Route::get('users', [AuthController::class, 'get_all_users']);
+    // Crear usuario
+    Route::post('users', [AuthController::class, 'store']);
     // Editar datos del usuario
     Route::put('user/{user}', [AuthController::class, 'edit_user_data']);
     // Validar token y obtener datos del usuario logueado
@@ -77,6 +79,8 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     // Crear rol nuevo
     Route::post('role', [RoleController::class, 'create']);
+    // Listar roles
+    Route::get('roles', [RoleController::class, 'index']);
     Route::get('/users/deliverers', [AuthController::class, 'deliverers']);       // listar + buscar
     Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']);  // crear
     Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
@@ -215,6 +219,12 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     Route::put('/orders/location-review/{review}/approve', [\App\Http\Controllers\OrderLocationReviewController::class, 'approve']);
     Route::put('/orders/location-review/{review}/reject', [\App\Http\Controllers\OrderLocationReviewController::class, 'reject']);
+
+    /**---------------------
+     * REJECTION REVIEW
+     * ---------------------**/
+    Route::put('/orders/rejection-review/{review}/approve', [\App\Http\Controllers\OrderRejectionReviewController::class, 'approve']);
+    Route::put('/orders/rejection-review/{review}/reject', [\App\Http\Controllers\OrderRejectionReviewController::class, 'reject']);
 
     Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store']);
 

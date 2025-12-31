@@ -14,6 +14,44 @@ use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
+    // POST /users
+    public function store(Request $request)
+    {
+        $request->validate([
+            'names'    => 'required|string|max:100',
+            'surnames' => 'nullable|string|max:100',
+            'email'    => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+            'role_id'  => 'required|exists:roles,id',
+            'phone'    => 'nullable|string|max:100',
+            'address'  => 'nullable|string|max:255',
+        ]);
+
+        $user = User::create([
+            'names'     => $request->names,
+            'surnames'  => $request->surnames,
+            'email'     => $request->email,
+            'phone'     => $request->phone,
+            'address'   => $request->address,
+            'password'  => Hash::make($request->password),
+            'role_id'   => $request->role_id,
+            'color'     => '#0073ff', // Default color
+            'theme'     => 'light',    // Default theme
+        ]);
+
+        // Ensure active status exists or create it
+        $status = Status::firstOrNew(['description' => 'Activo']);
+        $status->save();
+        $user->status()->associate($status);
+        $user->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Usuario creado exitosamente',
+            'user'   => $user,
+        ], 201);
+    }
+
     public function get_all_users(Request $request)
     {
 

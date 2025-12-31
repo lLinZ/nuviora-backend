@@ -41,6 +41,10 @@ class Order extends Model
     {
         return $this->hasMany(OrderLocationReview::class);
     }
+    public function rejectionReviews()
+    {
+        return $this->hasMany(OrderRejectionReview::class);
+    }
 
     public function cancellations()
     {

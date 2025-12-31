@@ -75,6 +75,7 @@ class OrderController extends Controller
             'cancellations.user',
             'deliveryReviews', // 👈 enviamos al front
             'locationReviews', // 👈 enviamos al front
+            'rejectionReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
         ])->findOrFail($id);
 
@@ -112,6 +113,7 @@ class OrderController extends Controller
                 'cancellations'        => $order->cancellations,
                 'delivery_reviews'     => $order->deliveryReviews, 
                 'location_reviews'     => $order->locationReviews,
+                'rejection_reviews'    => $order->rejectionReviews,
                 'payments'             => $order->payments, 
                 'payment_receipt'      => $order->payment_receipt,
                 'reminder_at'          => $order->reminder_at,
@@ -173,6 +175,45 @@ class OrderController extends Controller
                     'status' => true,
                     'message' => 'Solicitud enviada. Un gerente debe aprobar el cambio de ubicación.',
                     'order' => $order->load(['status', 'locationReviews']),
+                ]);
+            }
+        }
+
+        // 3. 🛑 INTERCEPCIÓN PARA APROBACIÓN DE RECHAZO 🛑
+        $statusRechazado = Status::where('description', 'Rechazado')->first();
+        if ($statusRechazado && (int) $statusRechazado->id === (int) $request->status_id) {
+            $userRole = Auth::user()->role?->description;
+            if (!in_array($userRole, ['Gerente', 'Admin'])) {
+                
+                // Verificar si ya existe una pendiente
+                $existingPending = $order->rejectionReviews()->where('status', 'pending')->first();
+                if ($existingPending) {
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'Ya existe una solicitud de rechazo pendiente.',
+                    ], 422);
+                }
+
+                $statusPorAprobar = Status::where('description', 'Por aprobar rechazo')->first();
+                if (!$statusPorAprobar) {
+                    return response()->json(['status' => false, 'message' => 'Error: Status de aprobación no encontrado'], 500);
+                }
+                
+                // Cambiar estado a "Por aprobar rechazo"
+                $order->status_id = $statusPorAprobar->id;
+                $order->save();
+
+                // Crear Review
+                \App\Models\OrderRejectionReview::create([
+                    'order_id' => $order->id,
+                    'user_id' => Auth::id(),
+                    'status' => 'pending',
+                ]);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Solicitud enviada. Un gerente debe aprobar el rechazo.',
+                    'order' => $order->load(['status', 'rejectionReviews']),
                 ]);
             }
         }
