@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Models\Setting;
 
 class Order extends Model
 {
@@ -60,6 +61,26 @@ class Order extends Model
         return $this->hasMany(OrderPayment::class);
     }
 
+    public function shop()
+    {
+        return $this->belongsTo(Shop::class);
+    }
+
+    protected $appends = ['ves_price', 'bcv_equivalence'];
+
+    public function getVesPriceAttribute()
+    {
+        $rate = (float) Setting::get('rate_binance_usd', 0);
+        return $this->current_total_price * $rate;
+    }
+
+    public function getBcvEquivalenceAttribute()
+    {
+        $ves = $this->ves_price;
+        $rateBcv = (float) Setting::get('rate_bcv_usd', 0);
+        return $rateBcv > 0 ? $ves / $rateBcv : 0;
+    }
+
     protected $fillable = [
         'order_id',
         'order_number',
@@ -77,5 +98,8 @@ class Order extends Model
         'exchange_rate',
         'payment_receipt',
         'reminder_at',
+        'shop_id',
+        'was_shipped',
+        'shipped_at',
     ];
 }

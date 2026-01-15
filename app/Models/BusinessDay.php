@@ -9,7 +9,12 @@ class BusinessDay extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['date', 'open_at', 'close_at', 'opened_by', 'closed_by'];
+    protected $fillable = ['date', 'shop_id', 'open_at', 'close_at', 'opened_by', 'closed_by'];
+
+    public function shop()
+    {
+        return $this->belongsTo(Shop::class);
+    }
 
     protected $casts = [
         'open_at'  => 'datetime',

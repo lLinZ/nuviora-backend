@@ -16,14 +16,22 @@ use Illuminate\Support\Facades\Http;
 class ShopifyWebhookController extends Controller
 {
     //
-    public function handleOrderCreate(Request $request, ShopifyService $shopifyService)
+    public function handleOrderCreate(Request $request, ShopifyService $shopifyService, $shop_id = null)
     {
         $orderData = $request->all();
+        $shop = null;
+        if ($shop_id) {
+            $shop = \App\Models\Shop::find($shop_id);
+        }
 
         // 🔒 0. Verificar firma HMAC de Shopify
         $hmacHeader = $request->header('X-Shopify-Hmac-Sha256');
+        $secret = ($shop && $shop->shopify_webhook_secret) 
+            ? $shop->shopify_webhook_secret 
+            : env('SHOPIFY_WEBHOOK_SECRET');
+
         $calculatedHmac = base64_encode(
-            hash_hmac('sha256', $request->getContent(), env('SHOPIFY_WEBHOOK_SECRET'), true)
+            hash_hmac('sha256', $request->getContent(), $secret, true)
         );
 
         if (!hash_equals($hmacHeader, $calculatedHmac)) {
@@ -61,6 +69,7 @@ class ShopifyWebhookController extends Controller
                 'currency'            => $orderData['currency'],
                 'client_id'           => $client->id,
                 'status_id'           => 1,
+                'shop_id'             => $shop ? $shop->id : null,
             ]
         );
 

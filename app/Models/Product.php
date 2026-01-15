@@ -36,11 +36,18 @@ class Product extends Model
 
         return $in - $out;
     }
+    public function adSpends()
+    {
+        return $this->hasMany(ProductAdSpend::class);
+    }
+
     protected $fillable = [
         'product_id',
+        'variant_id',
         'title',
         'name',
         'price',
+        'cost_usd',
         'sku',
         'image',
     ];

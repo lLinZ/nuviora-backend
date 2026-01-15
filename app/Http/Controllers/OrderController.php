@@ -221,6 +221,13 @@ class OrderController extends Controller
         $oldStatusId = $order->status_id;
 
         $order->status_id = $request->status_id;
+
+        $statusEnRuta = Status::where('description', 'En ruta')->first();
+        if ($statusEnRuta && (int)$statusEnRuta->id === (int)$order->status_id) {
+            $order->was_shipped = true;
+            $order->shipped_at = now();
+        }
+
         $order->save();
 
         $order->load(['status', 'agent', 'deliverer', 'client', 'products']);

@@ -33,7 +33,7 @@ Route::post('login', [AuthController::class, 'login']);
 Route::post('forgot-password', [\App\Http\Controllers\ForgotPasswordController::class, 'sendResetLinkEmail']);
 Route::post('reset-password', [\App\Http\Controllers\ForgotPasswordController::class, 'reset']);
 
-Route::post('order/webhook', [ShopifyWebhookController::class, 'handleOrderCreate']);
+Route::post('order/webhook/{shop_id?}', [ShopifyWebhookController::class, 'handleOrderCreate']);
 
 // Public route for payment receipts (no auth required to view images)
 Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt']);
@@ -248,4 +248,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/out', [InventoryMovementController::class, 'stockOut']);
         Route::post('/adjust', [InventoryMovementController::class, 'adjust']);
     });
+
+    /**---------------------
+     * SHOPS
+     * ---------------------**/
+    Route::get('shops', [\App\Http\Controllers\ShopController::class, 'index']);
+    Route::post('shops', [\App\Http\Controllers\ShopController::class, 'store']);
+    Route::put('shops/{shop}', [\App\Http\Controllers\ShopController::class, 'update']);
+    Route::delete('shops/{shop}', [\App\Http\Controllers\ShopController::class, 'destroy']);
+    Route::post('shops/{shop}/assign-sellers', [\App\Http\Controllers\ShopController::class, 'assignSellers']);
+
+    /**---------------------
+     * METRICS
+     * ---------------------**/
+    Route::get('metrics', [\App\Http\Controllers\MetricsController::class, 'index']);
+    Route::post('metrics/ad-spend', [\App\Http\Controllers\MetricsController::class, 'storeAdSpend']);
 });

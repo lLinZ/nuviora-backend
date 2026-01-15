@@ -14,16 +14,19 @@ class BusinessDayController extends Controller
         if (!in_array($role, ['Gerente', 'Admin'])) abort(403, 'No autorizado');
     }
 
-    public function today()
+    public function today(Request $request)
     {
         $this->ensureManager();
+        $shopId = $request->get('shop_id');
+        if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
         $today = now()->toDateString();
-        $day = BusinessDay::firstOrCreate(['date' => $today]);
+        $day = BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
 
         // último cierre previo (para que puedas usarlo en backlog/manual)
         $lastClosed = BusinessDay::whereNotNull('close_at')
             ->where('date', '<', $today)
+            ->where('shop_id', $shopId)
             ->orderByDesc('date')
             ->value('close_at');
 
@@ -34,22 +37,24 @@ class BusinessDayController extends Controller
                 'open_at'       => optional($day->open_at)->toDateTimeString(),
                 'close_at'      => optional($day->close_at)->toDateTimeString(),
                 'is_open'       => $day->is_open,
-                'last_close_at' => $lastClosed ? $lastClosed->toDateTimeString() : null,
+                'last_close_at' => $lastClosed ? (\Illuminate\Support\Carbon::parse($lastClosed))->toDateTimeString() : null,
             ]
         ]);
     }
 
-    public function open()
+    public function open(Request $request)
     {
         $this->ensureManager();
+        $shopId = $request->get('shop_id');
+        if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
         $today = now()->toDateString();
-        $day = BusinessDay::firstOrCreate(['date' => $today]);
+        $day = BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
 
         if ($day->open_at) {
             return response()->json([
                 'status' => false,
-                'message' => 'La jornada ya fue abierta.',
+                'message' => 'La jornada de esta tienda ya fue abierta.',
             ], 409);
         }
 
@@ -68,14 +73,16 @@ class BusinessDayController extends Controller
         ]);
     }
 
-    public function close()
+    public function close(Request $request)
     {
         $this->ensureManager();
+        $shopId = $request->get('shop_id');
+        if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
         $today = now()->toDateString();
-        $day = BusinessDay::firstOrCreate(['date' => $today]);
+        $day = BusinessDay::where(['date' => $today, 'shop_id' => $shopId])->first();
 
-        if (!$day->open_at) {
+        if (!$day || !$day->open_at) {
             return response()->json([
                 'status' => false,
                 'message' => 'No puedes cerrar sin haber abierto la jornada.',

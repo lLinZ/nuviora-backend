@@ -9,7 +9,12 @@ class DailyAgentRoster extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['date', 'agent_id', 'is_active'];
+    protected $fillable = ['date', 'agent_id', 'shop_id', 'is_active'];
+
+    public function shop()
+    {
+        return $this->belongsTo(Shop::class);
+    }
 
     public function agent()
     {

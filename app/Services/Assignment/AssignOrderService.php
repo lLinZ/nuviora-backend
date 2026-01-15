@@ -34,15 +34,15 @@ class AssignOrderService
         if ($order->agent_id) return $order->agent;
 
         // si quieres bloquear fuera de jornada:
-        if (!$this->isBusinessOpen()) {
+        if (!$this->isBusinessOpen($order->shop_id)) {
             return null; // fuera de jornada, no auto-asigna
         }
 
-        $agents = $this->activeAgentsForDate(now()->toDateString());
+        $agents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id);
         if ($agents->isEmpty()) return null;
 
         return DB::transaction(function () use ($order, $agents) {
-            $ord = Order::where('id', $order->id)->lockForUpdate()->first();
+            $ord = Order::where('id', '=', $order->id)->lockForUpdate()->first(['*']);
             if ($ord->agent_id) return $ord->agent;
 
             $agentId = $this->strategy->pickAgentId($agents, $ord);
@@ -68,24 +68,24 @@ class AssignOrderService
     public function assignBacklog(\DateTimeInterface $from, \DateTimeInterface $to): int
     {
         $date = $to->format('Y-m-d');
-        $agents = $this->activeAgentsForDate($date);
-        if ($agents->isEmpty()) return 0;
-
         $ids = Order::query()
             ->whereNull('agent_id')
             ->whereBetween('created_at', [$from, $to])
-            ->pluck('id');
+            ->get(['*']); // Fetch full models to get shop_id
 
         $assignmentStatus = Status::firstOrCreate(['description' => 'Asignado a Vendedor']);
-        $assignmentStatusId = $assignmentStatus->id;
+        $assignmentStatusId = (int)$assignmentStatus->id;
 
         $count = 0;
-        foreach ($ids as $id) {
-            DB::transaction(function () use ($id, $agents, &$count, $assignmentStatusId) {
-                $ord = Order::where('id', $id)->lockForUpdate()->first();
+        foreach ($ids as $ordModel) {
+            $agentsForShop = $this->activeAgentsForDate($date, $ordModel->shop_id);
+            if ($agentsForShop->isEmpty()) continue;
+
+            DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId) {
+                $ord = Order::where('id', '=', $ordModel->id)->lockForUpdate()->first(['*']);
                 if ($ord->agent_id) return;
 
-                $agentId = $this->strategy->pickAgentId($agents, $ord);
+                $agentId = $this->strategy->pickAgentId($agentsForShop, $ord);
                 $ord->update(['agent_id' => $agentId, 'status_id' => $assignmentStatusId]);
 
                 OrderAssignmentLog::create([
@@ -105,12 +105,17 @@ class AssignOrderService
 
     /** Helpers */
 
-    protected function activeAgentsForDate(string $date): Collection
+    protected function activeAgentsForDate(string $date, ?int $shopId = null): Collection
     {
-        $rows = DailyAgentRoster::with('agent')
+        $query = DailyAgentRoster::with('agent')
             ->where('date', $date)
-            ->where('is_active', true)
-            ->get();
+            ->where('is_active', true);
+
+        if ($shopId) {
+            $query->where('shop_id', $shopId);
+        }
+
+        $rows = $query->get();
 
         return $rows->pluck('agent')->filter();
     }
@@ -131,9 +136,13 @@ class AssignOrderService
     }
 
 
-    protected function isBusinessOpen(): bool
+    protected function isBusinessOpen(?int $shopId = null): bool
     {
-        $day = BusinessDay::where('date', now()->toDateString())->first();
+        $query = BusinessDay::where('date', '=', now()->toDateString());
+        if ($shopId) {
+            $query->where('shop_id', '=', $shopId);
+        }
+        $day = $query->first(['*']);
         return $day && $day->open_at && is_null($day->close_at);
     }
 }

@@ -28,6 +28,11 @@ class User extends Authenticatable
         return $this->belongsTo(Role::class, 'role_id');
     }
 
+    public function shops()
+    {
+        return $this->belongsToMany(Shop::class, 'shop_user');
+    }
+
     /**
      * The attributes that are mass assignable.
      *
