@@ -3,6 +3,7 @@
 use App\Http\Controllers\AssignmentController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BusinessController;
+use App\Http\Controllers\CityController;
 use App\Http\Controllers\CommissionController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\CurrencyController;
@@ -67,6 +68,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('logout', [AuthController::class, 'logout']);
     // Listar agentes
     Route::get('users/agents', [AuthController::class, 'agents']);
+    Route::get('users/role/{role}', [AuthController::class, 'usersByRole']);
     // Asignar agente a la orden
     Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent']);
     /**---------------------
@@ -263,4 +265,9 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     Route::get('metrics', [\App\Http\Controllers\MetricsController::class, 'index']);
     Route::post('metrics/ad-spend', [\App\Http\Controllers\MetricsController::class, 'storeAdSpend']);
+
+    /**---------------------
+     * CITIES
+     * ---------------------**/
+    Route::apiResource('cities', CityController::class);
 });

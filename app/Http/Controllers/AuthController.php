@@ -56,14 +56,14 @@ class AuthController extends Controller
     {
 
         $users = User::with('role')->whereHas('status', function ($query) {
-            $query->where('description', 'Activo');
+            $query->where('description', '=', 'Activo');
         })->paginate(20);
 
         return response()->json(['status' => true, 'data' => $users]);
     }
     public function deliverers(Request $request)
     {
-        $roleId = Role::where('description', 'Repartidor')->value('id');
+        $roleId = Role::where('description', '=', 'Repartidor')->value('id');
         $q = trim((string) $request->get('search', ''));
 
         $users = User::query()
@@ -101,7 +101,7 @@ class AuthController extends Controller
             'password' => 'required|string|min:6',
         ]);
 
-        $roleId = Role::where('description', 'Repartidor')->value('id');
+        $roleId = Role::where('description', '=', 'Repartidor')->value('id');
 
         $user = User::create([
             'names'     => $request->names,
@@ -174,7 +174,7 @@ class AuthController extends Controller
         if (!Auth::attempt($request->only('email', 'password'))) {
             return response()->json(['status' => false, 'message' => 'Unauthorized'], 401);
         }
-        $user = User::with('role')->where('email', $request['email'])->firstOrFail();
+        $user = User::with('role')->where('email', '=', $request['email'])->firstOrFail();
         $token = $user->createToken('auth_token')->plainTextToken;
         $user->token = $token;
         $logs = Log::create([
@@ -213,12 +213,24 @@ class AuthController extends Controller
     public function agents()
     {
         $agents = User::whereHas('role', function ($q) {
-            $q->where('description', 'Vendedor');
+            $q->where('description', '=', 'Vendedor');
         })->get();
 
         return response()->json([
             'status' => true,
             'data' => $agents
+        ]);
+    }
+
+    public function usersByRole($roleDescription)
+    {
+        $users = User::whereHas('role', function ($q) use ($roleDescription) {
+            $q->where('description', '=', $roleDescription);
+        })->get();
+
+        return response()->json([
+            'status' => true,
+            'data' => $users
         ]);
     }
     public function register(Request $request)
@@ -384,7 +396,7 @@ class AuthController extends Controller
     public function get_logged_user_data(Request $request)
     {
         $data = $request->user();
-        $user = User::with('role')->where('id', $data->id)->first();
+        $user = User::with('role')->where('id', '=', $data->id)->first();
         return response()->json(['user' => $user]);
     }
     public function edit_user_data(Request $request, User $user)

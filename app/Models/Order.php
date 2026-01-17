@@ -61,6 +61,16 @@ class Order extends Model
         return $this->hasMany(OrderPayment::class);
     }
 
+    public function city()
+    {
+        return $this->belongsTo(City::class);
+    }
+
+    public function agency()
+    {
+        return $this->belongsTo(User::class, 'agency_id');
+    }
+
     public function shop()
     {
         return $this->belongsTo(Shop::class);
@@ -101,5 +111,16 @@ class Order extends Model
         'shop_id',
         'was_shipped',
         'shipped_at',
+        'city_id',
+        'agency_id',
+        'delivery_cost',
+        'cash_received',
+        'change_amount',
+        'change_covered_by',
+        'change_amount_company',
+        'change_amount_agency',
+        'novedad_type',
+        'novedad_description',
+        'novedad_resolution',
     ];
 }

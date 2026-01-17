@@ -32,6 +32,24 @@ class User extends Authenticatable
     {
         return $this->belongsToMany(Shop::class, 'shop_user');
     }
+    
+    /**
+     * Get the warehouse linked to this user (for Repartidor or Agencia)
+     */
+    public function warehouse()
+    {
+        return $this->hasOne(Warehouse::class);
+    }
+
+    public function orders()
+    {
+        return $this->hasMany(Order::class, 'agent_id');
+    }
+
+    public function agencyOrders()
+    {
+        return $this->hasMany(Order::class, 'agency_id');
+    }
 
     /**
      * The attributes that are mass assignable.

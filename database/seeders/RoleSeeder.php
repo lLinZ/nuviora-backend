@@ -15,6 +15,7 @@ class RoleSeeder extends Seeder
         Role::firstOrCreate(['description' => 'Gerente']);
         Role::firstOrCreate(['description' => 'Admin']);
         Role::firstOrCreate(['description' => 'Repartidor']); // 👈 nuevo
+        Role::firstOrCreate(['description' => 'Agencia']);
         Status::firstOrCreate(['description' => 'Nuevo']);
         Status::firstOrCreate(['description' => 'Asignado a vendedor']);
         Status::firstOrCreate(['description' => 'Llamado 1']);
@@ -30,6 +31,8 @@ class RoleSeeder extends Seeder
         Status::firstOrCreate(['description' => 'Rechazado']);
         Status::firstOrCreate(['description' => 'Entregado']);
         Status::firstOrCreate(['description' => 'Cancelado']);
+        Status::firstOrCreate(['description' => 'Novedades']);
+        Status::firstOrCreate(['description' => 'Novedad Solucionada']);
         Status::firstOrCreate(['description' => 'Por aprobar cambio de ubicacion']);
         Status::firstOrCreate(['description' => 'Por aprobar entrega']);
         Status::firstOrCreate(['description' => 'Por aprobar rechazo']);
@@ -44,6 +47,12 @@ class RoleSeeder extends Seeder
         WarehouseType::firstOrCreate(['code' => 'DELIVERER'], [
             'name' => 'Bodega Movil (Repartidor)',
             'description' => 'Inventario en poder del repartidor',
+            'is_physical' => true
+        ]);
+
+        WarehouseType::firstOrCreate(['code' => 'AGENCY'], [
+            'name' => 'Bodega de Agencia',
+            'description' => 'Inventario físico en la agencia de delivery',
             'is_physical' => true
         ]);
     }

@@ -31,8 +31,8 @@ class OrderController extends Controller
 
         // 2. Obtener las tasas de cambio activas
         $activeCurrencies = \App\Models\Currency::whereHas('status', function($q) {
-            $q->where('description', 'Activo');
-        })->get()->keyBy('description');
+            $q->where('description', '=', 'Activo');
+        })->get(['*'])->keyBy('description');
 
         $usdRate = $activeCurrencies->get('bcv_usd')?->value;
         $eurRate = $activeCurrencies->get('euro')?->value;
@@ -117,18 +117,21 @@ class OrderController extends Controller
                 'payments'             => $order->payments, 
                 'payment_receipt'      => $order->payment_receipt,
                 'reminder_at'          => $order->reminder_at,
+                'binance_rate'         => \App\Models\Setting::where('key', '=', 'rate_binance_usd')->first()?->value ?? 0,
+                'bcv_rate'             => \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0,
             ]
         ]);
     }
     public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
     {
-        $request->validate([
-            'status_id' => 'required|exists:statuses,id',
-        ]);
+        try {
+            $request->validate([
+                'status_id' => 'required|exists:statuses,id',
+            ]);
 
-        // Buscamos status "Entregado" para validación de comprobante
-        $statusEntregado = Status::where('description', 'Entregado')->first();
-        $statusCambioUbicacion = Status::where('description', 'Cambio de ubicacion')->first();
+            // Buscamos status "Entregado" para validación de comprobante
+            $statusEntregado = Status::where('description', '=', 'Entregado')->first();
+            $statusCambioUbicacion = Status::where('description', '=', 'Cambio de ubicacion')->first();
 
         // 1. Validar que existe comprobante de pago si se intenta cambiar a Entregado
         if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) {
@@ -138,6 +141,33 @@ class OrderController extends Controller
                     'message' => 'No se puede marcar como entregado sin un comprobante de pago',
                 ], 422);
             }
+
+            // Validar efectivo/vueltos solo si el método de pago es EFECTIVO
+            if ($order->payment_method === 'EFECTIVO' || $order->payments()->where('method', '=', 'EFECTIVO')->exists()) {
+                $request->validate([
+                    'cash_received' => 'required|numeric|min:0',
+                    'change_covered_by' => 'required|in:agency,company,partial',
+                ]);
+                
+                $order->cash_received = $request->cash_received;
+                $order->change_amount = max(0, $request->cash_received - $order->current_total_price);
+                $order->change_covered_by = $request->change_covered_by;
+
+                if ($request->change_covered_by === 'company') {
+                    $order->change_amount_company = $order->change_amount;
+                    $order->change_amount_agency = 0;
+                } elseif ($request->change_covered_by === 'agency') {
+                    $order->change_amount_agency = $order->change_amount;
+                    $order->change_amount_company = 0;
+                } else {
+                    $request->validate([
+                        'change_amount_company' => 'required|numeric|min:0',
+                        'change_amount_agency' => 'required|numeric|min:0',
+                    ]);
+                    $order->change_amount_company = $request->change_amount_company;
+                    $order->change_amount_agency = $request->change_amount_agency;
+                }
+            }
         }
 
         // 2. 🛑 INTERCEPCIÓN PARA APROBACIÓN DE CAMBIO DE UBICACION 🛑
@@ -146,7 +176,7 @@ class OrderController extends Controller
             if (!in_array($userRole, ['Gerente', 'Admin'])) {
                 
                 // Verificar si ya existe una pendiente
-                $existingPending = $order->locationReviews()->where('status', 'pending')->first();
+                $existingPending = $order->locationReviews()->where('status', '=', 'pending')->first();
                 if ($existingPending) {
                     return response()->json([
                         'status' => false,
@@ -154,7 +184,7 @@ class OrderController extends Controller
                     ], 422);
                 }
 
-                $statusPorAprobar = Status::where('description', 'Por aprobar cambio de ubicacion')->first();
+                $statusPorAprobar = Status::where('description', '=', 'Por aprobar cambio de ubicacion')->first();
                 if (!$statusPorAprobar) {
                     // Fallback si por alguna razón no existe el status
                     return response()->json(['status' => false, 'message' => 'Error: Status de aprobación no encontrado'], 500);
@@ -180,13 +210,13 @@ class OrderController extends Controller
         }
 
         // 3. 🛑 INTERCEPCIÓN PARA APROBACIÓN DE RECHAZO 🛑
-        $statusRechazado = Status::where('description', 'Rechazado')->first();
+        $statusRechazado = Status::where('description', '=', 'Rechazado')->first();
         if ($statusRechazado && (int) $statusRechazado->id === (int) $request->status_id) {
             $userRole = Auth::user()->role?->description;
             if (!in_array($userRole, ['Gerente', 'Admin'])) {
                 
                 // Verificar si ya existe una pendiente
-                $existingPending = $order->rejectionReviews()->where('status', 'pending')->first();
+                $existingPending = $order->rejectionReviews()->where('status', '=', 'pending')->first();
                 if ($existingPending) {
                     return response()->json([
                         'status' => false,
@@ -194,7 +224,7 @@ class OrderController extends Controller
                     ], 422);
                 }
 
-                $statusPorAprobar = Status::where('description', 'Por aprobar rechazo')->first();
+                $statusPorAprobar = Status::where('description', '=', 'Por aprobar rechazo')->first();
                 if (!$statusPorAprobar) {
                     return response()->json(['status' => false, 'message' => 'Error: Status de aprobación no encontrado'], 500);
                 }
@@ -222,29 +252,69 @@ class OrderController extends Controller
 
         $order->status_id = $request->status_id;
 
+        // Novedades
+        if ($request->filled('novedad_type')) {
+            $order->novedad_type = $request->novedad_type;
+            $order->novedad_description = $request->novedad_description;
+        }
+
+        if ($request->filled('novedad_resolution')) {
+            $order->novedad_resolution = $request->novedad_resolution;
+        }
+
         $statusEnRuta = Status::where('description', 'En ruta')->first();
         if ($statusEnRuta && (int)$statusEnRuta->id === (int)$order->status_id) {
             $order->was_shipped = true;
             $order->shipped_at = now();
+
+            // Asignación automática de agencia por ciudad
+            if ($order->city_id) {
+                $city = \App\Models\City::find($order->city_id);
+                if ($city && $city->agency_id) {
+                    $order->agency_id = $city->agency_id;
+                    $order->delivery_cost = $city->delivery_cost_usd;
+                }
+            }
         }
 
         $order->save();
 
-        $order->load(['status', 'agent', 'deliverer', 'client', 'products']);
+        $oldStatusId = $order->getOriginal('status_id');
 
+        // Descontar inventario solo si cambia a Entregado
         if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
             // Solo generamos ganancias cuando CAMBIA a Entregado
             if ($oldStatusId !== $order->status_id) {
                 $commissionService->generateForDeliveredOrder($order);
             }
+
+            foreach ($order->products as $op) {
+                // Buscar inventario en la bodega de la agencia (si tiene) o principal
+                $warehouseId = $order->agency?->warehouse?->id ?? \App\Models\Warehouse::where('is_main', '=', true)->first()?->id;
+                if ($warehouseId) {
+                    $inv = \App\Models\Inventory::where('product_id', '=', $op->product_id)
+                        ->where('warehouse_id', '=', $warehouseId)
+                        ->first();
+
+                    if ($inv) {
+                        $inv->decrement('quantity', $op->quantity);
+                    }
+                }
+            }
         }
 
         return response()->json([
             'status' => true,
-            'message' => 'Estado actualizado correctamente',
-            'order' => $order,
+            'message' => 'Estado actualizado',
+            'order' => $order->fresh(['status', 'updates.user', 'payments', 'products.product', 'cancellations.user', 'deliveryReviews', 'locationReviews', 'rejectionReviews'])
         ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => false,
+            'message' => 'Error al actualizar estado: ' . $e->getMessage()
+        ], 500);
     }
+}
     public function getOrderProducts($orderId)
     {
         $order = Order::with('products.product')->findOrFail($orderId);
@@ -351,7 +421,7 @@ class OrderController extends Controller
         }
 
         // 4️⃣ Restaurar el total incluyendo upsells
-        $upsellTotal = $order->products()->where('is_upsell', true)->get()->sum(fn($p) => $p->price * $p->quantity);
+        $upsellTotal = $order->products()->where('is_upsell', '=', true)->get(['*'])->sum(fn($p) => $p->price * $p->quantity);
         if ($upsellTotal > 0) {
             $order->current_total_price += $upsellTotal;
             $order->save();
@@ -419,10 +489,18 @@ class OrderController extends Controller
                     // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
                     ->orWhereBetween('created_at', [$yesterdayStart, $now]);
             });
+        } elseif ($role === 'Agencia') {
+            $query->where('agency_id', $user->id);
         } else {
             // Gerente/Admin → filtros opcionales
             if ($request->filled('agent_id')) {
                 $query->where('agent_id', $request->agent_id);
+            }
+            if ($request->filled('agency_id')) {
+                $query->where('agency_id', '=', $request->agency_id);
+            }
+            if ($request->filled('city_id')) {
+                $query->where('city_id', '=', $request->city_id);
             }
             if ($request->filled('date_from')) {
                 $query->whereDate('created_at', '>=', $request->date_from);
@@ -461,12 +539,11 @@ class OrderController extends Controller
         }
 
         // Buscar el status "Asignado a vendedora"
-        $statusId = Status::where('description', 'Asignado a vendedora')->first()?->id;
+        $statusId = Status::where('description', '=', 'Asignado a vendedora')->first()?->id;
 
-        $order->update([
-            'agent_id' => $agent->id,
-            'status_id' => $statusId
-        ]);
+        $order->status_id = $statusId;
+        $order->agent_id = $agent->id;
+        $order->save();
 
         return response()->json([
             'status' => true,
@@ -510,7 +587,7 @@ class OrderController extends Controller
 
     public function removeUpsell(Order $order, $itemId)
     {
-        $item = OrderProduct::where('order_id', $order->id)->where('id', $itemId)->firstOrFail();
+        $item = OrderProduct::where('order_id', '=', $order->id)->where('id', '=', $itemId)->firstOrFail();
 
         if (!$item->is_upsell) {
             return response()->json(['status' => false, 'message' => 'No es un upsell'], 400);
@@ -589,9 +666,8 @@ class OrderController extends Controller
             'reminder_at' => 'required|date',
         ]);
 
-        $order->update([
-            'reminder_at' => $request->reminder_at,
-        ]);
+        $order->reminder_at = $request->reminder_at;
+        $order->save();
 
         return response()->json([
             'status' => true,

@@ -13,7 +13,7 @@ class InventoryController extends Controller
     {
         $role = Auth::user()->role?->description;
 
-        if (!in_array($role, ['Admin', 'Gerente', 'Master'])) {
+        if (!in_array($role, ['Admin', 'Gerente', 'Master', 'Agencia'])) {
             return response()->json([
                 'status'  => false,
                 'message' => 'No autorizado'
@@ -22,9 +22,15 @@ class InventoryController extends Controller
 
         $query = \App\Models\Inventory::with(['product', 'warehouse']);
 
+        if ($role === 'Agencia') {
+            $query->whereHas('warehouse', function ($q) {
+                $q->where('user_id', '=', Auth::id());
+            });
+        }
+
         if ($request->has('main') && $request->main === 'true') {
             $query->whereHas('warehouse', function ($q) {
-                $q->where('is_main', true);
+                $q->where('is_main', '=', true);
             });
         }
 
