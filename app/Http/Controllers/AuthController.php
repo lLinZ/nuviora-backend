@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use App\Models\Warehouse;
+use App\Models\WarehouseType;
 
 class AuthController extends Controller
 {
@@ -44,6 +46,22 @@ class AuthController extends Controller
         $status->save();
         $user->status()->associate($status);
         $user->save();
+
+        // Create warehouse for Agency
+        $role = Role::find($request->role_id);
+        if ($role && $role->description === 'Agencia') {
+            $type = WarehouseType::where('code', '=', 'AGENCY')->first();
+            if ($type) {
+                Warehouse::create([
+                    'warehouse_type_id' => $type->id,
+                    'user_id' => $user->id,
+                    'code' => 'WH-AG-' . $user->id . '-' . time(),
+                    'name' => 'Bodega Agencia: ' . $user->names,
+                    'is_active' => true,
+                    'is_main' => false
+                ]);
+            }
+        }
 
         return response()->json([
             'status' => true,

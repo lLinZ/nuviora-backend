@@ -23,7 +23,22 @@ class ProductController extends Controller
                   ->orWhere('sku', 'like', "%{$search}%");
         }
 
-        return response()->json($query->paginate(20));
+        if ($request->query('paginate') === 'false') {
+            return response()->json($query->get());
+        }
+
+        $paginated = $query->paginate($request->get('per_page', 20));
+
+        return response()->json([
+            'status' => true,
+            'data'   => $paginated->items(),
+            'meta'   => [
+                'current_page' => $paginated->currentPage(),
+                'per_page'     => $paginated->perPage(),
+                'total'        => $paginated->total(),
+                'last_page'    => $paginated->lastPage(),
+            ],
+        ]);
     }
 
     public function store(Request $request)
@@ -33,10 +48,9 @@ class ProductController extends Controller
             'title' => 'nullable|string',
             'name' => 'nullable|string',
             'price' => 'required|numeric',
-            'cost' => 'required|numeric',
-            'currency' => 'required|string|max:8',
-            'stock' => 'required|integer',
+            'cost_usd' => 'required|numeric',
             'image' => 'nullable|string',
+            'stock' => 'nullable|integer',
         ]);
 
         $p = Product::create($data);
@@ -51,12 +65,12 @@ class ProductController extends Controller
             'title' => 'nullable|string',
             'name' => 'nullable|string',
             'price' => 'required|numeric',
-            'cost' => 'required|numeric',
-            'currency' => 'required|string|max:8',
-            'stock' => 'required|integer',
+            'cost_usd' => 'required|numeric',
             'image' => 'nullable|string',
+            'stock' => 'nullable|integer',
         ]);
-        $p->update($data);
+        $p->fill($data);
+        $p->save();
         return response()->json(['status' => true, 'product' => $p, 'message' => 'Producto actualizado']);
     }
     // PUT /products/{product}/stock
@@ -79,7 +93,8 @@ class ProductController extends Controller
             return response()->json(['status' => false, 'message' => 'El stock no puede ser negativo'], 422);
         }
 
-        $product->update(['stock' => $after]);
+        $product->stock = $after;
+        $product->save();
 
         $movement = StockMovement::create([
             'product_id' => $product->id,
