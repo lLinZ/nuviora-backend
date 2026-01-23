@@ -17,14 +17,14 @@ return new class extends Migration
             ])->nullable()->after('currency');
 
             // tasa usada si el pago fue en Bs
-            $table->decimal('payment_rate', 10, 2)->nullable()->after('payment_method');
+            $table->decimal('exchange_rate', 10, 2)->nullable()->after('payment_method');
         });
     }
 
     public function down(): void
     {
         Schema::table('orders', function (Blueprint $table) {
-            $table->dropColumn(['payment_method', 'payment_rate']);
+            $table->dropColumn(['payment_method', 'exchange_rate']);
         });
     }
 };

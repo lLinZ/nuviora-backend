@@ -21,7 +21,6 @@ class RoleSeeder extends Seeder
         Status::firstOrCreate(['description' => 'Llamado 1']);
         Status::firstOrCreate(['description' => 'Llamado 2']);
         Status::firstOrCreate(['description' => 'Llamado 3']);
-        Status::firstOrCreate(['description' => 'Confirmado']);
         Status::firstOrCreate(['description' => 'Asignado a repartidor']);
         Status::firstOrCreate(['description' => 'En ruta']);
         Status::firstOrCreate(['description' => 'Programado para mas tarde']);
@@ -36,6 +35,7 @@ class RoleSeeder extends Seeder
         Status::firstOrCreate(['description' => 'Por aprobar cambio de ubicacion']);
         Status::firstOrCreate(['description' => 'Por aprobar entrega']);
         Status::firstOrCreate(['description' => 'Por aprobar rechazo']);
+        Status::firstOrCreate(['description' => 'Asignar a agencia']);
 
         // Warehouse Types
         WarehouseType::firstOrCreate(['code' => 'MAIN'], [

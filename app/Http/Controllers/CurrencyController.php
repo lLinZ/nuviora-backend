@@ -14,7 +14,7 @@ class CurrencyController extends Controller
     protected function ensureManagerOrAdmin()
     {
         $role = Auth::user()->role?->description;
-        if (!in_array($role, ['Admin', 'Gerente'])) {
+        if (!in_array($role, ['Admin', 'Gerente', 'Vendedor'])) {
             abort(403, 'No autorizado');
         }
     }
@@ -174,6 +174,12 @@ class CurrencyController extends Controller
             $currency_binance_usd->status()->associate($status_activo);
             $currency_binance_usd->save();
         }
+
+        // 🆕 Sincronizar con la tabla de settings para que el modelo Order lo vea
+        Setting::set('rate_bcv_usd', $request->bcv_usd);
+        Setting::set('rate_bcv_eur', $request->bcv_eur);
+        Setting::set('rate_binance_usd', $request->binance_usd);
+        Setting::set('rate_updated_at', now()->toDateTimeString());
         return response()->json([
             'data' => [
                 'bcv_usd' => $currency_bcv_usd,

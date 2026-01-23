@@ -10,6 +10,30 @@ class Order extends Model
 {
     //
     use HasFactory;
+ 
+    protected static function booted()
+    {
+        static::updated(function ($order) {
+            if ($order->isDirty('status_id')) {
+                \App\Models\OrderStatusLog::create([
+                    'order_id' => $order->id,
+                    'from_status_id' => $order->getOriginal('status_id'),
+                    'to_status_id' => $order->status_id,
+                    'user_id' => \Illuminate\Support\Facades\Auth::id(),
+                ]);
+            }
+        });
+
+        static::created(function ($order) {
+            \App\Models\OrderStatusLog::create([
+                'order_id' => $order->id,
+                'from_status_id' => null,
+                'to_status_id' => $order->status_id,
+                'user_id' => \Illuminate\Support\Facades\Auth::id(),
+            ]);
+        });
+    }
+
     public function postponements()
     {
         return $this->hasMany(\App\Models\OrderPostponement::class);
@@ -119,8 +143,11 @@ class Order extends Model
         'change_covered_by',
         'change_amount_company',
         'change_amount_agency',
+        'change_method_company',
+        'change_method_agency',
         'novedad_type',
         'novedad_description',
         'novedad_resolution',
+        'change_rate',
     ];
 }

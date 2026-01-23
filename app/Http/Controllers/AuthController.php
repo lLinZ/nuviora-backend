@@ -85,7 +85,10 @@ class AuthController extends Controller
         $q = trim((string) $request->get('search', ''));
 
         $users = User::query()
-            ->where('role_id', $roleId)
+            ->where('role_id', '=', $roleId)
+            ->when(Auth::user()->role?->description === 'Agencia', function ($query) {
+                $query->where('agency_id', '=', Auth::id());
+            })
             ->when($q !== '', function ($query) use ($q) {
                 $query->where(function ($qq) use ($q) {
                     $qq->where('names', 'like', "%$q%")

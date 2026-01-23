@@ -20,7 +20,11 @@ class ShopController extends Controller
 
     public function index()
     {
-        return Shop::with(['status', 'sellers'])->get();
+        $shops = Shop::with(['status', 'sellers'])->get();
+        return response()->json([
+            'status' => true,
+            'data' => $shops
+        ]);
     }
 
     public function store(Request $request)

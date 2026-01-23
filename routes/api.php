@@ -71,6 +71,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('users/role/{role}', [AuthController::class, 'usersByRole']);
     // Asignar agente a la orden
     Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent']);
+    Route::put('orders/{order}/assign-agency', [OrderController::class, 'assignAgency']);
     /**---------------------
      * STATUS
      * ---------------------**/
@@ -101,8 +102,10 @@ Route::middleware('auth:sanctum')->group(function () {
     /**---------------------
      * ORDERS
      * ---------------------**/
-    // Actualizar estado de la orden    
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
+    Route::put('/orders/{order}/logistics', [OrderController::class, 'updateLogistics']);
+    // Auto-asignación masiva de logística
+    Route::post('/orders/auto-assign-logistics', [OrderController::class, 'autoAssignAllLogistics']);
     // Ver detalles de la orden
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     // Agregar nota a la orden
@@ -202,6 +205,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
 
     Route::put('/orders/{order}/payment', [OrderController::class, 'updatePayment']);
+    Route::put('/orders/{order}/change', [OrderController::class, 'updateChange']);
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
     Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
     Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
@@ -264,6 +268,7 @@ Route::middleware('auth:sanctum')->group(function () {
      * METRICS
      * ---------------------**/
     Route::get('metrics', [\App\Http\Controllers\MetricsController::class, 'index']);
+    Route::get('business-metrics', [\App\Http\Controllers\BusinessMetricsController::class, 'index']);
     Route::post('metrics/ad-spend', [\App\Http\Controllers\MetricsController::class, 'storeAdSpend']);
 
     /**---------------------

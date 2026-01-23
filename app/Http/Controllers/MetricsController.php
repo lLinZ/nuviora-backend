@@ -160,6 +160,16 @@ class MetricsController extends Controller
         $current = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
 
+        // Safety check to prevent extreme loops (max 90 days)
+        if ($current->diffInDays($end) > 90) {
+            $current = (clone $end)->subDays(90);
+        }
+        
+        // Ensure start is not after end
+        if ($current > $end) {
+            $current = clone $end;
+        }
+
         while ($current <= $end) {
             $date = $current->toDateString();
             

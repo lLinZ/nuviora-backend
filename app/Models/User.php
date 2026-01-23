@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use App\Models\Order;
 
 class User extends Authenticatable
 {
@@ -41,9 +42,14 @@ class User extends Authenticatable
         return $this->hasOne(Warehouse::class);
     }
 
-    public function orders()
+    public function agentOrders()
     {
         return $this->hasMany(Order::class, 'agent_id');
+    }
+
+    public function delivererOrders()
+    {
+        return $this->hasMany(Order::class, 'deliverer_id');
     }
 
     public function agencyOrders()
@@ -66,8 +72,19 @@ class User extends Authenticatable
         'email',
         'password',
         'role_id',
-        'status_id'
+        'status_id',
+        'agency_id'
     ];
+
+    public function deliverers()
+    {
+        return $this->hasMany(User::class, 'agency_id');
+    }
+
+    public function agency()
+    {
+        return $this->belongsTo(User::class, 'agency_id');
+    }
 
     /**
      * The attributes that should be hidden for serialization.

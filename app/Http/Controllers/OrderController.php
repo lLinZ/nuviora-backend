@@ -8,6 +8,7 @@ use App\Models\OrderProduct;
 use App\Models\Product;
 use App\Models\Status;
 use App\Models\User;
+use App\Models\City;
 use App\Services\CommissionService;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
@@ -35,10 +36,11 @@ class OrderController extends Controller
         })->get(['*'])->keyBy('description');
 
         $usdRate = $activeCurrencies->get('bcv_usd')?->value;
-        $eurRate = $activeCurrencies->get('euro')?->value;
+        $eurRate = $activeCurrencies->get('bcv_eur')?->value;
         $binanceUsdRate = $activeCurrencies->get('binance_usd')?->value;
 
-        // 3. Crear nuevos pagos con las tasas actuales
+        // 3. Crear nuevos pagos con las tasas actuales e ir sumando el total
+        $totalPaid = 0;
         foreach ($request->payments as $paymentData) {
             $order->payments()->create([
                 'method' => $paymentData['method'],
@@ -52,7 +54,28 @@ class OrderController extends Controller
                 'eur_rate' => $eurRate,
                 'binance_usd_rate' => $binanceUsdRate,
             ]);
+            $totalPaid += (float) $paymentData['amount'];
         }
+
+        // 4. Sincronizar automáticamente el resumen de vuelto en la tabla órdenes
+        $currentTotal = (float) $order->current_total_price;
+        $changeAmount = $totalPaid - $currentTotal;
+
+        $orderData = [
+            'cash_received' => $totalPaid,
+            'change_amount' => $changeAmount > 0 ? $changeAmount : 0,
+        ];
+
+        // Si el pago es exacto o falta dinero, limpiamos cualquier rastro de gestión de vuelto previa
+        if ($changeAmount <= 0.005) {
+            $orderData['change_covered_by'] = null;
+            $orderData['change_amount_company'] = null;
+            $orderData['change_amount_agency'] = null;
+            $orderData['change_method_company'] = null;
+            $orderData['change_method_agency'] = null;
+        }
+
+        $order->update($orderData);
 
         // recargamos relaciones
         $order->load(['client', 'agent', 'status', 'products', 'updates.user', 'payments']);
@@ -77,6 +100,7 @@ class OrderController extends Controller
             'locationReviews', // 👈 enviamos al front
             'rejectionReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
+            'agency', // 👈 incluimos agencia
         ])->findOrFail($id);
 
         // Si quieres devolver items “planchados” (recomendado para front):
@@ -119,6 +143,19 @@ class OrderController extends Controller
                 'reminder_at'          => $order->reminder_at,
                 'binance_rate'         => \App\Models\Setting::where('key', '=', 'rate_binance_usd')->first()?->value ?? 0,
                 'bcv_rate'             => \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0,
+                'agency'               => $order->agency, // 👈 incluimos agencia
+                'novedad_type'         => $order->novedad_type,
+                'novedad_description'  => $order->novedad_description,
+                'novedad_resolution'   => $order->novedad_resolution,
+                'location'             => $order->location,
+                'cash_received'        => $order->cash_received,
+                'change_amount'        => $order->change_amount,
+                'change_covered_by'    => $order->change_covered_by,
+                'change_amount_company' => $order->change_amount_company,
+                'change_amount_agency'  => $order->change_amount_agency,
+                'change_method_company' => $order->change_method_company,
+                'change_method_agency'  => $order->change_method_agency,
+                'change_rate'           => $order->change_rate,
             ]
         ]);
     }
@@ -173,7 +210,7 @@ class OrderController extends Controller
         // 2. 🛑 INTERCEPCIÓN PARA APROBACIÓN DE CAMBIO DE UBICACION 🛑
         if ($statusCambioUbicacion && (int) $statusCambioUbicacion->id === (int) $request->status_id) {
             $userRole = Auth::user()->role?->description;
-            if (!in_array($userRole, ['Gerente', 'Admin'])) {
+            if (!in_array($userRole, ['Gerente', 'Admin', 'Agencia'])) {
                 
                 // Verificar si ya existe una pendiente
                 $existingPending = $order->locationReviews()->where('status', '=', 'pending')->first();
@@ -213,7 +250,7 @@ class OrderController extends Controller
         $statusRechazado = Status::where('description', '=', 'Rechazado')->first();
         if ($statusRechazado && (int) $statusRechazado->id === (int) $request->status_id) {
             $userRole = Auth::user()->role?->description;
-            if (!in_array($userRole, ['Gerente', 'Admin'])) {
+            if (!in_array($userRole, ['Gerente', 'Admin', 'Agencia'])) {
                 
                 // Verificar si ya existe una pendiente
                 $existingPending = $order->rejectionReviews()->where('status', '=', 'pending')->first();
@@ -248,6 +285,35 @@ class OrderController extends Controller
             }
         }
 
+        // 4. 🛑 INTERCEPCIÓN PARA ASIGNAR A AGENCIA (AUTO) 🛑
+        $statusAsignarAgencia = Status::where('description', '=', 'Asignar a agencia')->first();
+        if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id) {
+            // Si ya tiene agencia, no hacemos nada extra, solo seguimos
+            if (!$order->agency_id) {
+                $clientCityName = $order->client?->city;
+                $cityMatch = null;
+
+                if ($clientCityName) {
+                    // Buscar ciudad por nombre (insensible a mayúsculas/minúsculas)
+                    $cityMatch = \App\Models\City::whereRaw('UPPER(name) = ?', [strtoupper(trim($clientCityName))])->first();
+                }
+
+                if ($cityMatch && $cityMatch->agency_id) {
+                    $order->city_id = $cityMatch->id;
+                    $order->agency_id = $cityMatch->agency_id;
+                    $order->delivery_cost = $cityMatch->delivery_cost_usd;
+                    // El status se guardará más abajo
+                } else {
+                    // Si no se pudo auto-asignar, devolvemos error para que se elija manualmente
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'No se pudo auto-asignar una agencia para la ciudad "' . ($clientCityName ?? 'Sin Ciudad') . '". Por favor, asígnela manualmente.',
+                        'require_manual_agency' => true
+                    ], 422);
+                }
+            }
+        }
+
         $oldStatusId = $order->status_id;
 
         $order->status_id = $request->status_id;
@@ -262,7 +328,7 @@ class OrderController extends Controller
             $order->novedad_resolution = $request->novedad_resolution;
         }
 
-        $statusEnRuta = Status::where('description', 'En ruta')->first();
+        $statusEnRuta = Status::where('description', '=', 'En ruta')->first();
         if ($statusEnRuta && (int)$statusEnRuta->id === (int)$order->status_id) {
             $order->was_shipped = true;
             $order->shipped_at = now();
@@ -306,7 +372,7 @@ class OrderController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Estado actualizado',
-            'order' => $order->fresh(['status', 'updates.user', 'payments', 'products.product', 'cancellations.user', 'deliveryReviews', 'locationReviews', 'rejectionReviews'])
+            'order' => $order->fresh(['status', 'updates.user', 'payments', 'products.product', 'cancellations.user', 'deliveryReviews', 'locationReviews', 'rejectionReviews', 'client', 'agent', 'agency', 'deliverer'])
         ]);
     } catch (\Exception $e) {
         return response()->json([
@@ -369,6 +435,15 @@ class OrderController extends Controller
         );
 
         // 2️⃣ Guardar/actualizar orden
+        $cityName = $orderData['customer']['default_address']['city'] ?? null;
+        $cityId = null;
+        if ($cityName) {
+            $cityMatch = \App\Models\City::whereRaw('UPPER(name) = ?', [strtoupper(trim($cityName))])->first();
+            if ($cityMatch) {
+                $cityId = $cityMatch->id;
+            }
+        }
+
         $order = Order::updateOrCreate(
             ['order_id' => $orderData['id']],
             [
@@ -378,6 +453,7 @@ class OrderController extends Controller
                 'processed_at'        => $orderData['processed_at'] ?? null,
                 'currency'            => $orderData['currency'],
                 'client_id'           => $client->id,
+                'city_id'             => $cityId,
             ]
         );
 
@@ -460,24 +536,14 @@ class OrderController extends Controller
         $user = Auth::user();
         $perPage = (int) $request->get('per_page', 50);
 
-        $query = Order::with(['client', 'agent', 'deliverer', 'status'])->latest('id');
+        $query = Order::with(['client', 'agent', 'deliverer', 'status'])->latest('updated_at');
 
         // 🔒 Reglas por rol
         $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
 
         if ($role === 'Vendedor') {
-            // Ventana: HOY + AYER (según timezone de app)
-            $yesterdayStart = now()->subDay()->startOfDay();
-            $now = now();
-
-            $query->where(function ($q) use ($user, $yesterdayStart, $now) {
-                // 1) Órdenes asignadas a ese vendedor
-                $q->where('agent_id', $user->id)
-                    // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
-                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
-            });
-
-            // Nota: no aceptamos filtros extra desde el front de vendedor (se ignoran)
+            // Un Vendedor SOLO ve lo que tiene asignado. No ve el "Backlog" de órdenes nuevas sin asignar.
+            $query->where('agent_id', $user->id);
         } elseif ($role === 'Repartidor') {
             // Ventana: HOY + AYER (según timezone de app)
             $yesterdayStart = now()->subDay()->startOfDay();
@@ -538,8 +604,8 @@ class OrderController extends Controller
             ], 422);
         }
 
-        // Buscar el status "Asignado a vendedora"
-        $statusId = Status::where('description', '=', 'Asignado a vendedora')->first()?->id;
+        // Buscar el status "Asignado a vendedor"
+        $statusId = Status::where('description', '=', 'Asignado a vendedor')->first()?->id;
 
         $order->status_id = $statusId;
         $order->agent_id = $agent->id;
@@ -548,6 +614,33 @@ class OrderController extends Controller
         return response()->json([
             'status' => true,
             'order' => $order->load('agent', 'status', 'client'),
+        ]);
+    }
+    public function assignAgency(Request $request, Order $order)
+    {
+        $request->validate([
+            'agency_id' => 'required|exists:users,id',
+        ]);
+
+        $agency = User::findOrFail($request->agency_id);
+
+        if ($agency->role->description !== 'Agencia') {
+            return response()->json([
+                'status' => false,
+                'message' => 'El usuario seleccionado no es una agencia válida'
+            ], 422);
+        }
+
+        // Buscar el status "Asignar a agencia"
+        $statusId = Status::where('description', '=', 'Asignar a agencia')->first()?->id;
+
+        $order->status_id = $statusId;
+        $order->agency_id = $agency->id;
+        $order->save();
+
+        return response()->json([
+            'status' => true,
+            'order' => $order->load('agency', 'status', 'client'),
         ]);
     }
     public function addUpsell(Request $request, Order $order)
@@ -673,6 +766,102 @@ class OrderController extends Controller
             'status' => true,
             'message' => 'Recordatorio guardado',
             'order' => $order,
+        ]);
+    }
+
+    public function updateChange(Request $request, Order $order)
+    {
+        try {
+            $userRole = Auth::user()->role?->description;
+            if (!in_array($userRole, ['Gerente', 'Admin', 'Vendedor'])) {
+                return response()->json(['status' => false, 'message' => 'No tiene permisos para editar el vuelto'], 403);
+            }
+
+            $validated = $request->validate([
+                'cash_received' => 'nullable|numeric',
+                'change_amount' => 'nullable|numeric',
+                'change_covered_by' => 'nullable|in:agency,company,partial',
+                'change_amount_company' => 'nullable|numeric',
+                'change_amount_agency' => 'nullable|numeric',
+                'change_method_company' => 'nullable|string',
+                'change_method_agency' => 'nullable|string',
+                'change_rate' => 'nullable|numeric',
+            ]);
+
+            // Validación extra si es parcial
+            if ($request->change_covered_by === 'partial') {
+                $total = (float) ($request->change_amount_company ?? 0) + (float) ($request->change_amount_agency ?? 0);
+                if (abs($total - (float) $request->change_amount) > 0.01) {
+                    return response()->json([
+                        'status' => false, 
+                        'message' => 'La suma de los montos (Empresa + Agencia) debe ser igual al total del vuelto'
+                    ], 422);
+                }
+            }
+
+            $order->fill($validated);
+            $order->save();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Vuelto actualizado correctamente',
+                'order' => $order->fresh(['status', 'agency', 'deliverer', 'agent', 'client'])
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => false, 'message' => 'Error: ' . $e->getMessage()], 500);
+        }
+    }
+    public function updateLogistics(Request $request, Order $order)
+    {
+        $userRole = Auth::user()->role?->description;
+        if (!in_array($userRole, ['Gerente', 'Admin'])) {
+            return response()->json(['status' => false, 'message' => 'No tiene permisos para editar la logística'], 403);
+        }
+
+        $validated = $request->validate([
+            'city_id' => 'nullable|exists:cities,id',
+            'agency_id' => 'nullable|exists:users,id',
+            'deliverer_id' => 'nullable|exists:users,id',
+        ]);
+
+        $order->fill($validated);
+        $order->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Logística actualizada correctamente',
+            'order' => $order->fresh(['status', 'agency', 'deliverer', 'city', 'agent', 'client'])
+        ]);
+    }
+    public function autoAssignAllLogistics(Request $request)
+    {
+        $userRole = Auth::user()->role?->description;
+        if (!in_array($userRole, ['Gerente', 'Admin'])) {
+            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
+        }
+
+        // 1. Buscar todas las órdenes sin agencia
+        $orders = Order::whereNull('agency_id')->with('client')->get();
+        $assignedCount = 0;
+
+        // 2. Mapeo de ciudades y sus agencias asignadas
+        $cities = City::whereNotNull('agency_id')->get()->keyBy('id');
+
+        foreach ($orders as $order) {
+            $cityId = $order->city_id ?? $order->client?->city_id;
+            
+            if ($cityId && isset($cities[$cityId])) {
+                // Asignar el agency_id configurado en la ciudad
+                $order->agency_id = $cities[$cityId]->agency_id;
+                $order->save();
+                $assignedCount++;
+            }
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => "Se han auto-asignado {$assignedCount} órdenes exitosamente.",
+            'total_pending' => Order::whereNull('agency_id')->count()
         ]);
     }
 }
