@@ -68,8 +68,17 @@ class AssignOrderService
     public function assignBacklog(\DateTimeInterface $from, \DateTimeInterface $to): int
     {
         $date = $to->format('Y-m-d');
+        
+        $sinStockStatus = Status::where('description', 'Sin Stock')->first();
+        $sinStockStatusId = $sinStockStatus?->id;
+
         $ids = Order::query()
-            ->whereNull('agent_id')
+            ->where(function($q) use ($sinStockStatusId) {
+                $q->whereNull('agent_id');
+                if ($sinStockStatusId) {
+                    $q->orWhere('status_id', $sinStockStatusId);
+                }
+            })
             ->whereBetween('created_at', [$from, $to])
             ->get(['*']); // Fetch full models to get shop_id
 
@@ -78,12 +87,21 @@ class AssignOrderService
 
         $count = 0;
         foreach ($ids as $ordModel) {
+            // 🛑 CHECK STOCK: Only assign if order HAS stock
+            if (!$ordModel->hasStock()) {
+                continue;
+            }
+
             $agentsForShop = $this->activeAgentsForDate($date, $ordModel->shop_id);
             if ($agentsForShop->isEmpty()) continue;
 
             DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId) {
                 $ord = Order::where('id', '=', $ordModel->id)->lockForUpdate()->first(['*']);
-                if ($ord->agent_id) return;
+                
+                // Safety check: skip if already assigned by someone else
+                if ($ord->agent_id && $ord->status_id !== $ordModel->status_id) return;
+                // If it was "Sin Stock" but now has an agent, skip
+                if ($ord->agent_id && $ordModel->status_id === $assignmentStatusId) return;
 
                 $agentId = $this->strategy->pickAgentId($agentsForShop, $ord);
                 $ord->update(['agent_id' => $agentId, 'status_id' => $assignmentStatusId]);

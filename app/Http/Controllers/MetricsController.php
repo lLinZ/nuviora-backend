@@ -26,6 +26,9 @@ class MetricsController extends Controller
         $statusCancelado = Status::where('description', '=', 'Cancelado')->first()?->id ?? 0;
         $statusRechazado = Status::where('description', '=', 'Rechazado')->first()?->id ?? 0;
         $statusConfirmado = Status::where('description', '=', 'Confirmado')->first()?->id ?? 0;
+        $statusAsignadoAgencia = Status::where('description', '=', 'Asignar a agencia')->first()?->id ?? 0;
+        $statusAsignadoRepartidor = Status::where('description', '=', 'Asignado a repartidor')->first()?->id ?? 0;
+        $statusEnRuta = Status::where('description', '=', 'En ruta')->first()?->id ?? 0;
 
         // 1. Efectividad de Productos
         $productMetrics = Product::withCount([
@@ -84,20 +87,25 @@ class MetricsController extends Controller
         // 2. Efectividad de Vendedoras
         $sellerMetrics = User::whereHas('role', fn($q) => $q->where('description', '=', 'Vendedor'))
             ->withCount([
-                'orders as total_assigned' => function ($query) use ($startDate, $endDate, $shopId, $cityId, $agencyId) {
+                'agentOrders as total_assigned' => function ($query) use ($startDate, $endDate, $shopId, $cityId, $agencyId) {
                     $query->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                     if ($shopId) $query->where('shop_id', '=', $shopId);
                     if ($cityId) $query->where('city_id', '=', $cityId);
                     if ($agencyId) $query->where('agency_id', '=', $agencyId);
                 },
-                'orders as success_confirm' => function ($query) use ($startDate, $endDate, $shopId, $cityId, $agencyId, $statusConfirmado, $statusEntregado) {
-                    $query->whereIn('status_id', [(int)$statusConfirmado, (int)$statusEntregado])
-                          ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+                'agentOrders as success_confirm' => function ($query) use ($startDate, $endDate, $shopId, $cityId, $agencyId, $statusConfirmado, $statusEntregado, $statusAsignadoAgencia, $statusAsignadoRepartidor, $statusEnRuta) {
+                    $query->whereIn('status_id', [
+                        (int)$statusConfirmado, 
+                        (int)$statusEntregado, 
+                        (int)$statusAsignadoAgencia, 
+                        (int)$statusAsignadoRepartidor, 
+                        (int)$statusEnRuta
+                    ])->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                     if ($shopId) $query->where('shop_id', '=', $shopId);
                     if ($cityId) $query->where('city_id', '=', $cityId);
                     if ($agencyId) $query->where('agency_id', '=', $agencyId);
                 },
-                'orders as success_delivered' => function ($query) use ($startDate, $endDate, $shopId, $cityId, $agencyId, $statusEntregado) {
+                'agentOrders as success_delivered' => function ($query) use ($startDate, $endDate, $shopId, $cityId, $agencyId, $statusEntregado) {
                     $query->where('status_id', '=', (int)$statusEntregado)
                           ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                     if ($shopId) $query->where('shop_id', '=', $shopId);

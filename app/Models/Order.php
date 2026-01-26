@@ -5,34 +5,20 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use App\Models\Setting;
+use App\Models\Status;
+use App\Models\OrderActivityLog;
+use App\Models\OrderUpdate;
 
 class Order extends Model
 {
     //
     use HasFactory;
  
-    protected static function booted()
-    {
-        static::updated(function ($order) {
-            if ($order->isDirty('status_id')) {
-                \App\Models\OrderStatusLog::create([
-                    'order_id' => $order->id,
-                    'from_status_id' => $order->getOriginal('status_id'),
-                    'to_status_id' => $order->status_id,
-                    'user_id' => \Illuminate\Support\Facades\Auth::id(),
-                ]);
-            }
-        });
+    protected $casts = [
+        'change_payment_details' => 'array',
+    ];
 
-        static::created(function ($order) {
-            \App\Models\OrderStatusLog::create([
-                'order_id' => $order->id,
-                'from_status_id' => null,
-                'to_status_id' => $order->status_id,
-                'user_id' => \Illuminate\Support\Facades\Auth::id(),
-            ]);
-        });
-    }
+    // Relationship methods follow...
 
     public function postponements()
     {
@@ -100,7 +86,7 @@ class Order extends Model
         return $this->belongsTo(Shop::class);
     }
 
-    protected $appends = ['ves_price', 'bcv_equivalence'];
+
 
     public function getVesPriceAttribute()
     {
@@ -145,9 +131,139 @@ class Order extends Model
         'change_amount_agency',
         'change_method_company',
         'change_method_agency',
-        'novedad_type',
-        'novedad_description',
         'novedad_resolution',
         'change_rate',
+        // 'change_payment_details', // Moved to extra table
+        // 'change_receipt', // Moved to extra table
     ];
+
+    /**
+     * Relationship to extra details (workaround for ALTER privileges)
+     */
+    public function changeExtra()
+    {
+        return $this->hasOne(OrderChangeExtra::class);
+    }
+    
+    // Virtual attributes
+    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt'];
+
+    public function getChangePaymentDetailsAttribute()
+    {
+        return $this->changeExtra ? $this->changeExtra->change_payment_details : null;
+    }
+
+    public function getChangeReceiptAttribute()
+    {
+        return $this->changeExtra ? $this->changeExtra->change_receipt : null;
+    }
+    /**
+     * Helper to check stock availability for an order
+     */
+    public function getStockDetails()
+    {
+        // 1. Determine relevant warehouse
+        $warehouseId = null;
+        if ($this->agency_id) {
+            $warehouseId = \App\Models\Warehouse::where('user_id', $this->agency_id)->first()?->id;
+        }
+        
+        // Fallback to main warehouse if no agency warehouse found
+        if (!$warehouseId) {
+            $warehouseId = \App\Models\Warehouse::where('is_main', true)->first()?->id;
+        }
+
+        if (!$warehouseId) {
+            return ['has_warning' => false, 'items' => []]; 
+        }
+
+        // 2. Get inventory for this warehouse
+        $inventory = \App\Models\Inventory::where('warehouse_id', '=', $warehouseId)
+            ->whereIn('product_id', $this->products->pluck('product_id'))
+            ->get()
+            ->keyBy('product_id');
+
+        $items = [];
+        $hasWarning = false;
+
+        foreach ($this->products as $op) {
+            $available = $inventory->get($op->product_id)->quantity ?? 0;
+            $hasStock = $available >= $op->quantity;
+            
+            if (!$hasStock) {
+                $hasWarning = true;
+            }
+
+            $items[$op->product_id] = [
+                'available' => $available,
+                'has_stock' => $hasStock
+            ];
+        }
+
+        return [
+            'has_warning' => $hasWarning,
+            'items' => $items
+        ];
+    }
+
+    public function hasStock()
+    {
+        return !$this->getStockDetails()['has_warning'];
+    }
+
+    /**
+     * Automatically syncs the order status based on current stock levels.
+     * Moves to 'Sin Stock' and deassigns agent if stock is missing.
+     */
+    public function syncStockStatus()
+    {
+        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock'];
+        
+        // Use relation if loaded, otherwise fresh query
+        $statusDesc = $this->status ? $this->status->description : Status::find($this->status_id)?->description;
+        
+        if (in_array($statusDesc, $excludedStatuses)) {
+            return false;
+        }
+
+        $stockDetails = $this->getStockDetails();
+        
+        if ($stockDetails['has_warning']) {
+            $sinStockStatus = Status::where('description', '=', 'Sin Stock')->first();
+            if ($sinStockStatus && $this->status_id !== $sinStockStatus->id) {
+                $oldAgentId = $this->agent_id;
+                $this->status_id = $sinStockStatus->id;
+                $this->agent_id = null;
+                $this->save();
+
+                // Log activity
+                OrderActivityLog::create([
+                    'order_id' => $this->id,
+                    'user_id' => auth()->id() ?? 1,
+                    'action' => 'status_changed',
+                    'description' => "Orden movida automáticamente a 'Sin Stock' por falta de existencias (Detectado en sincronización).",
+                    'properties' => [
+                        'old_agent_id' => $oldAgentId,
+                        'reason' => 'stock_shortage_sync'
+                    ]
+                ]);
+
+                // Order Update note
+                OrderUpdate::create([
+                    'order_id' => $this->id,
+                    'user_id' => auth()->id() ?? User::whereHas('role', function($q){ $q->where('description', 'Admin'); })->first()?->id ?? 1,
+                    'message' => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' debido a falta de producto en almacén."
+                ]);
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function activityLogs()
+    {
+        return $this->hasMany(OrderActivityLog::class);
+    }
 }

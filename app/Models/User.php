@@ -73,7 +73,8 @@ class User extends Authenticatable
         'password',
         'role_id',
         'status_id',
-        'agency_id'
+        'agency_id',
+        'delivery_cost'
     ];
 
     public function deliverers()

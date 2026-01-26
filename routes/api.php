@@ -2,7 +2,9 @@
 
 use App\Http\Controllers\AssignmentController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BankController;
 use App\Http\Controllers\BusinessController;
+use App\Http\Controllers\CompanyAccountController;
 use App\Http\Controllers\CityController;
 use App\Http\Controllers\CommissionController;
 use App\Http\Controllers\RoleController;
@@ -38,6 +40,8 @@ Route::post('order/webhook/{shop_id?}', [ShopifyWebhookController::class, 'handl
 
 // Public route for payment receipts (no auth required to view images)
 Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt']);
+Route::get('/orders/{order}/change-receipt', [OrderController::class, 'getChangeReceipt']);
+Route::post('test/register', [AuthController::class, 'testRegister']);
 
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
@@ -106,6 +110,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/{order}/logistics', [OrderController::class, 'updateLogistics']);
     // Auto-asignación masiva de logística
     Route::post('/orders/auto-assign-logistics', [OrderController::class, 'autoAssignAllLogistics']);
+    Route::get('/orders/pending-vueltos', [OrderController::class, 'getPendingVueltos']);
     // Ver detalles de la orden
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     // Agregar nota a la orden
@@ -116,6 +121,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
     // Listar ordenes
     Route::get('orders', [OrderController::class, 'index']);
+    // Historial de actividades (Audit log)
+    Route::get('orders/{order}/activities', [OrderController::class, 'getActivityLogs']);
     // Upselling
     Route::post('orders/{order}/upsell', [OrderController::class, 'addUpsell']);
     Route::delete('orders/{order}/upsell/{itemId}', [OrderController::class, 'removeUpsell']);
@@ -151,6 +158,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/roster/today', [RosterController::class, 'today']); // GET roster actual
     Route::post('/roster/today', [RosterController::class, 'setToday']); // POST lista de agent_ids
     Route::post('/orders/assign-backlog', [AssignmentController::class, 'assignBacklog']);
+    // Auto-assign Cities
+    Route::post('orders/auto-assign-cities', [App\Http\Controllers\OrderController::class, 'autoAssignCities']);
 
     Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
     Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
@@ -208,8 +217,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/{order}/change', [OrderController::class, 'updateChange']);
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
     Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
+    Route::apiResource('banks', \App\Http\Controllers\BankController::class);
+
     Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
+    Route::post('/orders/{order}/change-receipt', [OrderController::class, 'uploadChangeReceipt']);
     Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder']);
+    Route::put('/orders/{order}/toggle-notification', [OrderController::class, 'toggleChangeNotification']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);
@@ -240,6 +253,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Warehouse management
     Route::get('warehouse-types', [WarehouseController::class, 'getTypes']);
     Route::apiResource('warehouses', WarehouseController::class);
+    Route::apiResource('banks', BankController::class);
     Route::get('warehouses/{warehouse}/inventory', [WarehouseController::class, 'inventory']);
 
     /**---------------------
@@ -275,4 +289,9 @@ Route::middleware('auth:sanctum')->group(function () {
      * CITIES
      * ---------------------**/
     Route::apiResource('cities', CityController::class);
+
+    /**---------------------
+     * COMPANY ACCOUNTS
+     * ---------------------**/
+    Route::apiResource('company-accounts', CompanyAccountController::class);
 });

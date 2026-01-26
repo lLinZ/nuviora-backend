@@ -26,16 +26,12 @@ class RoleSeeder extends Seeder
         Status::firstOrCreate(['description' => 'Programado para mas tarde']);
         Status::firstOrCreate(['description' => 'Programado para otro dia']);
         Status::firstOrCreate(['description' => 'Reprogramado']);
-        Status::firstOrCreate(['description' => 'Cambio de ubicacion']);
-        Status::firstOrCreate(['description' => 'Rechazado']);
         Status::firstOrCreate(['description' => 'Entregado']);
         Status::firstOrCreate(['description' => 'Cancelado']);
         Status::firstOrCreate(['description' => 'Novedades']);
         Status::firstOrCreate(['description' => 'Novedad Solucionada']);
-        Status::firstOrCreate(['description' => 'Por aprobar cambio de ubicacion']);
-        Status::firstOrCreate(['description' => 'Por aprobar entrega']);
-        Status::firstOrCreate(['description' => 'Por aprobar rechazo']);
         Status::firstOrCreate(['description' => 'Asignar a agencia']);
+        Status::firstOrCreate(['description' => 'Activo']); // Para usuarios y tiendas
 
         // Warehouse Types
         WarehouseType::firstOrCreate(['code' => 'MAIN'], [

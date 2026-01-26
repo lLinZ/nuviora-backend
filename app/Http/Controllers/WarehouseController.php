@@ -14,7 +14,9 @@ class WarehouseController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Warehouse::with(['warehouseType', 'user']);
+        $query = Warehouse::with(['warehouseType', 'user'])
+            ->withCount('inventories as total_products_unique')
+            ->withSum('inventories as total_items_stock', 'quantity');
 
         // Filter by active status
         if ($request->has('active')) {
@@ -30,6 +32,19 @@ class WarehouseController extends Controller
         if ($request->has('type_code')) {
             $query->whereHas('warehouseType', function ($q) use ($request) {
                 $q->where('code', $request->type_code);
+            });
+        }
+        
+        // Search by name or code or user name
+        if ($request->filled('q')) {
+            $term = $request->q;
+            $query->where(function($q) use ($term) {
+                $q->where('name', 'like', "%{$term}%")
+                  ->orWhere('code', 'like', "%{$term}%")
+                  ->orWhereHas('user', function($qu) use ($term){
+                      $qu->where('names', 'like', "%{$term}%")
+                         ->orWhere('surnames', 'like', "%{$term}%");
+                  });
             });
         }
 
@@ -154,30 +169,28 @@ class WarehouseController extends Controller
     /**
      * Get inventory for a specific warehouse
      */
-    public function inventory($id)
+    public function inventory(Request $request, $id)
     {
         $warehouse = Warehouse::findOrFail($id);
 
-        $inventory = $warehouse->inventories()
-            ->with('product')
-            ->get()
-            ->map(function ($item) {
-                return [
-                    'product_id' => $item->product_id,
-                    'product_name' => $item->product->name ?? $item->product->title,
-                    'product_sku' => $item->product->sku,
-                    'quantity' => $item->quantity,
-                ];
-            });
+        $query = $warehouse->inventories()->with('product');
+
+        if ($request->has('product_id')) {
+            $query->where('product_id', $request->product_id);
+        }
+
+        $inventory = $query->get();
+        
+        $currentStock = 0;
+        if ($request->has('product_id')) {
+            $currentStock = $inventory->first()?->quantity ?? 0;
+        }
 
         return response()->json([
             'success' => true,
-            'warehouse' => [
-                'id' => $warehouse->id,
-                'name' => $warehouse->name,
-                'code' => $warehouse->code,
-            ],
+            'warehouse' => $warehouse,
             'inventory' => $inventory,
+            'current_stock' => $currentStock
         ]);
     }
     /**

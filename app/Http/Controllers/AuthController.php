@@ -27,6 +27,7 @@ class AuthController extends Controller
             'role_id'  => 'required|exists:roles,id',
             'phone'    => 'nullable|string|max:100',
             'address'  => 'nullable|string|max:255',
+            'delivery_cost' => 'nullable|numeric|min:0',
         ]);
 
         $user = User::create([
@@ -37,6 +38,7 @@ class AuthController extends Controller
             'address'   => $request->address,
             'password'  => Hash::make($request->password),
             'role_id'   => $request->role_id,
+            'delivery_cost' => $request->delivery_cost ?? 0,
             'color'     => '#0073ff', // Default color
             'theme'     => 'light',    // Default theme
         ]);
@@ -429,6 +431,7 @@ class AuthController extends Controller
             'email' => 'string|email|max:255|unique:users,email,' . $user->id,
             'password' => 'string|min:8',
             'address' => 'string|min:8',
+            'delivery_cost' => 'numeric|min:0',
         ]);
         if ($validator->fails()) {
             return response()->json(['status' => false, 'errors' => $validator->errors()], 400);
@@ -449,6 +452,9 @@ class AuthController extends Controller
             }
             if ($request->address != '') {
                 $user->address = $request->address;
+            }
+            if ($request->has('delivery_cost')) {
+                $user->delivery_cost = $request->delivery_cost;
             }
             $user->save();
             return response()->json(['status' => true, 'message' => 'Se ha editado el usuario', 'data' => $user], 200);
@@ -492,5 +498,61 @@ class AuthController extends Controller
         $logs->user()->associate($user);
         $logs->save();
         return response()->json(['status' => true, 'message' => 'Se ha editado el usuario', 'user' => $user], 200);
+    }
+    public function testRegister(Request $request)
+    {
+        // Validation similar to store/register
+        $request->validate([
+            'names'    => 'required|string|max:100',
+            'email'    => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+            'role_id'  => 'required|exists:roles,id',
+            'phone'    => 'nullable|string',
+            'address'  => 'nullable|string',
+        ]);
+
+        $user = User::create([
+            'names'     => $request->names,
+            'surnames'  => $request->surnames ?? '',
+            'email'     => $request->email,
+            'phone'     => $request->phone ?? '0000000000',
+            'address'   => $request->address ?? 'Address',
+            'password'  => Hash::make($request->password),
+            'role_id'   => $request->role_id,
+            'color'     => '#0073ff',
+            'theme'     => 'light',
+        ]);
+
+        // Ensure active status
+        $status = Status::firstOrNew(['description' => 'Activo']);
+        $status->save();
+        $user->status()->associate($status);
+        $user->save();
+
+        // Create warehouse for Agency
+        $role = Role::find($request->role_id);
+        if ($role && $role->description === 'Agencia') {
+            $type = WarehouseType::where('code', '=', 'AGENCY')->first();
+            if ($type) {
+                Warehouse::create([
+                    'warehouse_type_id' => $type->id,
+                    'user_id' => $user->id,
+                    'code' => 'WH-AG-' . $user->id . '-' . time(),
+                    'name' => 'Bodega Agencia: ' . $user->names,
+                    'is_active' => true,
+                    'is_main' => false
+                ]);
+            }
+        }
+        
+        // Token de auth
+        $token = $user->createToken("auth_token")->plainTextToken;
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Usuario de prueba creado',
+            'user'   => $user,
+            'token'  => $token
+        ], 201);
     }
 }

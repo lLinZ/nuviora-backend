@@ -112,6 +112,94 @@ class DashboardController extends Controller
             ->limit(5)
             ->get(['id', 'names']);
 
+        $statusSinStockId = Status::where('description', '=', 'Sin Stock')->value('id');
+        
+        // 📉 Inventory Deficit Analysis (Identify exactly what is blocking 'Sin Stock' orders)
+        $sinStockOrders = Order::where('status_id', '=', $statusSinStockId)
+            ->with(['products', 'agency'])
+            ->get();
+
+        $deficitByAgency = [];
+
+        foreach ($sinStockOrders as $order) {
+            $agency = $order->agency;
+            if (!$agency) continue;
+
+            $agencyId = $agency->id;
+            $agencyName = $agency->names ?? "Agencia #{$agencyId}";
+
+            if (!isset($deficitByAgency[$agencyId])) {
+                $deficitByAgency[$agencyId] = [
+                    'agency_id' => $agencyId,
+                    'agency_name' => $agencyName,
+                    'products' => []
+                ];
+            }
+
+            // Get warehouse for this agency
+            $warehouse = \App\Models\Warehouse::where('user_id', '=', $agencyId)->first();
+            
+            foreach ($order->products as $orderProduct) {
+                $productId = $orderProduct->product_id;
+                $productName = $orderProduct->title ?? $orderProduct->name ?? "Producto #{$productId}";
+
+                // Check stock in warehouse
+                $stock = 0;
+                if ($warehouse) {
+                    $inv = \App\Models\Inventory::where('warehouse_id', '=', $warehouse->id)
+                        ->where('product_id', '=', $productId)
+                        ->first();
+                    $stock = $inv ? (int) $inv->quantity : 0;
+                }
+
+                if ($stock < $orderProduct->quantity) {
+                    if (!isset($deficitByAgency[$agencyId]['products'][$productId])) {
+                        $deficitByAgency[$agencyId]['products'][$productId] = [
+                            'name' => $productName,
+                            'current_stock' => $stock,
+                            'total_required' => 0
+                        ];
+                    }
+                    $deficitByAgency[$agencyId]['products'][$productId]['total_required'] += $orderProduct->quantity;
+                }
+            }
+        }
+
+        $formattedDeficit = array_values(array_map(function($agency) {
+            $agency['products'] = array_values($agency['products']);
+            return $agency;
+        }, $deficitByAgency));
+
+        // 🛡️ Proactive Alert: Any product in any agency with 0 < qty < 15 units
+        $lowStockAlerts = [];
+        $activeWarehouses = \App\Models\Warehouse::where('is_active', true)->get();
+        $allProducts = \App\Models\Product::all();
+
+        foreach ($activeWarehouses as $wh) {
+            $warehouseProducts = [];
+            foreach ($allProducts as $prod) {
+                $inv = \App\Models\Inventory::where('warehouse_id', $wh->id)
+                    ->where('product_id', $prod->id)
+                    ->first();
+                
+                $qty = $inv ? (int) $inv->quantity : 0;
+
+                if ($qty > 0 && $qty < 15) {
+                    $warehouseProducts[] = [
+                        'name' => $prod->name ?? $prod->title ?? 'Producto',
+                        'quantity' => $qty
+                    ];
+                }
+            }
+
+            if (!empty($warehouseProducts)) {
+                $lowStockAlerts[] = [
+                    'warehouse_name' => $wh->name ?? 'Agencia',
+                    'products' => $warehouseProducts
+                ];
+            }
+        }
+
         return [
             'total_sales' => $totalSales,
             'orders_today' => [
@@ -119,11 +207,19 @@ class DashboardController extends Controller
                 'delivered' => $delivered,
                 'cancelled' => $cancelled,
             ],
+            'inventory_deficit' => $formattedDeficit,
+            'low_stock_alerts' => $lowStockAlerts,
+            'orders_sin_stock_count' => $sinStockOrders->count(),
             'unassigned_agency_count' => (int) Order::whereNull('agency_id')->count(),
-            'unassigned_orders' => Order::whereNull('agency_id')
-                ->latest()
-                ->limit(5)
-                ->get(['id', 'name', 'current_total_price', 'created_at']),
+            'unassigned_agency_orders' => Order::whereNull('agency_id')->latest()->limit(5)->get(['id', 'name', 'current_total_price', 'created_at']),
+            'unassigned_city_count' => (int) Order::whereNull('city_id')->count(),
+            'missing_cities_summary' => Order::whereNull('city_id')
+                ->with('client')
+                ->get()
+                ->groupBy(fn($o) => ucfirst(strtolower(trim($o->client->city ?? 'Desconocida'))))
+                ->map(fn($group) => $group->count())
+                ->sortDesc()
+                ->toArray(),
             'pending_reviews' => [
                 'rejections' => $pendingRejections,
                 'locations' => $pendingLocations,
@@ -137,24 +233,97 @@ class DashboardController extends Controller
     private function getVendorStats($user, $date, $rate)
     {
         $statusCompletedId = Status::where('description', '=', 'Confirmado')->value('id');
+        $statusDeliveredId = Status::where('description', '=', 'Entregado')->value('id');
+        $statusCancelledId = Status::where('description', '=', 'Cancelado')->value('id');
+        
         $commissionPerOrder = 1.0; // $1 USD
+        $commissionPerUpsell = 1.0; // $1 USD
 
+        // Counts Today
         $assigned = Order::whereDate('created_at', '=', $date->toDateString())->where('agent_id', '=', $user->id)->count();
-        $completed = Order::whereDate('processed_at', '=', $date->toDateString())
+        
+        $completedOrdersQuery = Order::whereDate('processed_at', '=', $date->toDateString())
             ->where('status_id', '=', $statusCompletedId)
+            ->where('agent_id', '=', $user->id);
+
+        $completed = $completedOrdersQuery->count();
+        $completedOrderIds = $completedOrdersQuery->pluck('id');
+        
+        $delivered = Order::whereDate('processed_at', '=', $date->toDateString())
+            ->where('status_id', '=', $statusDeliveredId)
+            ->where('agent_id', '=', $user->id)
+            ->count();
+
+        $cancelled = Order::whereDate('created_at', '=', $date->toDateString())
+            ->where('status_id', '=', $statusCancelledId)
             ->where('agent_id', '=', $user->id)
             ->count();
         
-        $earningsUsd = $completed * $commissionPerOrder;
+        // Comisiones desde la tabla de ganancias
+        $earningsToday = \App\Models\Earning::where('user_id', $user->id)
+            ->whereDate('earning_date', $date->toDateString())
+            ->get();
+
+        $totalEarningsUsd = $earningsToday->sum('amount_usd');
+        $orderEarnings = $earningsToday->where('role_type', 'vendedor')->sum('amount_usd');
+        $upsellEarnings = $earningsToday->where('role_type', 'upsell')->sum('amount_usd');
+        $upsellCount = $upsellEarnings; // Asumiendo $1 por upsell
+
+
+        // Recent Orders
+        $recentOrders = Order::where('agent_id', $user->id)
+            ->with(['status', 'client'])
+            ->latest()
+            ->limit(6)
+            ->get();
+
+        // Weekly Sales History (Confirmadas)
+        $salesHistory = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $d = Carbon::today()->subDays($i);
+            $count = Order::whereDate('updated_at', '=', $d->toDateString()) // updated_at ~ processed_at for confirmation
+                ->where('agent_id', $user->id)
+                ->where('status_id', $statusCompletedId)
+                ->count();
+            $salesHistory[] = [
+                'date' => $d->format('d/m'),
+                'count' => $count
+            ];
+        }
+
+        // Orders with Change Receipt (for notification checklist)
+        $ordersWithChange = Order::where('agent_id', $user->id)
+            ->whereHas('changeExtra', function($q) {
+                $q->whereNotNull('change_receipt')->where('change_receipt', '!=', '');
+            })
+            ->with(['changeExtra', 'client', 'status'])
+            ->latest()
+            ->limit(50)
+            ->get()
+            ->map(function($o) {
+                $details = $o->changeExtra->change_payment_details ?? [];
+                $o->client_notified = isset($details['client_notified']) && $details['client_notified'] === true;
+                return $o;
+            });
 
         return [
-            'earnings_usd' => $earningsUsd,
-            'earnings_local' => $earningsUsd * $rate,
+            'earnings_usd' => $totalEarningsUsd,
+            'earnings_local' => $totalEarningsUsd * $rate,
+            'earnings_breakdown' => [
+                'orders' => $orderEarnings,
+                'upsells' => $upsellEarnings,
+                'upsell_count' => (int)$upsellCount
+            ],
             'orders' => [
                 'assigned' => $assigned,
                 'completed' => $completed,
+                'delivered' => $delivered,
+                'cancelled' => $cancelled,
             ],
-            'rule' => '1 USD por orden completada'
+            'recent_orders' => $recentOrders,
+            'sales_history' => $salesHistory,
+            'pending_vueltos' => $ordersWithChange,
+            'rule' => '1 USD por orden + 1 USD por upsell'
         ];
     }
 
@@ -169,7 +338,10 @@ class DashboardController extends Controller
             ->where('deliverer_id', '=', $user->id)
             ->count();
             
-        $earningsUsd = $delivered * $commissionPerOrder;
+        $earningsUsd = \App\Models\Earning::where('user_id', $user->id)
+            ->whereDate('earning_date', $date->toDateString())
+            ->where('role_type', 'repartidor')
+            ->sum('amount_usd');
 
         // Stock count (assigned items not yet delivered/returned)
         // For simplicity, just count products in "Deliverer Stock" using DelivererStockController logic if needed
@@ -189,22 +361,57 @@ class DashboardController extends Controller
     private function getAgencyStats($user, $date, $rate)
     {
         $statusDeliveredId = Status::where('description', '=', 'Entregado')->value('id');
-
+        
         $assigned = Order::where('agency_id', '=', $user->id)
             ->whereDate('created_at', $date)
             ->count();
 
-        $delivered = Order::where('agency_id', '=', $user->id)
+        $deliveredCount = Order::where('agency_id', '=', $user->id)
             ->where('status_id', '=', $statusDeliveredId)
             ->whereDate('processed_at', $date)
             ->count();
 
+        $totalSales = Order::where('agency_id', '=', $user->id)
+            ->where('status_id', '=', $statusDeliveredId)
+            ->whereDate('processed_at', $date)
+            ->sum('current_total_price') ?? 0;
+
+        // Pending Route: Orders assigned to this agency but not yet "En ruta" or "Entregado" or "Cancelado"
+        $pendingStatuses = Status::whereIn('description', [
+            'Asignado a repartidor',
+            'Confirmado',
+            'Esperando Ubicacion',
+            'Programado para mas tarde',
+            'Reprogramado'
+        ])->pluck('id')->toArray();
+
+        $pendingRoute = Order::where('agency_id', '=', $user->id)
+            ->whereIn('status_id', $pendingStatuses)
+            ->with(['client', 'status', 'deliverer'])
+            ->limit(10)
+            ->get();
+
+        $pendingCount = Order::where('agency_id', '=', $user->id)
+            ->whereIn('status_id', $pendingStatuses)
+            ->count();
+
+        // Calculate commissions from Earning table
+        $earningsUsd = \App\Models\Earning::where('user_id', $user->id)
+            ->whereDate('earning_date', $date->toDateString())
+            ->where('role_type', 'agencia')
+            ->sum('amount_usd');
+
         return [
-            'orders' => [
+            'total_sales' => (float) $totalSales,
+            'earnings_usd' => (float) $earningsUsd,
+            'earnings_local' => (float) ($earningsUsd * $rate),
+            'orders_today' => [
                 'assigned' => $assigned,
-                'delivered' => $delivered,
+                'delivered' => $deliveredCount,
+                'pending'   => $pendingCount
             ],
-            'message' => 'Resumen de entregas para tu agencia'
+            'pending_route_orders' => $pendingRoute,
+            'message' => 'Gestión logística de tu agencia'
         ];
     }
 }

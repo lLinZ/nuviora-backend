@@ -19,7 +19,7 @@ class AssignmentController extends Controller
     {
         $this->ensureManager();
 
-        $from = $request->filled('from') ? now()->parse($request->from) : now()->yesterday()->endOfDay();
+        $from = $request->filled('from') ? now()->parse($request->from) : now()->subDays(30)->startOfDay();
         $to   = $request->filled('to')   ? now()->parse($request->to)   : now();
 
         $count = app(AssignOrderService::class)->assignBacklog($from, $to);

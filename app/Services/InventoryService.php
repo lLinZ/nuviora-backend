@@ -27,8 +27,8 @@ class InventoryService
             $toWarehouse = Warehouse::active()->findOrFail($toWarehouseId);
 
             // Get source inventory
-            $fromInventory = Inventory::where('warehouse_id', $fromWarehouseId)
-                ->where('product_id', $productId)
+            $fromInventory = Inventory::where('warehouse_id', '=', $fromWarehouseId)
+                ->where('product_id', '=', $productId)
                 ->first();
 
             if (!$fromInventory || $fromInventory->quantity < $quantity) {
@@ -60,6 +60,12 @@ class InventoryService
                 'user_id' => $userId,
                 'notes' => $notes,
             ]);
+
+            // 📦 Check for orders that now have insufficient stock
+            $this->checkAndHandleStockShortage($productId, $fromWarehouseId);
+            
+            // 📦 Check for orders that now have stock recovered
+            $this->checkAndHandleStockRecovery($productId, $toWarehouseId);
 
             return $movement;
         });
@@ -105,6 +111,9 @@ class InventoryService
                 'notes' => $notes,
             ]);
 
+            // 📦 Check for orders that now have stock recovered
+            $this->checkAndHandleStockRecovery($productId, $warehouseId);
+
             return $movement;
         });
     }
@@ -126,8 +135,8 @@ class InventoryService
             $warehouse = Warehouse::active()->findOrFail($warehouseId);
 
             // Get inventory
-            $inventory = Inventory::where('warehouse_id', $warehouseId)
-                ->where('product_id', $productId)
+            $inventory = Inventory::where('warehouse_id', '=', $warehouseId)
+                ->where('product_id', '=', $productId)
                 ->first();
 
             if (!$inventory || $inventory->quantity < $quantity) {
@@ -150,6 +159,9 @@ class InventoryService
                 'user_id' => $userId,
                 'notes' => $notes,
             ]);
+
+            // 📦 Check for orders that now have insufficient stock
+            $this->checkAndHandleStockShortage($productId, $warehouseId);
 
             return $movement;
         });
@@ -196,6 +208,14 @@ class InventoryService
                 'notes' => $notes . " (Old: {$oldQuantity}, New: {$newQuantity})",
             ]);
 
+            // 📦 Check for orders that now have insufficient stock (only if quantity decreased)
+            if ($difference < 0) {
+                $this->checkAndHandleStockShortage($productId, $warehouseId);
+            } else if ($difference > 0) {
+                // 📦 Check for orders that now have stock recovered
+                $this->checkAndHandleStockRecovery($productId, $warehouseId);
+            }
+
             return $movement;
         });
     }
@@ -205,7 +225,7 @@ class InventoryService
      */
     public function getProductStock(int $productId, ?int $warehouseId = null)
     {
-        $query = Inventory::where('product_id', $productId);
+        $query = Inventory::where('product_id', '=', $productId);
 
         if ($warehouseId) {
             $query->where('warehouse_id', $warehouseId);
@@ -229,6 +249,157 @@ class InventoryService
      */
     public function getTotalProductStock(int $productId)
     {
-        return Inventory::where('product_id', $productId)->sum('quantity');
+        return Inventory::where('product_id', '=', $productId)->sum('quantity');
+    }
+
+    /**
+     * Finds orders assigned to a warehouse (via agency) that now have insufficient stock,
+     * changes their status to "Sin Stock", and de-assigns the agent.
+     */
+    private function checkAndHandleStockShortage(int $productId, int $warehouseId)
+    {
+        $warehouse = Warehouse::find($warehouseId);
+        if (!$warehouse || !$warehouse->user_id) return;
+
+        // Find the "Sin Stock" status ID
+        $sinStockStatus = \App\Models\Status::where('description', '=', 'Sin Stock')->first();
+        if (!$sinStockStatus) return;
+
+        // Excluded statuses (don't de-assign if already finished)
+        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock'];
+
+        // Find orders assigned to this agency
+        $orders = \App\Models\Order::where('agency_id', '=', $warehouse->user_id)
+            ->whereHas('status', function($q) use ($excludedStatuses) {
+                $q->whereNotIn('description', $excludedStatuses);
+            })
+            ->whereHas('products', function($q) use ($productId) {
+                $q->where('product_id', $productId);
+            })
+            ->get();
+
+        foreach ($orders as $order) {
+            // Check if THIS specific order now has insufficient stock for ANY of its products
+            // Using the helper we added to OrderController (or similar logic)
+            // But here we know at least $productId stock just changed.
+            
+            $inv = Inventory::where('warehouse_id', '=', $warehouseId)
+                ->where('product_id', '=', $productId)
+                ->first();
+            
+            $available = $inv ? $inv->quantity : 0;
+            
+            // Required quantity for this product in this order
+            $required = $order->products()->where('product_id', $productId)->sum('quantity');
+
+            if ($available < $required) {
+                $oldAgentId = $order->agent_id;
+                
+                // Update order
+                $order->status_id = $sinStockStatus->id;
+                $order->agent_id = null; // De-assign seller
+                $order->save();
+
+                // Log the activity
+                \App\Models\OrderActivityLog::create([
+                    'order_id' => $order->id,
+                    'user_id' => auth()->id() ?? 1, // System or current user
+                    'action' => 'status_changed',
+                    'description' => "Orden movida a 'Sin Stock' y vendedora removida por falta de existencias en bodega.",
+                    'properties' => [
+                        'old_status' => $order->getOriginal('status_id'),
+                        'new_status' => $sinStockStatus->id,
+                        'old_agent_id' => $oldAgentId,
+                        'new_agent_id' => null,
+                        'reason' => 'stock_shortage',
+                        'product_id' => $productId,
+                        'warehouse_id' => $warehouseId
+                    ]
+                ]);
+
+                // Also add an update for the history timeline
+                \App\Models\OrderUpdate::create([
+                    'order_id' => $order->id,
+                    'user_id' => auth()->id() ?? \App\Models\User::whereHas('role', function($q){ $q->where('description', '=', 'Admin'); })->first()?->id ?? 1,
+                    'message' => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' y se removió la vendedora asignada debido a falta de existencias de un producto en la bodega de la agencia."
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Finds orders in "Sin Stock" that can now be fulfilled because stock was added
+     * to a warehouse, and tries to re-assign them.
+     */
+    private function checkAndHandleStockRecovery(int $productId, int $warehouseId)
+    {
+        $warehouse = Warehouse::find($warehouseId);
+        if (!$warehouse) return;
+
+        // Find relevant statuses
+        $sinStockStatus = \App\Models\Status::where('description', 'Sin Stock')->first();
+        $assignedStatus = \App\Models\Status::where('description', 'Asignado a Vendedor')->first();
+        $nuevoStatus = \App\Models\Status::where('description', 'Nuevo')->first();
+        
+        if (!$sinStockStatus) return;
+
+        // Find orders in "Sin Stock" that contain this product
+        $query = \App\Models\Order::where('status_id', $sinStockStatus->id)
+            ->whereHas('products', function($q) use ($productId) {
+                $q->where('product_id', $productId);
+            });
+
+        // If it's an agency warehouse, only check orders for that agency
+        if ($warehouse->user_id) {
+            $query->where('agency_id', $warehouse->user_id);
+        }
+
+        $orders = $query->get();
+        if ($orders->isEmpty()) return;
+
+        $assignService = app(\App\Services\Assignment\AssignOrderService::class);
+
+        foreach ($orders as $order) {
+            // Reload order with products to ensure fresh check
+            if ($order->hasStock()) {
+                // Try to assign it automatically
+                $agent = $assignService->assignOne($order);
+                
+                if ($agent && $assignedStatus) {
+                    // Update status to "Asignado a Vendedor" since assignOne only sets agent_id
+                    $order->status_id = $assignedStatus->id;
+                    $order->save();
+
+                    // Log activity
+                    \App\Models\OrderActivityLog::create([
+                        'order_id' => $order->id,
+                        'user_id' => auth()->id() ?? 1,
+                        'action' => 'status_changed',
+                        'description' => "Stock recuperado. Orden asignada automáticamente a {$agent->names}.",
+                        'properties' => [
+                            'old_status' => $sinStockStatus->id,
+                            'new_status' => $assignedStatus->id,
+                            'agent_id' => $agent->id
+                        ]
+                    ]);
+                } else if ($nuevoStatus) {
+                    // Back to "Nuevo" if no agent could be assigned (outside business hours or no roster)
+                    $order->status_id = $nuevoStatus->id;
+                    $order->save();
+
+                    // Log activity
+                    \App\Models\OrderActivityLog::create([
+                        'order_id' => $order->id,
+                        'user_id' => auth()->id() ?? 1,
+                        'action' => 'status_changed',
+                        'description' => "Stock recuperado. Orden movida a 'Nuevo' (Pendiente de asignación).",
+                        'properties' => [
+                            'old_status' => $sinStockStatus->id,
+                            'new_status' => $nuevoStatus->id
+                        ]
+                    ]);
+                }
+            }
+        }
     }
 }

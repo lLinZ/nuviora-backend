@@ -57,6 +57,17 @@ class ShopifyWebhookController extends Controller
         );
 
         // 2️⃣ Guardar/actualizar orden
+        // Buscar ciudad si existe
+        $cityName = $orderData['customer']['default_address']['city'] ?? null;
+        $cityId = null;
+        if ($cityName) {
+            // Busqueda case-insensitive
+            $cityMatch = \App\Models\City::where('name', 'LIKE', $cityName)->first();
+            if ($cityMatch) {
+                $cityId = $cityMatch->id;
+            }
+        }
+
         $order = Order::updateOrCreate(
             ['order_id' => $orderData['id']],
             [
@@ -70,6 +81,7 @@ class ShopifyWebhookController extends Controller
                 'client_id'           => $client->id,
                 'status_id'           => 1,
                 'shop_id'             => $shop ? $shop->id : null,
+                'city_id'             => $cityId,
             ]
         );
 
