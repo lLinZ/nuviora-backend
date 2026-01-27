@@ -291,6 +291,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('cities', CityController::class);
 
     /**---------------------
+     * PROVINCES
+     * ---------------------**/
+    Route::apiResource('provinces', \App\Http\Controllers\ProvinceController::class);
+
+    /**---------------------
      * COMPANY ACCOUNTS
      * ---------------------**/
     Route::apiResource('company-accounts', CompanyAccountController::class);

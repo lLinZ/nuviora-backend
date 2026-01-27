@@ -76,6 +76,11 @@ class Order extends Model
         return $this->belongsTo(City::class);
     }
 
+    public function province()
+    {
+        return $this->belongsTo(Province::class);
+    }
+
     public function agency()
     {
         return $this->belongsTo(User::class, 'agency_id');
@@ -122,6 +127,7 @@ class Order extends Model
         'was_shipped',
         'shipped_at',
         'city_id',
+        'province_id',
         'agency_id',
         'delivery_cost',
         'cash_received',

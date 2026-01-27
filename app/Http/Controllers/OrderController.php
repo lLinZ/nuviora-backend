@@ -1144,15 +1144,28 @@ class OrderController extends Controller
         $orders = Order::whereNull('agency_id')->with('client')->get();
         $assignedCount = 0;
 
-        // 2. Mapeo de ciudades y sus agencias asignadas
-        $cities = City::whereNotNull('agency_id')->get()->keyBy('id');
+        // 2. Mapeo de provincias y sus agencias asignadas
+        $provinces = \App\Models\Province::whereNotNull('agency_id')->get()->keyBy('id');
 
         foreach ($orders as $order) {
-            $cityId = $order->city_id ?? $order->client?->city_id;
+            // Intentar obtener province_id de la orden, o desde el cliente
+            $provinceId = $order->province_id;
             
-            if ($cityId && isset($cities[$cityId])) {
-                // Asignar el agency_id configurado en la ciudad
-                $order->agency_id = $cities[$cityId]->agency_id;
+            // Si no tiene province_id, intentar asignar desde el cliente
+            if (!$provinceId && $order->client) {
+                $provinceName = $order->client->province;
+                if ($provinceName) {
+                    $provinceMatch = \App\Models\Province::where('name', 'LIKE', trim($provinceName))->first();
+                    if ($provinceMatch) {
+                        $order->province_id = $provinceMatch->id;
+                        $provinceId = $provinceMatch->id;
+                    }
+                }
+            }
+            
+            if ($provinceId && isset($provinces[$provinceId])) {
+                // Asignar el agency_id configurado en la provincia
+                $order->agency_id = $provinces[$provinceId]->agency_id;
                 $order->save();
                 $assignedCount++;
             }

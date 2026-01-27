@@ -68,6 +68,16 @@ class ShopifyWebhookController extends Controller
             }
         }
 
+        // Buscar provincia si existe
+        $provinceName = $orderData['customer']['default_address']['province'] ?? null;
+        $provinceId = null;
+        if ($provinceName) {
+            $provinceMatch = \App\Models\Province::where('name', 'LIKE', trim($provinceName))->first();
+            if ($provinceMatch) {
+                $provinceId = $provinceMatch->id;
+            }
+        }
+
         $order = Order::updateOrCreate(
             ['order_id' => $orderData['id']],
             [
@@ -82,6 +92,7 @@ class ShopifyWebhookController extends Controller
                 'status_id'           => 1,
                 'shop_id'             => $shop ? $shop->id : null,
                 'city_id'             => $cityId,
+                'province_id'         => $provinceId,
             ]
         );
 
