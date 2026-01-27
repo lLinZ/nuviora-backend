@@ -529,17 +529,19 @@ class OrderController extends Controller
                 'country_name'    => $orderData['customer']['default_address']['country'] ?? null,
                 'country_code'    => $orderData['customer']['default_address']['country_code'] ?? null,
                 'province'        => $orderData['customer']['default_address']['province'] ?? null,
-                'city'            => $orderData['customer']['default_address']['city'] ?? null,
+                // Guardamos province en el campo city para reutilizar la infraestructura existente
+                'city'            => $orderData['customer']['default_address']['province'] ?? null,
                 'address1'        => $orderData['customer']['default_address']['address1'] ?? null,
                 'address2'        => $orderData['customer']['default_address']['address2'] ?? null,
             ]
         );
 
         // 2️⃣ Guardar/actualizar orden
-        $cityName = $orderData['customer']['default_address']['city'] ?? null;
+        // Buscar "ciudad" (que ahora es provincia) en la tabla cities
+        $provinceName = $orderData['customer']['default_address']['province'] ?? null;
         $cityId = null;
-        if ($cityName) {
-            $cityMatch = \App\Models\City::whereRaw('UPPER(name) = ?', [strtoupper(trim($cityName))])->first();
+        if ($provinceName) {
+            $cityMatch = \App\Models\City::whereRaw('UPPER(name) = ?', [strtoupper(trim($provinceName))])->first();
             if ($cityMatch) {
                 $cityId = $cityMatch->id;
             }
