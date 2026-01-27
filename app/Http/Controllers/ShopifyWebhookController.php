@@ -78,6 +78,10 @@ class ShopifyWebhookController extends Controller
             }
         }
 
+        // Obtener el status "Nuevo" para órdenes recién creadas
+        $nuevoStatus = \App\Models\Status::where('description', 'Nuevo')->first();
+        $statusId = $nuevoStatus ? $nuevoStatus->id : 1; // Fallback a 1 si no existe
+
         $order = Order::updateOrCreate(
             ['order_id' => $orderData['id']],
             [
@@ -89,7 +93,7 @@ class ShopifyWebhookController extends Controller
                     : null,
                 'currency'            => $orderData['currency'],
                 'client_id'           => $client->id,
-                'status_id'           => 1,
+                'status_id'           => $statusId,
                 'shop_id'             => $shop ? $shop->id : null,
                 'city_id'             => $cityId,
                 'province_id'         => $provinceId,
