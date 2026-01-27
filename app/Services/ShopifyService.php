@@ -8,12 +8,20 @@ class ShopifyService
 {
     protected string $domain;
     protected string $token;
-    protected string $version = '2025-07'; // versión de la API
+    protected string $version;
 
     public function __construct()
     {
-        $this->domain = env('SHOPIFY_DOMAIN'); // ej: nuviora.myshopify.com
-        $this->token = env('SHOPIFY_API_TOKEN');
+        $this->domain = config('shopify.domain', '');
+        $this->token = config('shopify.api_token', '');
+        $this->version = config('shopify.api_version', '2025-07');
+
+        // Validate that required configuration is present
+        if (empty($this->domain) || empty($this->token)) {
+            throw new \RuntimeException(
+                'Shopify configuration is missing. Please ensure SHOPIFY_DOMAIN and SHOPIFY_API_TOKEN are set in your .env file.'
+            );
+        }
     }
 
     /**
