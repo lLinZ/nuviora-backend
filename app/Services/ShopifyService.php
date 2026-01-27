@@ -10,16 +10,30 @@ class ShopifyService
     protected string $token;
     protected string $version;
 
-    public function __construct()
+    /**
+     * Constructor: puede recibir un Shop model para usar credenciales específicas,
+     * o usar las credenciales por defecto del .env
+     * 
+     * @param \App\Models\Shop|null $shop
+     */
+    public function __construct($shop = null)
     {
-        $this->domain = config('shopify.domain', '');
-        $this->token = config('shopify.api_token', '');
-        $this->version = config('shopify.api_version', '2025-07');
+        if ($shop) {
+            // Usar credenciales de la tienda específica
+            $this->domain = $shop->shopify_domain ?? '';
+            $this->token = $shop->shopify_access_token ?? '';
+            $this->version = config('shopify.api_version', '2025-07');
+        } else {
+            // Usar credenciales por defecto del .env
+            $this->domain = config('shopify.domain', '');
+            $this->token = config('shopify.api_token', '');
+            $this->version = config('shopify.api_version', '2025-07');
+        }
 
         // Validate that required configuration is present
         if (empty($this->domain) || empty($this->token)) {
             throw new \RuntimeException(
-                'Shopify configuration is missing. Please ensure SHOPIFY_DOMAIN and SHOPIFY_API_TOKEN are set in your .env file.'
+                'Shopify configuration is missing. Please ensure SHOPIFY_DOMAIN and SHOPIFY_API_TOKEN are set in your .env file or provide a valid Shop model.'
             );
         }
     }
