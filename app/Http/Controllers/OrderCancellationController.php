@@ -64,7 +64,10 @@ class OrderCancellationController extends Controller
 
         // si se aprueba, actualizamos estado de la orden a "Cancelado"
         if ($request->status === 'approved') {
-            $cancellation->order->update(['status_id' => /* id de Cancelado */ 15]);
+            $canceladoStatus = Status::where('description', 'Cancelado')->first();
+            if ($canceladoStatus) {
+                $cancellation->order->update(['status_id' => $canceladoStatus->id]);
+            }
         }
 
         return response()->json([
