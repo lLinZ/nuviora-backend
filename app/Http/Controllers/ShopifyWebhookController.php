@@ -87,6 +87,16 @@ class ShopifyWebhookController extends Controller
 
         // 3️⃣ Procesar productos de la orden
         foreach ($orderData['line_items'] as $item) {
+            // Saltar items sin product_id (ej: productos personalizados, descuentos)
+            if (empty($item['product_id'])) {
+                \Log::warning("Shopify webhook: Skipping line item without product_id", [
+                    'order_id' => $orderData['id'],
+                    'item_title' => $item['title'] ?? 'N/A',
+                    'item_sku' => $item['sku'] ?? 'N/A'
+                ]);
+                continue;
+            }
+
             // Obtener imagen desde Shopify API
             $imageUrl = $shopifyService->getProductImage(
                 $item['product_id'],
