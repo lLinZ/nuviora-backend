@@ -1162,28 +1162,30 @@ class OrderController extends Controller
         $orders = Order::whereNull('agency_id')->with('client')->get();
         $assignedCount = 0;
 
-        // 2. Mapeo de provincias y sus agencias asignadas
-        $provinces = \App\Models\Province::whereNotNull('agency_id')->get()->keyBy('id');
+        // 2. Mapeo de ciudades/provincias y sus agencias asignadas
+        // Usando tabla cities que ahora contiene provincias
+        $cities = \App\Models\City::whereNotNull('agency_id')->get()->keyBy('id');
 
         foreach ($orders as $order) {
-            // Intentar obtener province_id de la orden, o desde el cliente
-            $provinceId = $order->province_id;
+            // Intentar obtener city_id de la orden, o desde el cliente
+            $cityId = $order->city_id;
             
-            // Si no tiene province_id, intentar asignar desde el cliente
-            if (!$provinceId && $order->client) {
-                $provinceName = $order->client->province;
-                if ($provinceName) {
-                    $provinceMatch = \App\Models\Province::where('name', 'LIKE', trim($provinceName))->first();
-                    if ($provinceMatch) {
-                        $order->province_id = $provinceMatch->id;
-                        $provinceId = $provinceMatch->id;
+            // Si no tiene city_id, intentar asignar desde el cliente usando province/city
+            if (!$cityId && $order->client) {
+                // Ahora client->city contiene la provincia
+                $locationName = $order->client->city ?? $order->client->province;
+                if ($locationName) {
+                    $cityMatch = \App\Models\City::where('name', 'LIKE', trim($locationName))->first();
+                    if ($cityMatch) {
+                        $order->city_id = $cityMatch->id;
+                        $cityId = $cityMatch->id;
                     }
                 }
             }
             
-            if ($provinceId && isset($provinces[$provinceId])) {
-                // Asignar el agency_id configurado en la provincia
-                $order->agency_id = $provinces[$provinceId]->agency_id;
+            if ($cityId && isset($cities[$cityId])) {
+                // Asignar el agency_id configurado en la ciudad/provincia
+                $order->agency_id = $cities[$cityId]->agency_id;
                 $order->save();
                 $assignedCount++;
             }
