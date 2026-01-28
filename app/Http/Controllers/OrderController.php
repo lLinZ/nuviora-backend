@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use App\Models\InventoryMovement;
 use App\Models\Warehouse;
+use App\Notifications\OrderAssignedNotification;
 
 class OrderController extends Controller
 {
@@ -800,6 +801,14 @@ class OrderController extends Controller
         $order->agent_id = $agent->id;
         $order->save();
 
+        // 🔔 Notify Agent
+        try {
+            $agent->notify(new OrderAssignedNotification($order, "Nueva orden asignada: #{$order->name}"));
+        } catch (\Exception $e) {
+            // Log error but don't fail the request
+            \Log::error('Error sending notification: ' . $e->getMessage());
+        }
+
         return response()->json([
             'status' => true,
             'order' => $order->load('agent', 'status', 'client'),
@@ -829,6 +838,13 @@ class OrderController extends Controller
 
         // 📦 Immediately sync stock status after agency assignment
         $order->syncStockStatus();
+
+        // 🔔 Notify Agency
+        try {
+            $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+        } catch (\Exception $e) {
+            \Log::error('Error sending notification: ' . $e->getMessage());
+        }
 
         return response()->json([
             'status' => true,
