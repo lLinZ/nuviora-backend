@@ -41,23 +41,39 @@ class ShopifyWebhookController extends Controller
         }
 
         // 1️⃣ Guardar/actualizar cliente
-        $client = Client::updateOrCreate(
-            ['customer_id' => $orderData['customer']['id']],
-            [
-                'customer_number' => $orderData['customer']['id'],
-                'first_name'      => $orderData['customer']['first_name'] ?? null,
-                'last_name'       => $orderData['customer']['last_name'] ?? null,
-                'phone'           => $orderData['customer']['phone'] ?? null,
-                'email'           => $orderData['customer']['email'] ?? null,
-                'country_name'    => $orderData['customer']['default_address']['country'] ?? null,
-                'country_code'    => $orderData['customer']['default_address']['country_code'] ?? null,
-                'province'        => $orderData['customer']['default_address']['province'] ?? null,
-                // Guardamos province en el campo city para reutilizar la infraestructura existente
-                'city'            => $orderData['customer']['default_address']['province'] ?? null,
-                'address1'        => $orderData['customer']['default_address']['address1'] ?? null,
-                'address2'        => $orderData['customer']['default_address']['address2'] ?? null,
-            ]
-        );
+        // ⚠️ Defensive check: Some POS orders or draft orders might not have customer data
+        if (!isset($orderData['customer']) || empty($orderData['customer']['id'])) {
+            \Log::warning("ShopifyWebhook: Order {$orderData['id']} has no customer data. Skipping client creation.");
+            // We can still process the order but without client? Or maybe create a "Guest" client?
+            // For now, let's create a placeholder or return if strictly required.
+            // But usually we need client_id for orders table foreign key.
+            // Let's create a generic "Walk-in Customer" if null.
+            $client = Client::firstOrCreate(
+                ['email' => 'guest@nuviora.com'],
+                ['first_name' => 'Guest', 'last_name' => 'Customer', 'customer_id' => 0]
+            );
+        } else {
+            // Safe access to default_address
+            $defaultAddress = $orderData['customer']['default_address'] ?? [];
+
+            $client = Client::updateOrCreate(
+                ['customer_id' => $orderData['customer']['id']],
+                [
+                    'customer_number' => $orderData['customer']['id'],
+                    'first_name'      => $orderData['customer']['first_name'] ?? null,
+                    'last_name'       => $orderData['customer']['last_name'] ?? null,
+                    'phone'           => $orderData['customer']['phone'] ?? null,
+                    'email'           => $orderData['customer']['email'] ?? null,
+                    'country_name'    => $defaultAddress['country'] ?? null,
+                    'country_code'    => $defaultAddress['country_code'] ?? null,
+                    'province'        => $defaultAddress['province'] ?? null,
+                    // Guardamos province en el campo city para reutilizar la infraestructura existente
+                    'city'            => $defaultAddress['province'] ?? null,
+                    'address1'        => $defaultAddress['address1'] ?? null,
+                    'address2'        => $defaultAddress['address2'] ?? null,
+                ]
+            );
+        }
 
         // 2️⃣ Guardar/actualizar orden
         // Buscar "ciudad" (que ahora es provincia) en la tabla cities
