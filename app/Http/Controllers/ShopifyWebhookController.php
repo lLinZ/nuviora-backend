@@ -178,14 +178,9 @@ class ShopifyWebhookController extends Controller
         try {
             $assignedAgent = $assignService->assignOne($order);
             if ($assignedAgent) {
-                $assignedStatus = \App\Models\Status::where('description', 'Asignado a vendedor')->first();
-                if ($assignedStatus) {
-                    $order->status_id = $assignedStatus->id;
-                    $order->save();
-                }
-                \Log::info("Order {$order->order_number} auto-assigned to agent: {$assignedAgent->name}");
+                \Log::info("Order #{$order->order_number} auto-assigned to agent: {$assignedAgent->email}");
             } else {
-                \Log::info("Order {$order->order_number} could not be auto-assigned (No roster/Closed business day)");
+                \Log::info("Order #{$order->order_number} could not be auto-assigned (No roster/Closed business day)");
             }
         } catch (\Exception $e) {
             \Log::error("Error auto-assigning order {$order->id}: " . $e->getMessage());

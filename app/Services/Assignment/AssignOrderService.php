@@ -47,7 +47,11 @@ class AssignOrderService
 
             $agentId = $this->strategy->pickAgentId($agents, $ord);
 
-            $ord->update(['agent_id' => $agentId]);
+            // Buscar status "Asignado a Vendedor"
+            $statusAsignado = Status::where('description', 'Asignado a vendedor')->first();
+            $statusId = $statusAsignado ? $statusAsignado->id : $ord->status_id;
+
+            $ord->update(['agent_id' => $agentId, 'status_id' => $statusId]);
 
             \App\Models\OrderAssignmentLog::create([
                 'order_id'    => $ord->id,
@@ -56,6 +60,14 @@ class AssignOrderService
                 'assigned_by' => null, // sistema
                 'meta'        => ['reason' => 'auto'],
             ]);
+
+            // 🔔 Notificar al agente asignado
+            try {
+                // Importar o usar namespace completo
+                $ord->agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Nueva orden asignada: #{$ord->name}"));
+            } catch (\Exception $e) {
+                // Ignorar error de notificación
+            }
 
             return $ord->agent;
         });
