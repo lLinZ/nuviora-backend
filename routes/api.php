@@ -56,7 +56,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('user/data', [AuthController::class, 'get_logged_user_data']);
     
     // Dashboard data
+    // Dashboard data
     Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, 'index']);
+
+    // Statuses
+    Route::get('/statuses', [StatusController::class, 'index']);
 
     // Cambiar color
     Route::put('user/{user}/change/color', [AuthController::class, 'edit_color']);
