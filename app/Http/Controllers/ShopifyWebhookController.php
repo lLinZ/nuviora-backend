@@ -61,11 +61,13 @@ class ShopifyWebhookController extends Controller
         // Buscar "ciudad" (que ahora es provincia) en la tabla cities
         $provinceName = $orderData['customer']['default_address']['province'] ?? null;
         $cityId = null;
+        $candidateAgencyId = null;
         if ($provinceName) {
             // Busqueda case-insensitive en tabla cities (que contiene provincias)
             $cityMatch = \App\Models\City::where('name', 'LIKE', trim($provinceName))->first();
             if ($cityMatch) {
                 $cityId = $cityMatch->id;
+                $candidateAgencyId = $cityMatch->agency_id;
             }
         }
 
@@ -100,6 +102,12 @@ class ShopifyWebhookController extends Controller
                 'province_id'         => $provinceId,
             ]
         );
+
+        // Auto-asignar agencia si la orden no tiene una y la ciudad/provincia tiene una asignada
+        if (!$order->agency_id && $candidateAgencyId) {
+            $order->agency_id = $candidateAgencyId;
+            $order->save();
+        }
 
         // 3️⃣ Procesar productos de la orden
         foreach ($orderData['line_items'] as $item) {
