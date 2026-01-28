@@ -110,6 +110,7 @@ class OrderController extends Controller
             'payments', // 👈 incluimos pagos
             'agency', // 👈 incluimos agencia
             'postponements.user', // 👈 incluimos historial de reprogramación
+            'shop', // 👈 incluimos tienda
         ])->findOrFail($id);
 
         // 📦 CHECK STOCK AVAILABILITY
@@ -667,7 +668,7 @@ class OrderController extends Controller
         $user = Auth::user();
         $perPage = (int) $request->get('per_page', 50);
 
-        $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments'])->latest('updated_at');
+        $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])->latest('updated_at');
 
         // 🔒 Reglas por rol
         $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
