@@ -555,4 +555,29 @@ class AuthController extends Controller
             'token'  => $token
         ], 201);
     }
+
+    // PUT /user/{user}/change/password
+    public function edit_password(Request $request, User $user)
+    {
+        // Solo Admin puede cambiar contraseña de otros
+        $authUser = Auth::user();
+        if ($authUser->role?->description !== 'Admin') {
+            return response()->json([
+                'status' => false,
+                'message' => 'No tienes permisos para realizar esta acción'
+            ], 403);
+        }
+
+        $request->validate([
+            'new_password' => 'required|string|min:6',
+        ]);
+
+        $user->password = Hash::make($request->new_password);
+        $user->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Contraseña actualizada exitosamente',
+        ]);
+    }
 }
