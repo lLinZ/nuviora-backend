@@ -560,6 +560,7 @@ class OrderController extends Controller
             ]
         );
 
+
         // 3️⃣ Procesar productos de la orden
         foreach ($orderData['line_items'] as $item) {
             // Obtener imagen desde Shopify API
@@ -568,18 +569,33 @@ class OrderController extends Controller
                 $item['variant_id'] ?? null
             );
 
-            // Crear/actualizar producto
-            $product = Product::updateOrCreate(
-                ['product_id' => $item['product_id']],
-                [
+            // Buscar producto por nombre (case-insensitive)
+            $productTitle = trim($item['title']);
+            $existingProduct = \App\Models\Product::whereRaw('LOWER(title) = ?', [strtolower($productTitle)])->first();
+
+            if ($existingProduct) {
+                // Actualizar producto existente
+                $existingProduct->update([
+                    'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
-                    'title'      => $item['title'],
                     'name'       => $item['name'] ?? null,
                     'price'      => $item['price'],
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
-                ]
-            );
+                ]);
+                $product = $existingProduct;
+            } else {
+                // Crear nuevo producto
+                $product = \App\Models\Product::create([
+                    'product_id' => $item['product_id'],
+                    'variant_id' => $item['variant_id'] ?? null,
+                    'title'      => $productTitle,
+                    'name'       => $item['name'] ?? null,
+                    'price'      => $item['price'],
+                    'sku'        => $item['sku'] ?? null,
+                    'image'      => $imageUrl,
+                ]);
+            }
 
             // Relación en OrderProducts (evita duplicados)
             OrderProduct::updateOrCreate(
