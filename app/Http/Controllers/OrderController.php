@@ -187,6 +187,36 @@ class OrderController extends Controller
                 'status_id' => 'required|exists:statuses,id',
             ]);
 
+            // 🛡️ RESTRICCIÓN DE FLUJO POR ROL (Rule Enforcement)
+            $userRole = Auth::user()->role?->description;
+            // Roles exentos de validación de flujo
+            $superRoles = ['Admin', 'Gerente', 'Master'];
+
+            if (!in_array($userRole, $superRoles)) {
+                $transitions = config("order_flow.{$userRole}.transitions");
+
+                if ($transitions) {
+                    $currentStatusRaw = $order->status?->description ?? 'Nuevo';
+                    $newStatusRaw = Status::find($request->status_id)?->description;
+
+                    if ($currentStatusRaw && $newStatusRaw) {
+                        // Normalizar keys por si acaso (aunque config usa strings exactos)
+                        // Si el estado actual no está definido en las reglas, asumimos que está "bloqueado" o es un estado terminal
+                        // a menos que sea un estado inicial.
+                        $allowedNext = $transitions[$currentStatusRaw] ?? [];
+
+                        // Excepción: Si allowedNext está vacío, tal vez es un estado no contemplado,
+                        // lanzamos error estricto para evitar fugas.
+                        if (!in_array($newStatusRaw, $allowedNext)) {
+                            return response()->json([
+                                'status' => false,
+                                'message' => "⛔ ACCIÓN NO PERMITIDA: Como {$userRole}, no puedes pasar de '{$currentStatusRaw}' a '{$newStatusRaw}'. Sigue el flujo establecido."
+                            ], 422);
+                        }
+                    }
+                }
+            }
+
             // Buscamos status "Entregado" y "En ruta" para validación de stock
             $statusEntregado = Status::where('description', '=', 'Entregado')->first();
             $statusEnRuta = Status::where('description', '=', 'En ruta')->first();
@@ -358,6 +388,12 @@ class OrderController extends Controller
         $oldStatusId = $order->status_id;
 
         $order->status_id = $request->status_id;
+
+        // Si se cambia a "Programado para otro dia", desasignamos a la vendedora
+        $statusOtroDia = Status::where('description', '=', 'Programado para otro dia')->first();
+        if ($statusOtroDia && (int)$statusOtroDia->id === (int)$request->status_id) {
+            $order->agent_id = null;
+        }
 
         // Novedades
         if ($request->filled('novedad_type')) {

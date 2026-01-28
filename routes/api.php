@@ -74,6 +74,23 @@ Route::middleware('auth:sanctum')->group(function () {
     // Asignar agente a la orden
     Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent']);
     Route::put('orders/{order}/assign-agency', [OrderController::class, 'assignAgency']);
+    
+    // Configuración de Flujo de Ordenes (Reglas de Status)
+    Route::get('config/flow', function (\Illuminate\Http\Request $request) {
+        $role = $request->user()->role?->description;
+        
+        // Intentar match con mayúscula, minúscula o exacto
+        $flow = config("order_flow.{$role}") 
+             ?? config("order_flow." . ucfirst($role)) 
+             ?? config("order_flow." . strtolower($role));
+
+        if (!$flow) {
+            return response()->json(['transitions' => null, 'debug_role_received' => $role]);
+        }
+
+        return response()->json($flow);
+    });
+
     /**---------------------
      * STATUS
      * ---------------------**/
