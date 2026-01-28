@@ -28,8 +28,6 @@ use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\WarehouseController;
 use Illuminate\Support\Facades\Route;
 
-// Crear Admin
-Route::post('register/master/24548539', [AuthController::class, 'register_master']);
 
 // Login
 Route::post('login', [AuthController::class, 'login']);
