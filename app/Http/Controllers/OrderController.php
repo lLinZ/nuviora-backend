@@ -429,14 +429,15 @@ class OrderController extends Controller
             }
 
 
-            // 🚀 Generar comisión cada vez que pasa por "En ruta"
+            // 🚀 Generar gasto de agencia cuando pasa por "En ruta" (solo la primera vez)
             if ($order->agency_id) {
                 $agencyUser = \App\Models\User::find($order->agency_id);
                 if ($agencyUser) {
-                    \App\Models\Earning::create([
+                    \App\Models\Earning::firstOrCreate([
                         'order_id'     => $order->id,
                         'user_id'      => $agencyUser->id,
                         'role_type'    => 'agencia',
+                    ], [
                         'amount_usd'   => $agencyUser->delivery_cost > 0 ? $agencyUser->delivery_cost : ($order->delivery_cost ?? 0),
                         'currency'     => 'USD',
                         'rate'         => 1,
@@ -447,16 +448,6 @@ class OrderController extends Controller
         }
 
         $order->save();
-
-        // Generar comisión de vendedor si cambia a Confirmado
-        $statusConfirmado = Status::where('description', '=', 'Confirmado')->first();
-        if ($statusConfirmado && (int) $statusConfirmado->id === (int) $order->status_id) {
-            if ($oldStatusId !== $order->status_id) {
-                $order->processed_at = now();
-                $order->save();
-                $commissionService->generateForConfirmedOrder($order);
-            }
-        }
 
         // Descontar inventario solo si cambia a Entregado
         if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
