@@ -12,11 +12,13 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
+use App\Services\Assignment\AssignOrderService;
 
 class ShopifyWebhookController extends Controller
 {
     //
-    public function handleOrderCreate(Request $request, ShopifyService $shopifyService, $shop_id = null)
+    //
+    public function handleOrderCreate(Request $request, ShopifyService $shopifyService, AssignOrderService $assignService, $shop_id = null)
     {
         $orderData = $request->all();
         $shop = null;
@@ -170,6 +172,23 @@ class ShopifyWebhookController extends Controller
                     'image'          => $imageUrl,
                 ]
             );
+        }
+
+        // 4️⃣ Intento de Auto-Asignación (Round Robin)
+        try {
+            $assignedAgent = $assignService->assignOne($order);
+            if ($assignedAgent) {
+                $assignedStatus = \App\Models\Status::where('description', 'Asignado a vendedor')->first();
+                if ($assignedStatus) {
+                    $order->status_id = $assignedStatus->id;
+                    $order->save();
+                }
+                \Log::info("Order {$order->order_number} auto-assigned to agent: {$assignedAgent->name}");
+            } else {
+                \Log::info("Order {$order->order_number} could not be auto-assigned (No roster/Closed business day)");
+            }
+        } catch (\Exception $e) {
+            \Log::error("Error auto-assigning order {$order->id}: " . $e->getMessage());
         }
 
         return response()->json(['success' => true], 200);
