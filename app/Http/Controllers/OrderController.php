@@ -180,12 +180,24 @@ class OrderController extends Controller
             ]
         ]);
     }
-    public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
+        public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
     {
         try {
+            // Permitir busqueda por nombre ('status') o ID ('status_id')
             $request->validate([
-                'status_id' => 'required|exists:statuses,id',
+                'status'    => 'required_without:status_id|string|exists:statuses,description',
+                'status_id' => 'required_without:status|integer|exists:statuses,id',
             ]);
+
+            // Resolver el objeto Status
+            if ($request->has('status')) {
+                $targetStatus = Status::where('description', $request->status)->firstOrFail();
+            } else {
+                $targetStatus = Status::findOrFail($request->status_id);
+            }
+
+            $newStatusId = $targetStatus->id;
+            $newStatusRaw = $targetStatus->description;
 
             // 🛡️ RESTRICCIÓN DE FLUJO POR ROL (Rule Enforcement)
             $userRole = Auth::user()->role?->description;
@@ -197,16 +209,10 @@ class OrderController extends Controller
 
                 if ($transitions) {
                     $currentStatusRaw = $order->status?->description ?? 'Nuevo';
-                    $newStatusRaw = Status::find($request->status_id)?->description;
-
+                    
                     if ($currentStatusRaw && $newStatusRaw) {
-                        // Normalizar keys por si acaso (aunque config usa strings exactos)
-                        // Si el estado actual no está definido en las reglas, asumimos que está "bloqueado" o es un estado terminal
-                        // a menos que sea un estado inicial.
                         $allowedNext = $transitions[$currentStatusRaw] ?? [];
 
-                        // Excepción: Si allowedNext está vacío, tal vez es un estado no contemplado,
-                        // lanzamos error estricto para evitar fugas.
                         if (!in_array($newStatusRaw, $allowedNext)) {
                             return response()->json([
                                 'status' => false,
@@ -216,6 +222,9 @@ class OrderController extends Controller
                     }
                 }
             }
+
+            // Actualizar request con el ID resuelto para compatibilidad con código legacy abajo
+            $request->merge(['status_id' => $newStatusId]);
 
             // Buscamos status "Entregado" y "En ruta" para validación de stock
             $statusEntregado = Status::where('description', '=', 'Entregado')->first();
