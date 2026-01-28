@@ -33,11 +33,18 @@ class OrderPostponementController extends Controller
         $statusDesc = $scheduled->isToday() ? 'Programado para mas tarde' : 'Programado para otro dia';
         $statusId   = Status::where('description', $statusDesc)->value('id');
 
-        // Persistimos en la orden (incluye scheduled_for si agregaste columna)
-        $order->update([
-            'status_id'    => $statusId,
+        // Persistimos en la orden (incluye scheduled_for)
+        $updateData = [
+            'status_id'     => $statusId,
             'scheduled_for' => $data['scheduled_for'],
-        ]);
+        ];
+
+        // Si se programa para otro día (NO es hoy), desasignamos a la vendedora
+        if (!$scheduled->isToday()) {
+            $updateData['agent_id'] = null;
+        }
+
+        $order->update($updateData);
 
         return response()->json([
             'status' => true,
