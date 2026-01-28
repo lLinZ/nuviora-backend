@@ -20,7 +20,7 @@ return [
         // Visibilidad en Kanban (Solo referencia, se usa en Frontend)
         'visible_columns' => [
             'Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3',
-            'Esperando ubicacion', 'Asignar a agencia', 'Programado para mas tarde',
+            'Esperando Ubicacion', 'Asignar a agencia', 'Programado para mas tarde',
             'Programado para otro dia', 'Novedades', 'Novedad Solucionada',
             'Cancelado'
         ],
@@ -29,10 +29,10 @@ return [
         'transitions' => [
             'Nuevo'                => ['Asignado a vendedor'], // Caso borde
             'Asignado a vendedor' => ['Llamado 1', 'Cancelado'],
-            'Llamado 1'           => ['Llamado 2', 'Asignar a agencia', 'Esperando ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Llamado 2'           => ['Llamado 3', 'Asignar a agencia', 'Esperando ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Llamado 3'           => ['Asignar a agencia', 'Esperando ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Esperando ubicacion' => ['Asignar a agencia', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
+            'Llamado 1'           => ['Llamado 2', 'Asignar a agencia', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
+            'Llamado 2'           => ['Llamado 3', 'Asignar a agencia', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
+            'Llamado 3'           => ['Asignar a agencia', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
+            'Esperando Ubicacion' => ['Asignar a agencia', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
             'Programado para mas tarde' => ['Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3', 'Asignar a agencia'], // Al activarse, vuelven al flujo
             'Programado para otro dia'  => ['Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3', 'Asignar a agencia'],
             'Novedades'           => ['Novedad Solucionada'],
