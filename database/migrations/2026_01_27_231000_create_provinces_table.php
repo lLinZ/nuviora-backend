@@ -11,19 +11,24 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('provinces', function (Blueprint $table) {
-            $table->id();
-            $table->string('name')->unique();
-            $table->decimal('delivery_cost_usd', 10, 2)->nullable();
-            $table->foreignId('agency_id')->nullable()->constrained('users')->onDelete('set null');
-            $table->timestamps();
-        });
+        if (!Schema::hasTable('provinces')) {
+            Schema::create('provinces', function (Blueprint $table) {
+                $table->id();
+                $table->string('name')->unique();
+                $table->decimal('delivery_cost_usd', 10, 2)->nullable();
+                $table->foreignId('agency_id')->nullable()->constrained('users')->onDelete('set null');
+                $table->timestamps();
+            });
 
-        // Agregar province_id a orders
-        Schema::table('orders', function (Blueprint $table) {
-            $table->foreignId('province_id')->nullable()->after('city_id')->constrained('provinces')->onDelete('set null');
-        });
+            // Agregar province_id a orders
+            if (Schema::hasTable('orders') && !Schema::hasColumn('orders', 'province_id')) {
+                 Schema::table('orders', function (Blueprint $table) {
+                    $table->foreignId('province_id')->nullable()->after('city_id')->constrained('provinces')->onDelete('set null');
+                });
+            }
+        }
     }
+
 
     /**
      * Reverse the migrations.

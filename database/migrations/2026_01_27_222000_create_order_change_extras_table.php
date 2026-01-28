@@ -11,13 +11,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('order_change_extras', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('order_id')->unique()->constrained('orders')->onDelete('cascade');
-            $table->text('change_payment_details')->nullable();
-            $table->string('change_receipt')->nullable();
-            $table->timestamps();
-        });
+        if (!Schema::hasTable('order_change_extras')) {
+            Schema::create('order_change_extras', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('order_id')->unique()->constrained('orders')->onDelete('cascade');
+                $table->text('change_payment_details')->nullable();
+                $table->string('change_receipt')->nullable();
+                $table->timestamps();
+            });
+        }
     }
 
     /**
