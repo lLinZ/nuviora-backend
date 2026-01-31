@@ -26,6 +26,14 @@ class ShopifyWebhookController extends Controller
             $shop = \App\Models\Shop::find($shop_id);
         }
 
+        // Si no se pasó shop_id en la URL, intentar resolver por dominio
+        if (!$shop) {
+            $domain = $request->header('X-Shopify-Shop-Domain');
+            if ($domain) {
+                $shop = \App\Models\Shop::where('shopify_domain', $domain)->first();
+            }
+        }
+
         // 🔒 0. Verificar firma HMAC de Shopify
         $hmacHeader = $request->header('X-Shopify-Hmac-Sha256');
         $secret = ($shop && $shop->shopify_webhook_secret) 

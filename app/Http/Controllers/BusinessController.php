@@ -21,22 +21,30 @@ class BusinessController extends Controller
         $shopId = $request->get('shop_id');
         
         $today = now()->toDateString();
-        $day = null;
         
         if ($shopId) {
             $day = \App\Models\BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
+            
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'is_open'       => $day ? $day->is_open : false,
+                    'open_at'       => $day ? optional($day->open_at)->toDateTimeString() : null,
+                    'close_at'      => $day ? optional($day->close_at)->toDateTimeString() : null,
+                    'last_open_dt'  => $day ? optional($day->open_at)->toDateTimeString() : null,
+                    'last_close_dt' => $day ? optional($day->close_at)->toDateTimeString() : null,
+                    'date'          => $today
+                ]
+            ]);
         }
 
+        // Behavior for calls without shop_id (Legacy / Global fallback)
         return response()->json([
             'status' => true,
             'data' => [
-                'is_open'      => $day ? $day->is_open : (bool) Setting::get('business_is_open', false),
-                'open_at'      => $day ? $day->open_at?->toDateTimeString() : Setting::get('business_open_at', null),
-                'close_at'     => $day ? $day->close_at?->toDateTimeString() : Setting::get('business_close_at', null),
-                'open_dt'      => $day ? $day->open_at?->toDateTimeString() : Setting::get('business_open_dt', null),
-                'close_dt'     => $day ? $day->close_at?->toDateTimeString() : Setting::get('business_close_dt', null),
-                'last_open_dt' => $day ? $day->open_at?->toDateTimeString() : Setting::get('business_last_open_dt', null),
-                'last_close_dt' => $day ? $day->close_at?->toDateTimeString() : Setting::get('business_last_close_dt', null),
+                'is_open'      => (bool) Setting::get('business_is_open', false),
+                'open_at'      => Setting::get('business_open_at', null),
+                'close_at'     => Setting::get('business_close_at', null),
                 'date'         => $today
             ]
         ]);
@@ -51,22 +59,34 @@ class BusinessController extends Controller
         $now = now()->toDateTimeString();
         $today = now()->toDateString();
 
-        // 1. Update BusinessDay model (used by AssignOrderService)
-        $day = \App\Models\BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
+        // 1. Update BusinessDay model
+        try {
+            $day = \App\Models\BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Handle race condition for unique constraint
+            $day = \App\Models\BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
+            if (!$day) throw $e;
+        }
+
         if (!$day->open_at) {
             $day->update([
                 'open_at'   => now(),
                 'opened_by' => Auth::id(),
             ]);
+        } else {
+             return response()->json([
+                'status' => false,
+                'message' => 'La jornada de esta tienda ya fue abierta.',
+            ], 409);
         }
 
-        // 2. Legacy Settings (Global)
+        // 2. Legacy Settings (Global) - Update to start pointing round robin correctly/globally if needed
         Setting::set('business_is_open', true);
         Setting::set('business_open_dt', $now);
         Setting::set('business_last_open_dt', $now);
         Setting::set('round_robin_pointer', null);
 
-        // (Opcional) Asignar backlog en este momento si se pide
+        // (Opcional) Asignar backlog
         $assigned = 0;
         if ($request->boolean('assign_backlog', false)) {
             $from = Setting::get('business_last_close_dt', now()->yesterday()->endOfDay()->toDateTimeString());
@@ -81,6 +101,7 @@ class BusinessController extends Controller
                 : "Jornada abierta.",
             'data'    => [
                 'open_dt'   => $now,
+                'open_at'   => $day->open_at->toDateTimeString(),
                 'assigned'  => $assigned,
                 'is_open'   => true
             ]
@@ -98,11 +119,24 @@ class BusinessController extends Controller
 
         // 1. Update BusinessDay model
         $day = \App\Models\BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
+        
+        if (!$day || !$day->open_at) {
+             return response()->json([
+                'status' => false,
+                'message' => 'No puedes cerrar sin haber abierto la jornada.',
+            ], 422);
+        }
+
         if ($day && !$day->close_at) {
             $day->update([
                 'close_at'  => now(),
                 'closed_by' => Auth::id(),
             ]);
+        } else {
+            return response()->json([
+                'status' => false,
+                'message' => 'La jornada ya fue cerrada.',
+            ], 409);
         }
 
         // 2. Legacy Settings (Global)
@@ -115,6 +149,7 @@ class BusinessController extends Controller
             'message' => "Jornada cerrada.",
             'data'    => [
                 'close_dt' => $now,
+                'close_at' => $day->close_at->toDateTimeString(),
                 'is_open'  => false
             ]
         ]);
