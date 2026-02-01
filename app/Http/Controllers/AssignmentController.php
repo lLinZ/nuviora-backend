@@ -21,8 +21,9 @@ class AssignmentController extends Controller
 
         $from = $request->filled('from') ? now()->parse($request->from) : now()->subDays(30)->startOfDay();
         $to   = $request->filled('to')   ? now()->parse($request->to)   : now();
+        $shopId = $request->input('shop_id');
 
-        $count = app(AssignOrderService::class)->assignBacklog($from, $to);
+        $count = app(AssignOrderService::class)->assignBacklog($from, $to, $shopId);
 
         return response()->json([
             'status' => true,

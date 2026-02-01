@@ -36,6 +36,9 @@ class ShopController extends Controller
             'shopify_access_token' => 'nullable|string',
             'shopify_webhook_secret' => 'nullable|string',
             'status_id' => 'nullable|exists:statuses,id',
+            'auto_open_at' => 'nullable|date_format:H:i',
+            'auto_close_at' => 'nullable|date_format:H:i',
+            'auto_schedule_enabled' => 'boolean',
         ]);
 
         $shop = Shop::create($data);
@@ -51,6 +54,9 @@ class ShopController extends Controller
             'shopify_access_token' => 'nullable|string',
             'shopify_webhook_secret' => 'nullable|string',
             'status_id' => 'nullable|exists:statuses,id',
+            'auto_open_at' => 'nullable|date_format:H:i',
+            'auto_close_at' => 'nullable|date_format:H:i',
+            'auto_schedule_enabled' => 'boolean',
         ]);
 
         $shop->update($data);
@@ -63,9 +69,19 @@ class ShopController extends Controller
         $data = $request->validate([
             'seller_ids' => 'required|array',
             'seller_ids.*' => 'exists:users,id',
+            'default_roster_ids' => 'nullable|array',
+            'default_roster_ids.*' => 'exists:users,id',
         ]);
 
-        $shop->sellers()->sync($data['seller_ids']);
+        $sellerIds = $data['seller_ids'];
+        $defaultRosterIds = $data['default_roster_ids'] ?? [];
+
+        $syncData = [];
+        foreach ($sellerIds as $id) {
+            $syncData[$id] = ['is_default_roster' => in_array($id, $defaultRosterIds)];
+        }
+
+        $shop->sellers()->sync($syncData);
         return response()->json(['message' => 'Vendedores asignados correctamente']);
     }
 

@@ -15,6 +15,9 @@ class Shop extends Model
         'shopify_access_token',
         'shopify_webhook_secret',
         'status_id',
+        'auto_open_at',
+        'auto_close_at',
+        'auto_schedule_enabled',
     ];
 
     public function status()
@@ -24,7 +27,7 @@ class Shop extends Model
 
     public function sellers()
     {
-        return $this->belongsToMany(User::class, 'shop_user');
+        return $this->belongsToMany(User::class, 'shop_user')->withPivot('is_default_roster');
     }
 
     public function orders()

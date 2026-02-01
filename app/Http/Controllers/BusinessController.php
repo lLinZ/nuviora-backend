@@ -56,56 +56,27 @@ class BusinessController extends Controller
         $shopId = $request->get('shop_id');
         if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
-        $now = now()->toDateTimeString();
-        $today = now()->toDateString();
-
-        // 1. Update BusinessDay model
         try {
-            $day = \App\Models\BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
-        } catch (\Illuminate\Database\QueryException $e) {
-            // Handle race condition for unique constraint
-            $day = \App\Models\BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
-            if (!$day) throw $e;
-        }
+            $service = app(\App\Services\Business\BusinessService::class);
+            $result = $service->openShop(
+                $shopId, 
+                $request->boolean('assign_backlog', false),
+                Auth::id()
+            );
 
-        if (!$day->open_at) {
-            $day->update([
-                'open_at'   => now(),
-                'opened_by' => Auth::id(),
+            return response()->json([
+                'status'  => true,
+                'message' => $result['assigned'] > 0
+                    ? "Jornada abierta. Backlog asignado: {$result['assigned']} órdenes."
+                    : "Jornada abierta.",
+                'data'    => $result
             ]);
-        } else {
-             return response()->json([
-                'status' => false,
-                'message' => 'La jornada de esta tienda ya fue abierta.',
-            ], 409);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status'  => false,
+                'message' => $e->getMessage(),
+            ], $e->getCode() ?: 400);
         }
-
-        // 2. Legacy Settings (Global) - Update to start pointing round robin correctly/globally if needed
-        Setting::set('business_is_open', true);
-        Setting::set('business_open_dt', $now);
-        Setting::set('business_last_open_dt', $now);
-        Setting::set('round_robin_pointer', null);
-
-        // (Opcional) Asignar backlog
-        $assigned = 0;
-        if ($request->boolean('assign_backlog', false)) {
-            $from = Setting::get('business_last_close_dt', now()->yesterday()->endOfDay()->toDateTimeString());
-            $to   = now();
-            $assigned = app(AssignOrderService::class)->assignBacklog(now()->parse($from), $to);
-        }
-
-        return response()->json([
-            'status'  => true,
-            'message' => $assigned
-                ? "Jornada abierta. Backlog asignado: {$assigned} órdenes."
-                : "Jornada abierta.",
-            'data'    => [
-                'open_dt'   => $now,
-                'open_at'   => $day->open_at->toDateTimeString(),
-                'assigned'  => $assigned,
-                'is_open'   => true
-            ]
-        ]);
     }
 
     public function close(Request $request)
@@ -114,44 +85,20 @@ class BusinessController extends Controller
         $shopId = $request->get('shop_id');
         if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
-        $now = now()->toDateTimeString();
-        $today = now()->toDateString();
+        try {
+            $service = app(\App\Services\Business\BusinessService::class);
+            $result = $service->closeShop($shopId, Auth::id());
 
-        // 1. Update BusinessDay model
-        $day = \App\Models\BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
-        
-        if (!$day || !$day->open_at) {
-             return response()->json([
-                'status' => false,
-                'message' => 'No puedes cerrar sin haber abierto la jornada.',
-            ], 422);
-        }
-
-        if ($day && !$day->close_at) {
-            $day->update([
-                'close_at'  => now(),
-                'closed_by' => Auth::id(),
-            ]);
-        } else {
             return response()->json([
-                'status' => false,
-                'message' => 'La jornada ya fue cerrada.',
-            ], 409);
+                'status'  => true,
+                'message' => "Jornada cerrada.",
+                'data'    => $result
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status'  => false,
+                'message' => $e->getMessage(),
+            ], $e->getCode() ?: 400);
         }
-
-        // 2. Legacy Settings (Global)
-        Setting::set('business_is_open', false);
-        Setting::set('business_close_dt', $now);
-        Setting::set('business_last_close_dt', $now);
-
-        return response()->json([
-            'status'  => true,
-            'message' => "Jornada cerrada.",
-            'data'    => [
-                'close_dt' => $now,
-                'close_at' => $day->close_at->toDateTimeString(),
-                'is_open'  => false
-            ]
-        ]);
     }
 }

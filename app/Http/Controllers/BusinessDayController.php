@@ -21,7 +21,15 @@ class BusinessDayController extends Controller
         if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
         $today = now()->toDateString();
-        $day = BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
+        try {
+            $day = BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Handle race condition or unique constraint violation
+            $day = BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
+            if (!$day) {
+                 throw $e; // Rethrow if still not found
+            }
+        }
 
         // último cierre previo (para que puedas usarlo en backlog/manual)
         $lastClosed = BusinessDay::whereNotNull('close_at')
@@ -49,7 +57,12 @@ class BusinessDayController extends Controller
         if (!$shopId) return response()->json(['error' => 'shop_id required'], 400);
 
         $today = now()->toDateString();
-        $day = BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
+        try {
+            $day = BusinessDay::firstOrCreate(['date' => $today, 'shop_id' => $shopId]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            $day = BusinessDay::where('date', $today)->where('shop_id', $shopId)->first();
+            if (!$day) throw $e;
+        }
 
         if ($day->open_at) {
             return response()->json([

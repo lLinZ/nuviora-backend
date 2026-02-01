@@ -511,7 +511,7 @@ class OrderController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Estado actualizado',
-            'order' => $order->fresh(['status', 'updates.user', 'payments', 'products.product', 'cancellations.user', 'deliveryReviews', 'locationReviews', 'rejectionReviews', 'client', 'agent', 'agency', 'deliverer'])
+            'order' => $order->fresh(['status', 'client', 'agent', 'agency', 'deliverer'])
         ]);
     } catch (\Exception $e) {
         return response()->json([
@@ -705,44 +705,66 @@ class OrderController extends Controller
         $user = Auth::user();
         $perPage = (int) $request->get('per_page', 50);
 
-        $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])->latest('updated_at');
+        $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])
+            ->orderBy('updated_at', 'desc')
+            ->orderBy('id', 'desc');
 
         // 🔒 Reglas por rol
         $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
 
         if ($role === 'Vendedor') {
-            // Un Vendedor SOLO ve lo que tiene asignado. No ve el "Backlog" de órdenes nuevas sin asignar.
+            // Un Vendedor SOLO ve lo que tiene asignado.
             $query->where('agent_id', $user->id);
         } elseif ($role === 'Repartidor') {
-            // Ventana: HOY + AYER (según timezone de app)
+            // Ventana: HOY + AYER
             $yesterdayStart = now()->subDay()->startOfDay();
             $now = now();
 
             $query->where(function ($q) use ($user, $yesterdayStart, $now) {
-                // 1) Órdenes asignadas a ese vendedor
                 $q->where('deliverer_id', $user->id)
-                    // 2) Órdenes creadas hoy o ayer (aunque no estén asignadas a él)
                     ->orWhereBetween('created_at', [$yesterdayStart, $now]);
             });
         } elseif ($role === 'Agencia') {
             $query->where('agency_id', $user->id);
-        } else {
-            // Gerente/Admin → filtros opcionales
-            if ($request->filled('agent_id')) {
-                $query->where('agent_id', $request->agent_id);
-            }
-            if ($request->filled('agency_id')) {
-                $query->where('agency_id', '=', $request->agency_id);
-            }
-            if ($request->filled('city_id')) {
-                $query->where('city_id', '=', $request->city_id);
-            }
-            if ($request->filled('date_from')) {
-                $query->whereDate('created_at', '>=', $request->date_from);
-            }
-            if ($request->filled('date_to')) {
-                $query->whereDate('created_at', '<=', $request->date_to);
-            }
+        }
+        
+        // Filtros Generales (Aplican a todos si los parámetros están presentes)
+        // Nota: Admin/Gerente puede filtrar por agent_id, agency_id, etc.
+        // Los roles restringidos ya tienen sus restricciones aplicadas arriba.
+        // Si un Vendedor intenta ?agent_id=OTRO, la restricción de arriba (agent_id=YO) + la de abajo (agent_id=OTRO) devolverá vacio. Correcto.
+        
+        if ($request->filled('agent_id')) {
+            $query->where('agent_id', $request->agent_id);
+        }
+        if ($request->filled('agency_id')) {
+            $query->where('agency_id', '=', $request->agency_id);
+        }
+        if ($request->filled('city_id')) {
+            $query->where('city_id', '=', $request->city_id);
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+        if ($request->filled('status')) {
+             $statusDesc = $request->status;
+             $query->whereHas('status', function($q) use ($statusDesc) {
+                 $q->where('description', $statusDesc);
+             });
+        }
+        if ($request->filled('search')) {
+            $term = $request->search;
+            $query->where(function($q) use ($term) {
+                $q->where('id', 'like', "%{$term}%")
+                  ->orWhere('name', 'like', "%{$term}%") // Shopify order name
+                  ->orWhereHas('client', function($cq) use ($term) {
+                      $cq->where('first_name', 'like', "%{$term}%")
+                         ->orWhere('last_name', 'like', "%{$term}%")
+                         ->orWhere('phone', 'like', "%{$term}%");
+                  });
+            });
         }
 
         $orders = $query->paginate($perPage);

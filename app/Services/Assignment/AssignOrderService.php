@@ -77,22 +77,28 @@ class AssignOrderService
      * Asigna todas las órdenes sin agente en un rango de tiempo.
      * Devuelve cantidad asignada.
      */
-    public function assignBacklog(\DateTimeInterface $from, \DateTimeInterface $to): int
+    public function assignBacklog(\DateTimeInterface $from, \DateTimeInterface $to, ?int $shopId = null): int
     {
         $date = $to->format('Y-m-d');
         
         $sinStockStatus = Status::where('description', 'Sin Stock')->first();
         $sinStockStatusId = $sinStockStatus?->id;
 
-        $ids = Order::query()
+        $query = Order::query()
             ->where(function($q) use ($sinStockStatusId) {
                 $q->whereNull('agent_id');
                 if ($sinStockStatusId) {
                     $q->orWhere('status_id', $sinStockStatusId);
                 }
             })
-            ->whereBetween('created_at', [$from, $to])
-            ->get(['*']); // Fetch full models to get shop_id
+            ->whereBetween('created_at', [$from, $to]);
+
+        // 🛡️ Filtro por Tienda (Aislamiento)
+        if ($shopId) {
+            $query->where('shop_id', $shopId);
+        }
+
+        $ids = $query->get(['*']);
 
         $assignmentStatus = Status::firstOrCreate(['description' => 'Asignado a Vendedor']);
         $assignmentStatusId = (int)$assignmentStatus->id;
@@ -104,7 +110,16 @@ class AssignOrderService
                 continue;
             }
 
-            $agentsForShop = $this->activeAgentsForDate($date, $ordModel->shop_id);
+            // 🛡️ Ensure we look for agents in the SPECIFIC shop of the order, or forced shopId
+            $targetShopId = $shopId ?: $ordModel->shop_id;
+            
+            if (!$targetShopId) {
+                // If order has no shop and no shopId passed, we can't safely assign from a specific roster.
+                // Depending on business logic, skipping is safer than assigning random agents.
+                continue; 
+            }
+
+            $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
             if ($agentsForShop->isEmpty()) continue;
 
             DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId) {
