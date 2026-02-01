@@ -713,19 +713,15 @@ class OrderController extends Controller
         $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
 
         if ($role === 'Vendedor') {
-            // Un Vendedor SOLO ve lo que tiene asignado.
-            $query->where('agent_id', $user->id);
+            // Un Vendedor SOLO ve lo que tiene asignado y que se haya movido HOY.
+            $query->where('agent_id', $user->id)
+                  ->whereDate('updated_at', now());
         } elseif ($role === 'Repartidor') {
-            // Ventana: HOY + AYER
-            $yesterdayStart = now()->subDay()->startOfDay();
-            $now = now();
-
-            $query->where(function ($q) use ($user, $yesterdayStart, $now) {
-                $q->where('deliverer_id', $user->id)
-                    ->orWhereBetween('created_at', [$yesterdayStart, $now]);
-            });
+            $query->where('deliverer_id', $user->id)
+                  ->whereDate('updated_at', now());
         } elseif ($role === 'Agencia') {
-            $query->where('agency_id', $user->id);
+            $query->where('agency_id', $user->id)
+                  ->whereDate('updated_at', now());
         }
         
         // Filtros Generales (Aplican a todos si los parámetros están presentes)

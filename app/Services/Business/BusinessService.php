@@ -129,21 +129,30 @@ class BusinessService
                 'Llamado 3',
                 'Esperando Ubicacion',
                 'Programado para mas tarde',
-                'Novedades'
+                // Novedades removido de aquí para no resetear status
             ];
             
             $statusIds = Status::whereIn('description', $statusesToReset)->pluck('id');
             $nuevoId = Status::where('description', 'Nuevo')->value('id');
 
             if ($statusIds->isNotEmpty() && $nuevoId) {
+                // 1. Resetear órdenes normales a "Nuevo"
                 Order::where('shop_id', $shopId)
                     ->whereIn('status_id', $statusIds)
                     ->update([
                         'agent_id' => null,
                         'status_id' => $nuevoId
                     ]);
+
+                // 2. Para Novedades: Solo quitar vendedor, mantener status
+                $novedadStatus = Status::where('description', 'Novedades')->first();
+                if ($novedadStatus) {
+                    Order::where('shop_id', $shopId)
+                        ->where('status_id', $novedadStatus->id)
+                        ->update(['agent_id' => null]);
+                }
                 
-                Log::info("Shop $shopId closed. Orders reset to Nuevo.");
+                Log::info("Shop $shopId closed. Orders reset logic applied.");
             }
         } catch (\Exception $e) {
             Log::error("Error resetting orders on shop close: " . $e->getMessage());

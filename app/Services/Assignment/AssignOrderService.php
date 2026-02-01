@@ -91,7 +91,12 @@ class AssignOrderService
                     $q->orWhere('status_id', $sinStockStatusId);
                 }
             })
-            ->whereBetween('created_at', [$from, $to]);
+            // Usamos updated_at para capturar las que se desasignaron ayer al cierre
+            // O created_at para las nuevas que entraron hoy
+            ->where(function($q) use ($from, $to) {
+                $q->whereBetween('updated_at', [$from, $to])
+                  ->orWhereBetween('created_at', [$from, $to]);
+            });
 
         // 🛡️ Filtro por Tienda (Aislamiento)
         if ($shopId) {
@@ -102,6 +107,9 @@ class AssignOrderService
 
         $assignmentStatus = Status::firstOrCreate(['description' => 'Asignado a Vendedor']);
         $assignmentStatusId = (int)$assignmentStatus->id;
+        
+        $novedadStatus = Status::where('description', 'Novedades')->first();
+        $novedadStatusId = $novedadStatus ? (int)$novedadStatus->id : null;
 
         $count = 0;
         foreach ($ids as $ordModel) {
@@ -122,7 +130,7 @@ class AssignOrderService
             $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
             if ($agentsForShop->isEmpty()) continue;
 
-            DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId) {
+            DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId, $novedadStatusId) {
                 $ord = Order::where('id', '=', $ordModel->id)->lockForUpdate()->first(['*']);
                 
                 // Safety check: skip if already assigned by someone else
@@ -131,7 +139,14 @@ class AssignOrderService
                 if ($ord->agent_id && $ordModel->status_id === $assignmentStatusId) return;
 
                 $agentId = $this->strategy->pickAgentId($agentsForShop, $ord);
-                $ord->update(['agent_id' => $agentId, 'status_id' => $assignmentStatusId]);
+                
+                // Lógica de Status Inteligente:
+                // Si ya era Novedad, mantenemos Novedad. Si no, Asignado a Vendedor.
+                $newStatusId = ($novedadStatusId && $ordModel->status_id === $novedadStatusId)
+                    ? $novedadStatusId
+                    : $assignmentStatusId;
+                
+                $ord->update(['agent_id' => $agentId, 'status_id' => $newStatusId]);
 
                 OrderAssignmentLog::create([
                     'order_id'    => $ord->id,
