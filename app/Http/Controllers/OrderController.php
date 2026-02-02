@@ -1312,4 +1312,34 @@ class OrderController extends Controller
             'client_notified' => $details['client_notified']
         ]);
     }
+
+    /**
+     * Retorna conteo de órdenes del día para el dashboard Lite (Vendedores)
+     */
+    public function liteCounts(Request $request)
+    {
+        $user = Auth::user();
+        $query = Order::query();
+
+        // 1. Filtro Usuario
+        if ($user->role?->description === 'Vendedor') {
+            $query->where('agent_id', $user->id);
+        }
+
+        // 2. Filtro Fecha (Hoy)
+        $todayStart = now()->startOfDay();
+        $todayEnd = now()->endOfDay();
+        $query->whereBetween('processed_at', [$todayStart, $todayEnd]);
+
+        // 3. Agrupar y contar
+        $counts = $query->join('statuses', 'orders.status_id', '=', 'statuses.id')
+            ->selectRaw('statuses.description as status_name, count(*) as total')
+            ->groupBy('statuses.description')
+            ->pluck('total', 'status_name');
+
+        return response()->json([
+            'status' => true,
+            'counts' => $counts
+        ]);
+    }
 }

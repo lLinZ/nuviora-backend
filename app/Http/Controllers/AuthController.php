@@ -432,6 +432,7 @@ class AuthController extends Controller
             'password' => 'string|min:8',
             'address' => 'string|min:8',
             'delivery_cost' => 'numeric|min:0',
+            'is_lite_view' => 'nullable',
         ]);
         if ($validator->fails()) {
             return response()->json(['status' => false, 'errors' => $validator->errors()], 400);
@@ -455,6 +456,9 @@ class AuthController extends Controller
             }
             if ($request->has('delivery_cost')) {
                 $user->delivery_cost = $request->delivery_cost;
+            }
+            if ($request->has('is_lite_view')) {
+                $user->is_lite_view = filter_var($request->is_lite_view, FILTER_VALIDATE_BOOLEAN);
             }
             $user->save();
             return response()->json(['status' => true, 'message' => 'Se ha editado el usuario', 'data' => $user], 200);

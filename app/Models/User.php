@@ -74,7 +74,8 @@ class User extends Authenticatable
         'role_id',
         'status_id',
         'agency_id',
-        'delivery_cost'
+        'delivery_cost',
+        'is_lite_view'
     ];
 
     public function deliverers()
@@ -107,6 +108,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_lite_view' => 'boolean',
         ];
     }
 }

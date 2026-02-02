@@ -130,6 +130,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Auto-asignación masiva de logística
     Route::post('/orders/auto-assign-logistics', [OrderController::class, 'autoAssignAllLogistics']);
     Route::get('/orders/pending-vueltos', [OrderController::class, 'getPendingVueltos']);
+    Route::get('/orders/lite/counts', [OrderController::class, 'liteCounts']); // Lite Dashboard Counts
     // Ver detalles de la orden
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     // Agregar nota a la orden
