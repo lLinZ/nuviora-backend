@@ -1,0 +1,157 @@
+﻿
+  GET|HEAD        / ............. 
+  GET|HEAD        api/banks bankÔÇª
+  POST            api/banks bankÔÇª
+  GET|HEAD        api/banks/{bank} banks.show ÔÇ║ BankController@sÔÇª
+  PUT|PATCH       api/banks/{bank} banks.update ÔÇ║ BankController@updÔÇª
+  DELETE          api/banks/{bank} banks.destroy ÔÇ║ BankController@destÔÇª
+  GET|POST|HEAD   api/broadcasting/auth Illuminate\Broadcasting ÔÇ║ BroadcastController@authÔÇª
+  GET|HEAD        api/business-metrics BusinessMetricsControlleÔÇª
+  POST            api/business/close BusinessController@ÔÇª
+  POST            api/business/open BusinessController@ÔÇª
+  GET|HEAD        api/business/status BusinessController@ÔÇª
+  GET|HEAD        api/business/today BusinessController@sÔÇª
+  GET|HEAD        api/cancellations OrderCancellationController@iÔÇª
+  PUT             api/cancellations/{cancellation}/review OrderCanÔÇª
+  GET|HEAD        api/cities citÔÇª
+  POST            api/cities citÔÇª
+  GET|HEAD        api/cities/{city} cities.show ÔÇ║ CityController@ÔÇª
+  PUT|PATCH       api/cities/{city} cities.update ÔÇ║ CityController@upÔÇª
+  DELETE          api/cities/{city} cities.destroy ÔÇ║ CityController@desÔÇª
+  GET|HEAD        api/commissions/admin/summary CommissionControlÔÇª
+  GET|HEAD        api/commissions/me/today CommissionControlÔÇª
+  GET|HEAD        api/company-accounts company-accounts.index ÔÇ║ CompanyAccountControlleÔÇª
+  POST            api/company-accounts company-accounts.store ÔÇ║ CompanyAccountControlleÔÇª
+  GET|HEAD        api/company-accounts/{company_account} company-accounts.show ÔÇ║ CompÔÇª
+  PUT|PATCH       api/company-accounts/{company_account} company-accounts.update ÔÇ║ CompanÔÇª
+  DELETE          api/company-accounts/{company_account} company-accounts.destroy ÔÇ║ CompanyÔÇª
+  GET|HEAD        api/config/flow 
+  GET|HEAD        api/currency CÔÇª
+  POST            api/currency CÔÇª
+  GET|HEAD        api/dashboard ÔÇª
+  GET|HEAD        api/deliverer/stock DelivererStockControllerÔÇª
+  POST            api/deliverer/stock/add-items DelivererStockConÔÇª
+  POST            api/deliverer/stock/assign DelivererStockContÔÇª
+  POST            api/deliverer/stock/close DelivererStockContÔÇª
+  POST            api/deliverer/stock/deliver DelivererStockController@rÔÇª
+  GET|HEAD        api/deliverer/stock/movements DelivererStockControÔÇª
+  POST            api/deliverer/stock/open DelivererStockContÔÇª
+  GET|HEAD        api/deliverer/stock/own DelivererStockControllÔÇª
+  POST            api/deliverer/stock/return DelivererStockContÔÇª
+  GET|HEAD        api/deliverer/stock/today DelivererStockControllÔÇª
+  GET|HEAD        api/deliverers/{id}/stock DelivererStockConÔÇª
+  POST            api/deliverers/{id}/stock/assign DelivererStoÔÇª
+  POST            api/deliverers/{id}/stock/return DelivererStoÔÇª
+  GET|HEAD        api/earnings/me EarningsController@ÔÇª
+  GET|HEAD        api/earnings/summary EarningsController@ÔÇª
+  POST            api/facebook/events FacebookEventController@senÔÇª
+  POST            api/forgot-password ForgotPasswordController@sendResetLinÔÇª
+  GET|HEAD        api/inventory ÔÇª
+  GET|HEAD        api/inventory-movements InventoryMovementControÔÇª
+  POST            api/inventory-movements/adjust InventoryMovementÔÇª
+  POST            api/inventory-movements/in InventoryMovementContrÔÇª
+  POST            api/inventory-movements/out InventoryMovementContrÔÇª
+  POST            api/inventory-movements/transfer InventoryMovementÔÇª
+  GET|HEAD        api/inventory-movements/{id} InventoryMovementÔÇª
+  GET|HEAD        api/inventory/my InventoryController@myStÔÇª
+  GET|HEAD        api/inventory/products ProductControlÔÇª
+  POST            api/inventory/products ProductControlÔÇª
+  PUT             api/inventory/products/{id} ProductConÔÇª
+  PUT             api/inventory/{product}/adjust InventoryÔÇª
+  POST            api/login AuthÔÇª
+  GET|HEAD        api/logout AutÔÇª
+  GET|HEAD        api/metrics MeÔÇª
+  POST            api/metrics/ad-spend MetricsController@storeÔÇª
+  POST            api/order/webhook/{shop_id?} ShopifyWebhookController@haÔÇª
+  GET|HEAD        api/order/{order}/products OrderController@getÔÇª
+  GET|HEAD        api/orders OrdÔÇª
+  POST            api/orders/assign-backlog AssignmentController@aÔÇª
+  POST            api/orders/auto-assign-cities OrderController@ÔÇª
+  POST            api/orders/auto-assign-logistics OrderController@autÔÇª
+  PUT             api/orders/delivery-review/{review}/approve OrderDeÔÇª
+  PUT             api/orders/delivery-review/{review}/reject OrderDeÔÇª
+  GET|HEAD        api/orders/lite/counts OrderController@lÔÇª
+  PUT             api/orders/location-review/{review}/approve OrderLoÔÇª
+  PUT             api/orders/location-review/{review}/reject OrderLoÔÇª
+  GET|HEAD        api/orders/pending-vueltos OrderController@getPÔÇª
+  PUT             api/orders/rejection-review/{review}/approve OrderReÔÇª
+  PUT             api/orders/rejection-review/{review}/reject OrderReÔÇª
+  GET|HEAD        api/orders/{id}/products OrderController@getOrÔÇª
+  GET|HEAD        api/orders/{order} OrderControllerÔÇª
+  GET|HEAD        api/orders/{order}/activities OrderControllerÔÇª
+  PUT             api/orders/{order}/assign-agency OrderContÔÇª
+  PUT             api/orders/{order}/assign-agent OrderContÔÇª
+  PUT             api/orders/{order}/assign-deliverer OrderDeliÔÇª
+  POST            api/orders/{order}/cancel OrderCancellationContÔÇª
+  PUT             api/orders/{order}/change OrderController@ÔÇª
+  GET|HEAD        api/orders/{order}/change-receipt OrderControlÔÇª
+  POST            api/orders/{order}/change-receipt OrderControllerÔÇª
+  POST            api/orders/{order}/create-return OrderContÔÇª
+  PUT             api/orders/{order}/location OrderControllÔÇª
+  PUT             api/orders/{order}/logistics OrderController@ÔÇª
+  PUT             api/orders/{order}/payment OrderController@ÔÇª
+  GET|HEAD        api/orders/{order}/payment-receipt OrderControlÔÇª
+  POST            api/orders/{order}/payment-receipt OrderControllerÔÇª
+  POST            api/orders/{order}/postpone OrderPostponementCoÔÇª
+  PUT             api/orders/{order}/reminder OrderControllÔÇª
+  PUT             api/orders/{order}/status OrderController@ÔÇª
+  PUT             api/orders/{order}/toggle-notification OrderControllerÔÇª
+  POST            api/orders/{order}/updates OrderUpdateConÔÇª
+  POST            api/orders/{order}/upsell OrderControllÔÇª
+  DELETE          api/orders/{order}/upsell/{itemId} OrderCoÔÇª
+  GET|HEAD        api/products PÔÇª
+  GET|HEAD        api/products/{product}/movements StockMovemÔÇª
+  PUT             api/products/{product}/stock ProductControlÔÇª
+  GET|HEAD        api/provinces ÔÇª
+  POST            api/provinces ÔÇª
+  GET|HEAD        api/provinces/{province} provinces.show ÔÇ║ ProvinceContÔÇª
+  PUT|PATCH       api/provinces/{province} provinces.update ÔÇ║ ProvinceControÔÇª
+  DELETE          api/provinces/{province} provinces.destroy ÔÇ║ ProvinceControlÔÇª
+  POST            api/register/agent AuthController@register_ÔÇª
+  POST            api/reset-password ForgotPasswordController@ÔÇª
+  POST            api/role RoleCÔÇª
+  GET|HEAD        api/roles RoleÔÇª
+  GET|HEAD        api/roster/today RosterController@toÔÇª
+  POST            api/roster/today RosterController@setToÔÇª
+  GET|HEAD        api/settings/business-hours SettingsController@geÔÇª
+  PUT             api/settings/business-hours SettingsController@updatÔÇª
+  POST            api/shopify/orders/create ShopifyWebhookController@ÔÇª
+  GET|HEAD        api/shops ShopÔÇª
+  POST            api/shops ShopÔÇª
+  PUT             api/shops/{shop} ShopController@updÔÇª
+  DELETE          api/shops/{shop} ShopController@destÔÇª
+  POST            api/shops/{shop}/assign-sellers ShopControÔÇª
+  POST            api/status StaÔÇª
+  GET|HEAD        api/statuses SÔÇª
+  POST            api/stock/adjust StockMovementController@adjÔÇª
+  GET|HEAD        api/stock/movements StockMovementControllerÔÇª
+  POST            api/stock/movements StockMovementControllerÔÇª
+  POST            api/test/notifications TestNotificationControlleÔÇª
+  POST            api/test/register AuthController@testRegiÔÇª
+  GET|HEAD        api/user/data ÔÇª
+  PUT             api/user/{user} AuthController@edit_user_daÔÇª
+  PUT             api/user/{user}/change/color AuthControÔÇª
+  PUT             api/user/{user}/change/password AuthControÔÇª
+  PUT             api/user/{user}/change/theme AuthControÔÇª
+  GET|HEAD        api/users AuthÔÇª
+  POST            api/users AuthÔÇª
+  GET|HEAD        api/users/agents AuthController@ageÔÇª
+  GET|HEAD        api/users/deliverers AuthController@delÔÇª
+  POST            api/users/deliverers AuthController@storeDeÔÇª
+  PUT             api/users/deliverers/{user} AuthController@uÔÇª
+  DELETE          api/users/deliverers/{user} AuthController@deÔÇª
+  GET|HEAD        api/users/role/{role} AuthController@useÔÇª
+  GET|HEAD        api/warehouse-types WarehouseController@geÔÇª
+  GET|HEAD        api/warehouses warehouses.index ÔÇ║ WarehouseController@indeÔÇª
+  POST            api/warehouses warehouses.store ÔÇ║ WarehouseController@storÔÇª
+  GET|HEAD        api/warehouses/{warehouse} warehouses.show ÔÇ║ WarehouseCoÔÇª
+  PUT|PATCH       api/warehouses/{warehouse} warehouses.update ÔÇ║ WarehouseContÔÇª
+  DELETE          api/warehouses/{warehouse} warehouses.destroy ÔÇ║ WarehouseContrÔÇª
+  GET|HEAD        api/warehouses/{warehouse}/inventory WarehoÔÇª
+  GET|POST|HEAD   broadcasting/auth Illuminate\Broadcasting ÔÇ║ BroadcastController@authentiÔÇª
+  GET|HEAD        sanctum/csrf-cookie sanctum.csrf-cookie ÔÇ║ Laravel\Sanctum ÔÇ║ CsrfCookieControlleÔÇª
+  GET|HEAD        storage/{path} storage.locaÔÇª
+  GET|HEAD        up ............ 
+
+             Showing [153] routes
+

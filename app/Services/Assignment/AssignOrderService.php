@@ -156,6 +156,12 @@ class AssignOrderService
                     'meta'        => ['reason' => 'backlog'],
                 ]);
 
+                // 🔔 Trigger Notification
+                $agent = \App\Models\User::find($agentId);
+                if ($agent) {
+                    $agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Se te ha asignado la orden #{$ord->name}"));
+                }
+
                 $count++;
             });
         }

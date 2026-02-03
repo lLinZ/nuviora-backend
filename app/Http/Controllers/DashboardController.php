@@ -362,27 +362,34 @@ class DashboardController extends Controller
     {
         $statusDeliveredId = Status::where('description', '=', 'Entregado')->value('id');
         
+        $statusCancelledId = Status::where('description', '=', 'Cancelado')->value('id');
+        
+        // 'Asignadas Hoy': Órdenes que llegaron a la agencia o se movieron siendo de la agencia HOY.
+        // No necessarily created_at, but we can stick to updated_at for activity tracking or created_at if strictly "New orders for agency".
+        // Usually, 'Asignadas' implies they entered the agency's bucket today.
+        // Let's use `updated_at` today AND agency_id match.
         $assigned = Order::where('agency_id', '=', $user->id)
-            ->whereDate('created_at', $date)
+            ->whereDate('updated_at', $date) 
             ->count();
 
         $deliveredCount = Order::where('agency_id', '=', $user->id)
             ->where('status_id', '=', $statusDeliveredId)
-            ->whereDate('processed_at', $date)
+            ->whereDate('updated_at', $date) // Changed from processed_at to updated_at just to be safe/consistent with filtering
             ->count();
 
         $totalSales = Order::where('agency_id', '=', $user->id)
             ->where('status_id', '=', $statusDeliveredId)
-            ->whereDate('processed_at', $date)
+            ->whereDate('updated_at', $date)
             ->sum('current_total_price') ?? 0;
 
-        // Pending Route: Orders assigned to this agency but not yet "En ruta" or "Entregado" or "Cancelado"
+        // Pending Route: Orders assigned to this agency currently in statuses that imply "Waiting for route/delivery"
+        // Statuses: 'Asignar a agencia', 'Asignar repartidor', 'Novedades', 'Novedad Solucionada'
+        // NOT 'En ruta' (that's already routed), NOT 'Entregado', NOT 'Cancelado'.
         $pendingStatuses = Status::whereIn('description', [
-            'Asignado a repartidor',
-            'Confirmado',
-            'Esperando Ubicacion',
-            'Programado para mas tarde',
-            'Reprogramado'
+            'Asignar a agencia', 
+            'Asignar repartidor', 
+            'Novedades', 
+            'Novedad Solucionada'
         ])->pluck('id')->toArray();
 
         $pendingRoute = Order::where('agency_id', '=', $user->id)

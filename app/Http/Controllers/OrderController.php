@@ -17,6 +17,9 @@ use Illuminate\Support\Facades\Storage;
 use App\Models\InventoryMovement;
 use App\Models\Warehouse;
 use App\Notifications\OrderAssignedNotification;
+use App\Notifications\OrderNoveltyNotification;
+use App\Notifications\OrderNoveltyResolvedNotification;
+use App\Notifications\OrderScheduledNotification;
 
 class OrderController extends Controller
 {
@@ -74,6 +77,7 @@ class OrderController extends Controller
         $count = 0;
 
         foreach ($orders as $order) {
+            /** @var \App\Models\Order $order */
             $cityName = $order->client->city ?? $order->client->province;
             if ($cityName) {
                 // Busqueda flexible
@@ -112,6 +116,8 @@ class OrderController extends Controller
             'agency', // 👈 incluimos agencia
             'postponements.user', // 👈 incluimos historial de reprogramación
             'shop', // 👈 incluimos tienda
+            'returnOrders', // 👈 devoluciones creadas desde esta orden
+            'parentOrder', // 👈 orden padre si es devolución
         ])->findOrFail($id);
 
         // 📦 CHECK STOCK AVAILABILITY
@@ -161,6 +167,7 @@ class OrderController extends Controller
                 'reminder_at'          => $order->reminder_at,
                 'binance_rate'         => \App\Models\Setting::where('key', '=', 'rate_binance_usd')->first()?->value ?? 0,
                 'bcv_rate'             => \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0,
+                'eur_rate'             => \App\Models\Setting::where('key', '=', 'rate_bcv_eur')->first()?->value ?? 0,
                 'agency'               => $order->agency,
                 'has_stock_warning'    => $hasStockWarning, // 👈 New flag
                 'novedad_type'         => $order->novedad_type,
@@ -178,6 +185,11 @@ class OrderController extends Controller
                 'change_payment_details' => $order->change_payment_details,
                 'change_receipt'        => $order->change_receipt,
                 'postponements'         => $order->postponements,
+                'is_return'             => $order->is_return,
+                'is_exchange'           => $order->is_exchange,
+                'parent_order_id'       => $order->parent_order_id,
+                'parent_order'          => $order->parentOrder,
+                'return_orders'         => $order->returnOrders,
             ]
         ]);
     }
@@ -233,6 +245,7 @@ class OrderController extends Controller
             $statusCambioUbicacion = Status::where('description', '=', 'Cambio de ubicacion')->first();
 
             // 🛑 VALIDACIÓN DE STOCK ANTES DE PASAR A "Entregado" o "En ruta"
+            // Return/exchange orders also require stock validation since they deduct from inventory
             if (($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) || 
                 ($statusEnRuta && (int) $statusEnRuta->id === (int) $request->status_id)) {
                 
@@ -251,7 +264,8 @@ class OrderController extends Controller
             }
 
         // 1. Validar que existe comprobante de pago si se intenta cambiar a Entregado
-        if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) {
+        // SKIP for return/exchange orders - they don't require payments
+        if ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id && !($order->is_return || $order->is_exchange)) {
             if (empty($order->payment_receipt)) {
                 return response()->json([
                     'status' => false,
@@ -405,6 +419,45 @@ class OrderController extends Controller
             $order->agent_id = null;
         }
 
+        // 🔔 NOTIFICACIONES Y TIMER
+        $statusNovedad = Status::where('description', '=', 'Novedades')->first();
+        $statusNovedadSoluciodada = Status::where('description', '=', 'Novedad Solucionada')->first();
+        $statusProgramadoMasTarde = Status::where('description', '=', 'Programado para mas tarde')->first();
+        $statusAsignarAgencia = Status::where('description', '=', 'Asignar a agencia')->first();
+
+        // Si cambia a Novedades
+        if ($statusNovedad && (int)$statusNovedad->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusNovedad->id) {
+            // Notificar a Admins/Gerentes
+            $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+            foreach ($admins as $admin) {
+                $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden #{$order->name}"));
+            }
+        }
+
+        // Si cambia a Novedad Solucionada
+        if ($statusNovedadSoluciodada && (int)$statusNovedadSoluciodada->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusNovedadSoluciodada->id) {
+            if ($order->agent) {
+                $order->agent->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+            }
+        }
+
+        // Si cambia a Programado para más tarde
+        if ($statusProgramadoMasTarde && (int)$statusProgramadoMasTarde->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusProgramadoMasTarde->id) {
+            // Notificar a Admins/Gerentes
+            $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+            foreach ($admins as $admin) {
+                $admin->notify(new OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
+            }
+        }
+
+        // ⏱️ TIMER: Si entra en "Asignar a agencia" o "En ruta", marcamos el inicio del cronómetro de 45 min
+        if (($statusAsignarAgencia && (int)$statusAsignarAgencia->id === (int)$request->status_id) || 
+            ($statusEnRuta && (int)$statusEnRuta->id === (int)$request->status_id)) {
+            if (!$order->received_at) {
+                $order->received_at = now();
+            }
+        }
+
         // Novedades
         if ($request->filled('novedad_type')) {
             $order->novedad_type = $request->novedad_type;
@@ -456,7 +509,11 @@ class OrderController extends Controller
             if ($oldStatusId !== $order->status_id) {
                 $order->processed_at = now();
                 $order->save();
-                $commissionService->generateForDeliveredOrder($order);
+                
+                // 🔄 Skip commissions for return/exchange orders - they don't generate revenue
+                if (!$order->is_return && !$order->is_exchange) {
+                    $commissionService->generateForDeliveredOrder($order);
+                }
 
                 foreach ($order->products as $op) {
                     $deducted = false;
@@ -490,6 +547,11 @@ class OrderController extends Controller
                                 $inv->decrement('quantity', $op->quantity);
                                 
                                 // 📝 REGISTRAR MOVIMIENTO EN EL HISTORIAL
+                                // Use different note for return/exchange orders
+                                $movementNote = ($order->is_return || $order->is_exchange) 
+                                    ? "Devolución/Cambio entregado - Orden #{$order->name}" 
+                                    : "Venta efectuada - Orden #{$order->name}";
+                                    
                                 InventoryMovement::create([
                                     'product_id' => $op->product_id,
                                     'from_warehouse_id' => $warehouseId,
@@ -499,7 +561,7 @@ class OrderController extends Controller
                                     'reference_type' => 'Order',
                                     'reference_id' => $order->id,
                                     'user_id' => Auth::id() ?? 1,
-                                    'notes' => "Venta efectuada - Orden #{$order->name}",
+                                    'notes' => $movementNote,
                                 ]);
                             }
                         }
@@ -589,7 +651,7 @@ class OrderController extends Controller
             ['order_id' => $orderData['id']],
             [
                 'name'                => $orderData['name'],
-                'current_total_price' => $orderData['current_total_price'],
+                'current_total_price' => round($orderData['current_total_price']),
                 'order_number'        => $orderData['order_number'],
                 'processed_at'        => $orderData['processed_at'] ?? null,
                 'currency'            => $orderData['currency'],
@@ -617,7 +679,7 @@ class OrderController extends Controller
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
                     'name'       => $item['name'] ?? null,
-                    'price'      => $item['price'],
+                    'price'      => round($item['price']),
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
                 ]);
@@ -629,7 +691,7 @@ class OrderController extends Controller
                     'variant_id' => $item['variant_id'] ?? null,
                     'title'      => $productTitle,
                     'name'       => $item['name'] ?? null,
-                    'price'      => $item['price'],
+                    'price'      => round($item['price']),
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
                 ]);
@@ -646,7 +708,7 @@ class OrderController extends Controller
                     'product_number' => $product->product_id,
                     'title'          => $item['title'],
                     'name'           => $item['name'] ?? null,
-                    'price'          => $item['price'],
+                    'price'          => round($item['price']),
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl,
                 ]
@@ -677,8 +739,12 @@ class OrderController extends Controller
         try {
             if ($user->role?->description == 'Vendedor' || $user->role?->description == 'Gerente' || $user->role?->description == 'Admin') {
                 $oldLocation = $new_order->location;
-                $new_order->location = $location_url;
-                $new_order->save();
+                
+                // Solo actualizar si viene un valor real, para evitar borrados accidentales
+                if (!empty($request->location)) {
+                    $new_order->location = $request->location;
+                    $new_order->save();
+                }
 
                 // Manual log if observer missed it or for double safety
                 if ($oldLocation !== $location_url) {
@@ -713,9 +779,9 @@ class OrderController extends Controller
         $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
 
         if ($role === 'Vendedor') {
-            // Un Vendedor SOLO ve lo que tiene asignado y que se haya movido HOY.
-            $query->where('agent_id', $user->id)
-                  ->whereDate('updated_at', now());
+            // Un Vendedor SOLO ve lo que tiene asignado (Historial completo, no solo hoy)
+            $query->where('agent_id', $user->id);
+            //      ->whereDate('updated_at', now()); // Comentado para persistencia de tareas
         } elseif ($role === 'Repartidor') {
             $query->where('deliverer_id', $user->id)
                   ->whereDate('updated_at', now());
@@ -739,10 +805,10 @@ class OrderController extends Controller
             $query->where('city_id', '=', $request->city_id);
         }
         if ($request->filled('date_from')) {
-            $query->whereDate('created_at', '>=', $request->date_from);
+            $query->whereDate('updated_at', '>=', $request->date_from);
         }
         if ($request->filled('date_to')) {
-            $query->whereDate('created_at', '<=', $request->date_to);
+            $query->whereDate('updated_at', '<=', $request->date_to);
         }
         if ($request->filled('status')) {
              $statusDesc = $request->status;
@@ -871,13 +937,24 @@ class OrderController extends Controller
     }
     public function addUpsell(Request $request, Order $order)
     {
-        $request->validate([
+        // For return orders, price validation is optional (always 0)
+        $rules = [
             'product_id' => 'required|exists:products,id',
             'quantity' => 'required|integer|min:1',
-            'price' => 'required|numeric|min:0',
-        ]);
+        ];
+        
+        // Only require price for regular orders (not returns/exchanges)
+        if (!($order->is_return || $order->is_exchange)) {
+            $rules['price'] = 'required|numeric|min:0';
+        }
+        
+        $request->validate($rules);
 
         $product = Product::findOrFail($request->product_id);
+        
+        // For return/exchange orders, price is always 0 and is_upsell is false
+        $isReturnOrExchange = ($order->is_return || $order->is_exchange);
+        $productPrice = $isReturnOrExchange ? 0 : $request->price;
 
         OrderProduct::create([
             'order_id' => $order->id,
@@ -885,26 +962,28 @@ class OrderController extends Controller
             'product_number' => $product->product_id,
             'title' => $product->title,
             'name' => $product->name,
-            'price' => $request->price,
+            'price' => $productPrice,
             'quantity' => $request->quantity,
             'image' => $product->image,
-            'is_upsell' => true,
-            'upsell_user_id' => auth()->id(),
+            'is_upsell' => !$isReturnOrExchange, // Not an upsell for return/exchange orders
+            'upsell_user_id' => $isReturnOrExchange ? null : auth()->id(),
         ]);
 
-        // Update total
-        $upsellAmount = $request->price * $request->quantity;
-        $order->current_total_price += $upsellAmount;
-        $order->save();
+        // Only update total for non-return/exchange orders
+        if (!$isReturnOrExchange) {
+            $upsellAmount = $request->price * $request->quantity;
+            $order->current_total_price += $upsellAmount;
+            $order->save();
 
-        // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones de inmediato
-        if ($order->status && $order->status->description === 'Entregado') {
-            app(CommissionService::class)->generateForDeliveredOrder($order);
+            // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones de inmediato
+            if ($order->status && $order->status->description === 'Entregado') {
+                app(CommissionService::class)->generateForDeliveredOrder($order);
+            }
         }
 
         return response()->json([
             'status' => true,
-            'message' => 'Upsell agregado correctamente',
+            'message' => $isReturnOrExchange ? 'Producto agregado a la devolución/cambio' : 'Upsell agregado correctamente',
             'order' => $order->load('products.product', 'client', 'status', 'agent')
         ]);
     }
@@ -913,25 +992,29 @@ class OrderController extends Controller
     {
         $item = OrderProduct::where('order_id', '=', $order->id)->where('id', '=', $itemId)->firstOrFail();
 
-        if (!$item->is_upsell) {
+        // For return/exchange orders, allow deleting any product (not just upsells)
+        // For regular orders, only allow deleting upsells
+        if (!($order->is_return || $order->is_exchange) && !$item->is_upsell) {
             return response()->json(['status' => false, 'message' => 'No es un upsell'], 400);
         }
 
         $deduction = $item->price * $item->quantity;
         $item->delete();
 
-        // Update total
-        $order->current_total_price -= $deduction;
-        $order->save();
+        // Only update total for non-return/exchange orders (they always have $0 total)
+        if (!($order->is_return || $order->is_exchange)) {
+            $order->current_total_price -= $deduction;
+            $order->save();
 
-        // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell del reporte)
-        if ($order->status && $order->status->description === 'Entregado') {
-            app(CommissionService::class)->generateForDeliveredOrder($order);
+            // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell del reporte)
+            if ($order->status && $order->status->description === 'Entregado') {
+                app(CommissionService::class)->generateForDeliveredOrder($order);
+            }
         }
 
         return response()->json([
             'status' => true,
-            'message' => 'Upsell eliminado correctamente',
+            'message' => ($order->is_return || $order->is_exchange) ? 'Producto eliminado de la devolución/cambio' : 'Upsell eliminado correctamente',
             'order' => $order->load('products.product', 'client', 'status', 'agent')
         ]);
     }
@@ -1238,6 +1321,7 @@ class OrderController extends Controller
         $cities = \App\Models\City::whereNotNull('agency_id')->get()->keyBy('id');
 
         foreach ($orders as $order) {
+            /** @var \App\Models\Order $order */
             // Intentar obtener city_id de la orden, o desde el cliente
             $cityId = $order->city_id;
             
@@ -1318,28 +1402,137 @@ class OrderController extends Controller
      */
     public function liteCounts(Request $request)
     {
-        $user = Auth::user();
-        $query = Order::query();
+        try {
+            $user = Auth::user();
+            $query = Order::query();
 
-        // 1. Filtro Usuario
-        if ($user->role?->description === 'Vendedor') {
-            $query->where('agent_id', $user->id);
+            // 1. Filtro Usuario
+            if ($user && $user->role && $user->role->description === 'Vendedor') {
+                $query->where('orders.agent_id', $user->id);
+            } else {
+                $query->whereDate('orders.updated_at', now());
+            }
+
+            // 3. Agrupar y contar por descripcion del status
+            $counts = $query->join('statuses', 'orders.status_id', '=', 'statuses.id')
+                ->select(\DB::raw('statuses.description as status_name'), \DB::raw('count(*) as total'))
+                ->groupBy('statuses.description')
+                ->pluck('total', 'status_name');
+
+            return response()->json([
+                'status' => true,
+                'counts' => $counts
+            ]);
+        } catch (\Exception $e) {
+            \Log::error("Error in liteCounts: " . $e->getMessage());
+            return response()->json(['status' => false, 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Create a return order based on an existing order.
+     * Rules:
+     * - is_return = true
+     * - name appends "(DEVOLUCION)"
+     * - current_total_price = 0 (client doesn't pay)
+     * - agent_id = same as original
+     * - status = "Asignado a agencia"
+     * - agency_id = auto-assigned by city
+     * - Products are cloned from original
+     */
+    public function createReturn(Request $request, Order $order)
+    {
+        $user = Auth::user();
+        $type = $request->get('type', 'devolucion'); // 'devolucion' or 'cambio'
+
+        // Only Admin, Gerente, or Vendedor can create returns/exchanges
+        if (!in_array($user->role?->description, ['Admin', 'Gerente', 'Vendedor'])) {
+            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
         }
 
-        // 2. Filtro Fecha (Hoy)
-        $todayStart = now()->startOfDay();
-        $todayEnd = now()->endOfDay();
-        $query->whereBetween('processed_at', [$todayStart, $todayEnd]);
+        // Don't allow creating from a return/exchange
+        if ($order->is_return || $order->is_exchange) {
+            return response()->json(['status' => false, 'message' => 'No se puede crear una devolución/cambio de otra devolución/cambio'], 422);
+        }
 
-        // 3. Agrupar y contar
-        $counts = $query->join('statuses', 'orders.status_id', '=', 'statuses.id')
-            ->selectRaw('statuses.description as status_name, count(*) as total')
-            ->groupBy('statuses.description')
-            ->pluck('total', 'status_name');
+        // Only allow returns for delivered orders
+        if ($order->status?->description !== 'Entregado') {
+            return response()->json(['status' => false, 'message' => 'Solo se pueden crear devoluciones de órdenes entregadas'], 422);
+        }
 
+        // Find status "Asignar a agencia"
+        $assignedStatus = Status::where('description', 'Asignar a agencia')->first();
+        if (!$assignedStatus) {
+            return response()->json(['status' => false, 'message' => 'Status "Asignar a agencia" no encontrado'], 500);
+        }
+
+        // Find agency by city
+        $agencyId = null;
+        if ($order->city_id) {
+            $city = City::find($order->city_id);
+            if ($city && $city->agency_id) {
+                $agencyId = $city->agency_id;
+            }
+        }
+
+        // Create return/exchange order
+        // Generate unique numeric IDs (9 billion+ to distinguish from Shopify)
+        $returnOrderId = 9000000000 + $order->id;
+        $returnOrderNumber = 9000000000 + $order->id;
+        
+        $suffix = ($type === 'cambio') ? ' (CAMBIO)' : ' (DEVOLUCION)';
+        
+        $returnOrder = Order::create([
+            'order_id' => $returnOrderId,
+            'order_number' => $returnOrderNumber,
+            'name' => $order->name . $suffix,
+            'current_total_price' => 0, // Client doesn't pay
+            'currency' => $order->currency,
+            'processed_at' => now(),
+            'client_id' => $order->client_id,
+            'status_id' => $assignedStatus->id,
+            'agent_id' => $order->agent_id,
+            'city_id' => $order->city_id,
+            'province_id' => $order->province_id,
+            'agency_id' => $agencyId,
+            'shop_id' => $order->shop_id,
+            'location' => $order->location, // Copy delivery address/location link
+            'is_return' => ($type === 'devolucion'),
+            'is_exchange' => ($type === 'cambio'),
+            'parent_order_id' => $order->id,
+        ]);
+
+        // Clone products from original order
+        foreach ($order->products as $product) {
+            OrderProduct::create([
+                'order_id' => $returnOrder->id,
+                'product_id' => $product->product_id,
+                'title' => $product->title,
+                'price' => 0, // No cost for return
+                'quantity' => $product->quantity,
+                'image' => $product->image,
+                'is_upsell' => false,
+            ]);
+        }
+
+        // Log activity
+        $labelLabel = ($type === 'cambio') ? 'cambio' : 'devolución';
+        \App\Models\OrderActivityLog::create([
+            'order_id' => $returnOrder->id,
+            'user_id' => $user->id,
+            'action' => 'order_created',
+            'description' => "Orden de {$labelLabel} creada desde orden #{$order->name}",
+            'properties' => [
+                'parent_order_id' => $order->id,
+                'created_by' => $user->names ?? $user->email,
+            ]
+        ]);
+
+        $successLabel = ($type === 'cambio') ? 'cambio' : 'devolución';
         return response()->json([
             'status' => true,
-            'counts' => $counts
+            'message' => "Orden de {$successLabel} creada exitosamente",
+            'order' => $returnOrder->fresh(['client', 'status', 'products', 'agency']),
         ]);
     }
 }

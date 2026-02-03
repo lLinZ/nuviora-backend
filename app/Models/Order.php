@@ -139,6 +139,9 @@ class Order extends Model
         'change_method_agency',
         'novedad_resolution',
         'change_rate',
+        'is_return',
+        'is_exchange',
+        'parent_order_id',
         // 'change_payment_details', // Moved to extra table
         // 'change_receipt', // Moved to extra table
     ];
@@ -149,6 +152,22 @@ class Order extends Model
     public function changeExtra()
     {
         return $this->hasOne(OrderChangeExtra::class);
+    }
+
+    /**
+     * Get the parent order (if this is a return)
+     */
+    public function parentOrder()
+    {
+        return $this->belongsTo(Order::class, 'parent_order_id');
+    }
+
+    /**
+     * Get return orders created from this order
+     */
+    public function returnOrders()
+    {
+        return $this->hasMany(Order::class, 'parent_order_id');
     }
     
     // Virtual attributes

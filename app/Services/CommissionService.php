@@ -14,6 +14,11 @@ class CommissionService
      */
     public function generateForDeliveredOrder(Order $order): void
     {
+        // Skip commission generation for return orders
+        if ($order->is_return) {
+            return;
+        }
+
         $rate = 1;
         $currency = 'USD';
         $earningDate = now()->toDateString(); 
@@ -94,6 +99,11 @@ class CommissionService
      */
     public function generateForConfirmedOrder(Order $order): void
     {
+        // Skip commission generation for return orders
+        if ($order->is_return) {
+            return;
+        }
+
         $currency = 'USD';
         $rate = 1;
         $earningDate = now()->toDateString();

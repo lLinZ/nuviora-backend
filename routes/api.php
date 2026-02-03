@@ -266,6 +266,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/rejection-review/{review}/reject', [\App\Http\Controllers\OrderRejectionReviewController::class, 'reject']);
 
     Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store']);
+    Route::post('/orders/{order}/create-return', [OrderController::class, 'createReturn']);
 
     /**---------------------
      * WAREHOUSES
@@ -319,4 +320,7 @@ Route::middleware('auth:sanctum')->group(function () {
      * COMPANY ACCOUNTS
      * ---------------------**/
     Route::apiResource('company-accounts', CompanyAccountController::class);
+
+    // TEST NOTIFICATIONS
+    Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);
 });

@@ -127,6 +127,9 @@ class EarningsService
      */
     private function calculateAgencySettlement(Carbon $from, Carbon $to): Collection
     {
+        $rateBinanceNow = (float) (Setting::get('rate_binance_usd', 1) ?? 1);
+        $rateEuroNow = (float) (Setting::get('rate_bcv_eur', 1) ?? 1);
+
         // Comparte de Agencias: Tomar todas las órdenes con agencia asignada en el periodo
         $orders = Order::with(['payments', 'agency'])
             ->whereNotNull('agency_id')
@@ -137,45 +140,42 @@ class EarningsService
         $statusTransitId = \App\Models\Status::where('description', 'En ruta')->value('id');
 
         return $orders->groupBy('agency_id')
-            ->map(function (Collection $agencyOrders) use ($statusDeliveredId, $statusTransitId) {
+            ->map(function (Collection $agencyOrders) use ($statusDeliveredId, $statusTransitId, $rateBinanceNow, $rateEuroNow) {
                 $agency = $agencyOrders->first()->agency;
                 if (!$agency) return null;
 
-                $details = $agencyOrders->map(function (Order $o) {
-                    $cashUSD = $o->payments->where('method', 'DOLARES_EFECTIVO')->sum('amount');
-                    $cashVES = $o->payments->where('method', 'BOLIVARES_EFECTIVO')->sum('amount');
+                $details = $agencyOrders->map(function (Order $o) use ($rateBinanceNow, $rateEuroNow) {
+                    $cashUSD = (float) $o->payments->where('method', 'DOLARES_EFECTIVO')->sum('amount');
                     
+                    // 1. INGRESOS (Payments in VES) -> Siempre Tasa Binance
+                    $cashVES = (float) $o->payments
+                        ->filter(fn($p) => $p->method === 'BOLIVARES_EFECTIVO')
+                        ->map(fn($p) => (float)$p->amount * ($p->binance_usd_rate ?: $rateBinanceNow))
+                        ->sum();
+                    
+                    // 2. VUELTOS (Change in VES) -> Siempre Tasa Euro
                     $changeUSD = ($o->change_method_agency === 'DOLARES_EFECTIVO') ? (float) $o->change_amount_agency : 0;
-                    $changeVES = ($o->change_method_agency === 'BOLIVARES_EFECTIVO') ? (float) $o->change_amount_agency : 0;
+                    $changeVES_usd_equivalent = ($o->change_method_agency === 'BOLIVARES_EFECTIVO') ? (float) $o->change_amount_agency : 0;
 
-                    // Si solo marcó "agency" pero no puso monto exacto, usamos el change_amount total (fallback logic similar a orders_with_change)
+                    // Fallback para montos no especificados
                     if ($o->change_covered_by === 'agency' && $o->change_amount_agency <= 0) {
                         if ($o->change_method_agency === 'DOLARES_EFECTIVO') $changeUSD = (float) $o->change_amount;
-                        if ($o->change_method_agency === 'BOLIVARES_EFECTIVO') $changeVES = (float) $o->change_amount;
+                        if ($o->change_method_agency === 'BOLIVARES_EFECTIVO') $changeVES_usd_equivalent = (float) $o->change_amount;
                     }
+
+                    // Tasa Euro para el vuelto
+                    $rateEuroForChange = $o->payments->firstWhere('eur_rate', '>', 0)?->eur_rate 
+                                        ?: $o->change_rate // fallback to order field if exists
+                                        ?: $rateEuroNow;
+
+                    $changeVES = $changeVES_usd_equivalent * $rateEuroForChange;
 
                     $amtCompany = (float) $o->change_amount_company;
                     $methodCompany = $o->change_method_company;
 
-                    // Fallback si marcó empresa pero no especificó monto
                     if ($o->change_covered_by === 'company' && $amtCompany <= 0) {
                         $amtCompany = (float) $o->change_amount;
-                        $methodCompany = $o->change_method_company ?: $o->change_method_agency; // Intento de rescatar método si falta
-                    }
-
-                    // Intentar detectar la tasa de cambio usada en la orden (cobro o vuelto)
-                    $hasVesPayment = $o->payments->contains(fn($p) => str_contains(strtoupper($p->method), 'BOLIVARES'));
-                    $hasVesChange = str_contains(strtoupper($o->change_method_company ?? ''), 'BOLIVARES') || str_contains(strtoupper($o->change_method_agency ?? ''), 'BOLIVARES');
-                    
-                    $rateUsed = 0;
-                    if ($hasVesPayment || $hasVesChange) {
-                        $vesPayment = $o->payments->filter(fn($p) => str_contains(strtoupper($p->method), 'BOLIVARES'))->first();
-                        $rateUsed = $vesPayment?->rate 
-                                    ?: $vesPayment?->usd_rate 
-                                    ?: $o->change_rate 
-                                    ?: $o->exchange_rate 
-                                    ?: (float) \App\Models\Setting::get('rate_binance_usd', 0)
-                                    ?: (float) \App\Models\Setting::get('rate_bcv_usd', 0);
+                        $methodCompany = $o->change_method_company ?: $o->change_method_agency; 
                     }
 
                     return [
@@ -188,7 +188,8 @@ class EarningsService
                         'change_ves'     => $changeVES,
                         'net_usd'        => $cashUSD - $changeUSD,
                         'net_ves'        => $cashVES - $changeVES,
-                        'rate_ves'       => $rateUsed > 0 ? (float) $rateUsed : null,
+                        'rate_binance'   => $o->payments->firstWhere('binance_usd_rate', '>', 0)?->binance_usd_rate ?: $rateBinanceNow,
+                        'rate_euro'      => $rateEuroForChange,
                         'change_company' => $amtCompany,
                         'method_company' => $methodCompany ?? 'N/A',
                         'updated_at'     => $o->updated_at->toDateTimeString(),

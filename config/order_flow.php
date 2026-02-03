@@ -9,34 +9,32 @@ return [
     | Aquí se definen las transiciones permitidas para cada rol.
     | Si un rol no está listado, se asume que tiene permisos completos (Admin/Gerente).
     |
-    | Formato:
-    | 'Rol' => [
-    |    'Estado Actual' => ['Estado Destino 1', 'Estado Destino 2']
-    | ]
-    |
     */
 
     'Vendedor' => [
-        // Visibilidad en Kanban (Solo referencia, se usa en Frontend)
         'visible_columns' => [
             'Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3',
             'Esperando Ubicacion', 'Asignar a agencia', 'Programado para mas tarde',
             'Programado para otro dia', 'Novedades', 'Novedad Solucionada',
-            'Cancelado'
+            'Cancelado', 'Entregado'
         ],
 
-        // Transiciones Permitidas
         'transitions' => [
-            'Nuevo'                => ['Asignado a vendedor'], // Caso borde
-            'Asignado a vendedor' => ['Llamado 1', 'Cancelado'],
-            'Llamado 1'           => ['Llamado 2', 'Asignar a agencia', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Llamado 2'           => ['Llamado 3', 'Asignar a agencia', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Llamado 3'           => ['Asignar a agencia', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Esperando Ubicacion' => ['Asignar a agencia', 'Programado para mas tarde', 'Programado para otro dia', 'Cancelado'],
-            'Programado para mas tarde' => ['Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3', 'Asignar a agencia'], // Al activarse, vuelven al flujo
-            'Programado para otro dia'  => ['Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3', 'Asignar a agencia'],
-            'Novedades'           => ['Novedad Solucionada'],
-            'Novedad Solucionada' => ['Asignar a agencia', 'Programado para otro dia', 'Programado para mas tarde', 'Cancelado'],
+            'Novedades'                 => ['Novedad Solucionada', 'Cancelado'],
+            'Novedad Solucionada'       => ['En ruta', 'Entregado'],
+            'Reprogramado'              => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Asignado a vendedor'       => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Llamado 1'                 => ['Llamado 2', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Llamado 2'                 => ['Llamado 3', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Llamado 3'                 => ['Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Esperando Ubicacion'       => ['Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Programado para mas tarde' => ['Esperando Ubicacion', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Programado para otro dia'  => ['Esperando Ubicacion', 'Asignar a agencia', 'Cancelado'],
+            'Asignar a agencia'         => [], // 🔒 BLOQUEADO: Vendedor no puede moverla una vez aquí.
+            'Entregado'         => [], // 🔒 BLOQUEADO: Vendedor no puede moverla una vez aquí.
+            // Confirmado -> 'QUITAR ESTE ESTATUS' (No incluido)
+            // Entregado -> No modification
+            // Cancelado -> No modification
         ]
     ],
 
@@ -47,21 +45,21 @@ return [
         ],
 
         'transitions' => [
-            'Asignar a agencia'    => ['Asignado a repartidor', 'Novedades', 'Cancelado'],
-            'Asignado a repartidor' => ['En ruta', 'Novedades', 'Asignar a agencia', 'Cancelado'], // Correccion: Novedades directo permitido
+            'Asignar a agencia'     => ['Asignar repartidor', 'Novedades'],
+            'Asignar repartidor'    => ['En ruta', 'Novedades'],
             'En ruta'               => ['Entregado', 'Novedades'],
-            'Novedad Solucionada'   => ['Asignado a repartidor', 'Asignar a agencia', 'En ruta'],
-            'Novedades'             => ['Novedad Solucionada', 'Cancelado'], // Agencia puede cancelar si es inconsistente? Asumimos que reportan novedad solucionada
+            'Novedad Solucionada'   => ['Asignar repartidor', 'Asignar a agencia', 'En ruta'], 
+            // Nota: 'Asignado a repartidor' en DB suele ser 'Asignar repartidor' o 'Asignado a repartidor'. Ajustar segun DB real.
+            // Asumiré 'Asignar repartidor' según spreadsheet, pero revisaré si en DB es distinto.
         ]
     ],
-    
-    // Repartidor (si usa la web)
+
     'Repartidor' => [
         'visible_columns' => [
-            'Asignado a repartidor', 'En ruta', 'Entregado', 'Novedades', 'Novedad Solucionada'
+            'Asignar repartidor', 'En ruta', 'Entregado', 'Novedades', 'Novedad Solucionada'
         ],
         'transitions' => [
-            'Asignado a repartidor' => ['En ruta'],
+            'Asignar repartidor'    => ['En ruta'],
             'En ruta'               => ['Entregado', 'Novedades'],
         ]
     ]

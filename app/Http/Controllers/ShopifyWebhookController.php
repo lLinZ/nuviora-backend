@@ -115,7 +115,7 @@ class ShopifyWebhookController extends Controller
             ['order_id' => $orderData['id']],
             [
                 'name'                => $orderData['name'],
-                'current_total_price' => $orderData['current_total_price'],
+                'current_total_price' => round($orderData['current_total_price']),
                 'order_number'        => $orderData['order_number'],
                 'processed_at'        => $orderData['processed_at']
                     ? Carbon::parse($orderData['processed_at'])->toDateTimeString()
@@ -163,7 +163,7 @@ class ShopifyWebhookController extends Controller
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
                     'name'       => $item['name'] ?? null,
-                    'price'      => $item['price'],
+                    'price'      => round($item['price']),
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
                 ]);
@@ -175,7 +175,7 @@ class ShopifyWebhookController extends Controller
                     'variant_id' => $item['variant_id'] ?? null,
                     'title'      => $productTitle,
                     'name'       => $item['name'] ?? null,
-                    'price'      => $item['price'],
+                    'price'      => round($item['price']),
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
                 ]);
@@ -191,7 +191,7 @@ class ShopifyWebhookController extends Controller
                     'product_number' => $product->product_id,
                     'title'          => $item['title'],
                     'name'           => $item['name'] ?? null,
-                    'price'          => $item['price'],
+                    'price'          => round($item['price']),
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl,
                 ]
@@ -229,7 +229,7 @@ class ShopifyWebhookController extends Controller
         $lastName = $order['customer']['last_name'] ?? null;
 
         // Datos custom de la orden
-        $value = $order['total_price'] ?? 0;
+        $value = round($order['total_price'] ?? 0);
         $currency = $order['currency'] ?? 'USD';
         $contentIds = collect($order['line_items'])->pluck('product_id')->map(fn($id) => (string)$id)->toArray();
 
