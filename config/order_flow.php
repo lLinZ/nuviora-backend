@@ -13,7 +13,7 @@ return [
 
     'Vendedor' => [
         'visible_columns' => [
-            'Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3',
+            'Reprogramado para hoy', 'Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3',
             'Esperando Ubicacion', 'Asignar a agencia', 'Programado para mas tarde',
             'Programado para otro dia', 'Novedades', 'Novedad Solucionada',
             'Cancelado', 'Entregado'
@@ -23,6 +23,7 @@ return [
             'Novedades'                 => ['Novedad Solucionada', 'Cancelado'],
             'Novedad Solucionada'       => ['En ruta', 'Entregado'],
             'Reprogramado'              => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
+            'Reprogramado para hoy'     => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Asignado a vendedor'       => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Llamado 1'                 => ['Llamado 2', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Llamado 2'                 => ['Llamado 3', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],

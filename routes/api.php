@@ -126,6 +126,7 @@ Route::middleware('auth:sanctum')->group(function () {
      * ORDERS
      * ---------------------**/
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
+    Route::get('/orders/{order}/available-statuses', [OrderController::class, 'getAvailableStatuses']);
     Route::put('/orders/{order}/logistics', [OrderController::class, 'updateLogistics']);
     // Auto-asignación masiva de logística
     Route::post('/orders/auto-assign-logistics', [OrderController::class, 'autoAssignAllLogistics']);

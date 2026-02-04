@@ -300,6 +300,52 @@ class OrderController extends Controller
                     $order->change_amount_agency = $request->change_amount_agency;
                 }
             }
+        // ... (existing logic for Delivered)
+        }
+
+        // 1.5. 🛑 VALIDACIÓN PARA NOVEDAD SOLUCIONADA 🛑
+        // Debe tener ubicación y pagos completos antes de marcarse como solucionada
+        $statusNovedadSolucionada = Status::where('description', '=', 'Novedad Solucionada')->first();
+        if ($statusNovedadSolucionada && (int) $statusNovedadSolucionada->id === (int) $request->status_id) {
+            
+            // a) Validar Ubicación
+            if (empty($order->location)) {
+                 return response()->json([
+                    'status' => false,
+                    'message' => 'Se requiere una ubicación (coordenadas) para marcar como solucionada 📍',
+                ], 422);
+            }
+
+            // b) Validar Pagos (Si no es retorno/cambio)
+            if (!$order->is_return && !$order->is_exchange) {
+                // Verificar existencia de pagos
+                if ($order->payments()->count() === 0) {
+                     return response()->json([
+                        'status' => false,
+                        'message' => 'Se requieren métodos de pago registrados para solucionar la novedad 💳',
+                    ], 422);
+                }
+
+                // Verificar monto total cubierto
+                $totalPaid = $order->payments()->sum('amount');
+                // Use a small epsilon for float comparison
+                if ($totalPaid < ($order->current_total_price - 0.01)) {
+                     return response()->json([
+                        'status' => false,
+                        'message' => "El monto pagado ($" . number_format($totalPaid, 2) . ") es menor al total ($" . number_format($order->current_total_price, 2) . "). Debe cubrirse el total.",
+                    ], 422);
+                }
+
+                // Verificar vuelto/excedente
+                if ($totalPaid > ($order->current_total_price + 0.01)) {
+                    if (empty($order->change_covered_by)) {
+                        return response()->json([
+                            'status' => false,
+                            'message' => "El monto pagado excede el total. Debe registrar quién cubre el vuelto (Agencia/Empresa) 💸",
+                        ], 422);
+                    }
+                }
+            }
         }
 
         // 2. 🛑 INTERCEPCIÓN PARA APROBACIÓN DE CAMBIO DE UBICACION 🛑
@@ -415,11 +461,9 @@ class OrderController extends Controller
 
         $order->status_id = $request->status_id;
 
-        // Si se cambia a "Programado para otro dia", desasignamos a la vendedora
-        $statusOtroDia = Status::where('description', '=', 'Programado para otro dia')->first();
-        if ($statusOtroDia && (int)$statusOtroDia->id === (int)$request->status_id) {
-            $order->agent_id = null;
-        }
+        // NOTA: Ya NO desasignamos cuando se programa para otro día
+        // La vendedora mantiene la orden hasta que se cierre la tienda
+        // La desasignación ocurre en el comando de cierre de tienda
 
         // 🔔 NOTIFICACIONES Y TIMER
         $statusNovedad = Status::where('description', '=', 'Novedades')->first();
@@ -434,12 +478,26 @@ class OrderController extends Controller
             foreach ($admins as $admin) {
                 $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden #{$order->name}"));
             }
+            
+            // 🔔 NEW: Notificar también a la vendedora asignada
+            if ($order->agent) {
+                $order->agent->notify(new OrderNoveltyNotification($order, "Atención: Se ha reportado una novedad en tu orden #{$order->name}"));
+            }
         }
 
         // Si cambia a Novedad Solucionada
         if ($statusNovedadSoluciodada && (int)$statusNovedadSoluciodada->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusNovedadSoluciodada->id) {
             if ($order->agent) {
                 $order->agent->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+            }
+            // Notify Agency as well
+            if ($order->agency) {
+                $order->agency->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+            } elseif ($order->agency_id) {
+                $agencyUser = User::find($order->agency_id);
+                if ($agencyUser) {
+                    $agencyUser->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+                }
             }
         }
 
@@ -1056,6 +1114,101 @@ class OrderController extends Controller
     public function create() {}
     public function store(Request $request) {}
     public function edit(Order $order) {}
+    
+    /**
+     * Get available status transitions for a specific order
+     * Validates: payments, location, change, stock, and role-based flow rules
+     */
+    public function getAvailableStatuses(Request $request, Order $order)
+    {
+        $user = Auth::user();
+        $userRole = $user->role?->description;
+        
+        // Get all statuses
+        $allStatuses = Status::all();
+        
+        // Get flow rules for this role
+        $superRoles = ['Admin', 'Gerente', 'Master'];
+        $transitions = in_array($userRole, $superRoles) 
+            ? null 
+            : config("order_flow.{$userRole}.transitions");
+        
+        $currentStatus = $order->status?->description ?? 'Nuevo';
+        $allowedByFlow = $transitions ? ($transitions[$currentStatus] ?? []) : $allStatuses->pluck('description')->toArray();
+        
+        // Business validations
+        $totalPaid = $order->payments->sum('amount');
+        $currentTotal = $order->current_total_price ?? 0;
+        $changeAmount = $totalPaid - $currentTotal;
+        
+        $hasPayments = $totalPaid > 0;
+        $hasChangeInfo = (abs($changeAmount) < 0.01) || ($changeAmount > 0 && !empty($order->change_covered_by));
+        $hasLocation = !empty($order->location) && trim($order->location) !== '';
+        
+        // Public statuses for sellers (don't require payment validation)
+        $sellerPublicStatuses = [
+            'Llamado 1', 'Llamado 2', 'Llamado 3',
+            'Programado para otro dia', 'Programado para mas tarde',
+            'Cancelado', 'Novedad Solucionada', 'Esperando Ubicacion', 'Confirmado'
+        ];
+        
+        // Filter statuses based on all validations
+        $availableStatuses = $allStatuses->filter(function($status) use (
+            $order, $userRole, $currentStatus, $allowedByFlow, $hasPayments, $hasChangeInfo, $hasLocation, $sellerPublicStatuses
+        ) {
+            $statusName = $status->description;
+            
+            // Always include current status (for UI check mark)
+            if ($statusName === $currentStatus) {
+                return true;
+            }
+            
+            // Check flow rules first
+            if (!in_array($statusName, $allowedByFlow)) {
+                return false;
+            }
+            
+            // Skip all business validations for return/exchange orders
+            if ($order->is_return || $order->is_exchange) {
+                return true;
+            }
+            
+            // 🔒 Validation for "Asignar a agencia"
+            if ($statusName === 'Asignar a agencia') {
+                return $hasPayments && $hasChangeInfo && $hasLocation;
+            }
+            
+            // 🔒 Stock validation for "Entregado" and "En ruta"
+            if (in_array($statusName, ['Entregado', 'En ruta'])) {
+                if ($order->has_stock_warning && $userRole !== 'Admin') {
+                    return false;
+                }
+            }
+            
+            // 🔒 Payment receipt validation for "Entregado"
+            if ($statusName === 'Entregado' && empty($order->payment_receipt)) {
+                return false;
+            }
+            
+            // 🔒 General seller validation for non-public statuses
+            if ($userRole === 'Vendedor' && !in_array($statusName, $sellerPublicStatuses)) {
+                return $hasPayments && $hasChangeInfo;
+            }
+            
+            return true;
+        });
+        
+        return response()->json([
+            'statuses' => $availableStatuses->values(),
+            'current_status' => $currentStatus,
+            'validations' => [
+                'has_payments' => $hasPayments,
+                'has_change_info' => $hasChangeInfo,
+                'has_location' => $hasLocation,
+            ]
+        ]);
+    }
+    
     public function destroy(Order $order) {}
     public function uploadPaymentReceipt(Request $request, Order $order)
     {

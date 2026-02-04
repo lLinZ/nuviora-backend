@@ -54,10 +54,11 @@ class MetricsController extends Controller
                 ? round((float)($product->success_orders / $product->total_orders) * 100, 2) 
                 : 0;
             
-            // Net Profit per Product
+            // Net Profit per Product - SOLO productos base (NO upsells)
             $revenue = DB::table('order_products')
                 ->join('orders', 'order_products.order_id', '=', 'orders.id')
                 ->where('order_products.product_id', '=', $product->id)
+                ->where('order_products.is_upsell', '=', false) // ✅ SOLO productos base
                 ->where('orders.status_id', '=', (int)$statusEntregado)
                 ->whereBetween('orders.created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
                 ->when($shopId, fn($q) => $q->where('orders.shop_id', '=', $shopId))
@@ -68,6 +69,7 @@ class MetricsController extends Controller
             $cost = DB::table('order_products')
                 ->join('orders', 'order_products.order_id', '=', 'orders.id')
                 ->where('order_products.product_id', '=', $product->id)
+                ->where('order_products.is_upsell', '=', false) // ✅ SOLO productos base
                 ->where('orders.status_id', '=', (int)$statusEntregado)
                 ->whereBetween('orders.created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
                 ->when($shopId, fn($q) => $q->where('orders.shop_id', '=', $shopId))
@@ -79,8 +81,21 @@ class MetricsController extends Controller
                 ->whereBetween('date', [$startDate, $endDate])
                 ->sum('amount');
 
+            // ✅ Calcular TODAS las comisiones de órdenes que contienen este producto (base, no upsells)
+            $commissions = DB::table('earnings')
+                ->join('orders', 'earnings.order_id', '=', 'orders.id')
+                ->join('order_products', 'orders.id', '=', 'order_products.order_id')
+                ->where('order_products.product_id', '=', $product->id)
+                ->where('order_products.is_upsell', '=', false)
+                ->where('orders.status_id', '=', (int)$statusEntregado)
+                ->whereBetween('orders.created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                ->when($shopId, fn($q) => $q->where('orders.shop_id', '=', $shopId))
+                ->when($cityId, fn($q) => $q->where('orders.city_id', '=', $cityId))
+                ->when($agencyId, fn($q) => $q->where('orders.agency_id', '=', $agencyId))
+                ->sum('earnings.amount_usd');
+
             $product->revenue = $revenue;
-            $product->net_profit = $revenue - $cost - $adSpend;
+            $product->net_profit = $revenue - $cost - $adSpend - $commissions; // ✅ Restar todo
             return $product;
         });
 
@@ -202,12 +217,23 @@ class MetricsController extends Controller
 
             $dayAdSpend = ProductAdSpend::whereDate('date', '=', $date)->sum('amount');
 
+            // ✅ Sumar TODAS las comisiones del día (vendedores + agencias + repartidores)
+            $dayCommissions = DB::table('earnings')
+                ->join('orders', 'earnings.order_id', '=', 'orders.id')
+                ->where('orders.status_id', '=', (int)$statusEntregado)
+                ->whereDate('orders.created_at', '=', $date)
+                ->when($shopId, fn($q) => $q->where('orders.shop_id', '=', $shopId))
+                ->when($cityId, fn($q) => $q->where('orders.city_id', '=', $cityId))
+                ->when($agencyId, fn($q) => $q->where('orders.agency_id', '=', $agencyId))
+                ->sum('earnings.amount_usd');
+
             $dailyMetrics[] = [
                 'date' => $date,
                 'revenue' => (float)$dayRevenue,
                 'cost' => (float)$dayCost,
                 'ad_spend' => (float)$dayAdSpend,
-                'net_profit' => (float)($dayRevenue - $dayCost - $dayAdSpend),
+                'commissions' => (float)$dayCommissions, // ✅ Agregar para visibilidad
+                'net_profit' => (float)($dayRevenue - $dayCost - $dayAdSpend - $dayCommissions), // ✅ Restar comisiones
             ];
 
             $current->addDay();

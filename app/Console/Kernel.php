@@ -19,6 +19,7 @@ class Kernel extends ConsoleKernel
 
         $schedule->command('orders:check-waiting-location')->everyFiveMinutes();
         $schedule->command('orders:check-delayed')->everyMinute();
+        $schedule->command('orders:check-novedad-timeout')->everyMinute();
 
 
         $schedule->call(function () {

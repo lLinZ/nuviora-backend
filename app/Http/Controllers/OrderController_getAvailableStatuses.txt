@@ -1,0 +1,88 @@
+    /**
+     * Get available status transitions for a specific order
+     * This endpoint validates business rules (payments, location, change) 
+     * and returns only the statuses the user can transition to
+     */
+    public function getAvailableStatuses(Request $request, Order $order)
+    {
+        $user = Auth::user();
+        $userRole = $user->role?->description;
+        
+        // Get all statuses
+        $allStatuses = Status::all();
+        
+        // Get flow rules for this role
+        $superRoles = ['Admin', 'Gerente', 'Master'];
+        $transitions = in_array($userRole, $superRoles) 
+            ? null 
+            : config("order_flow.{$userRole}.transitions");
+        
+        $currentStatus = $order->status?->description ?? 'Nuevo';
+        $allowedByFlow = $transitions ? ($transitions[$currentStatus] ?? []) : $allStatuses->pluck('description')->toArray();
+        
+        // Business validations
+        $totalPaid = $order->payments->sum('amount');
+        $currentTotal = $order->current_total_price ?? 0;
+        $changeAmount = $totalPaid - $currentTotal;
+        
+        $hasPayments = $totalPaid > 0;
+        $hasChangeInfo = (abs($changeAmount) < 0.01) || ($changeAmount > 0 && !empty($order->change_covered_by));
+        $hasLocation = !empty($order->location) && trim($order->location) !== '';
+        
+        // Filter statuses
+        $availableStatuses = $allStatuses->filter(function($status) use (
+            $order, $userRole, $allowedByFlow, $hasPayments, $hasChangeInfo, $hasLocation
+        ) {
+            $statusName = $status->description;
+            
+            // Always include current status
+            if ($statusName === $order->status?->description) {
+                return true;
+            }
+            
+            // Check flow rules
+            if (!in_array($statusName, $allowedByFlow)) {
+                return false;
+            }
+            
+            // Skip validations for return/exchange orders
+            if ($order->is_return || $order->is_exchange) {
+                return true;
+            }
+            
+            // Validation for "Asignar a agencia"
+            if ($statusName === 'Asignar a agencia') {
+                return $hasPayments && $hasChangeInfo && $hasLocation;
+            }
+            
+            // Stock validation for "Entregado" and "En ruta"
+            if (in_array($statusName, ['Entregado', 'En ruta'])) {
+                if ($order->has_stock_warning && $userRole !== 'Admin') {
+                    return false;
+                }
+            }
+            
+            // General seller validation for non-public statuses
+            $sellerPublicStatuses = [
+                'Llamado 1', 'Llamado 2', 'Llamado 3',
+                'Programado para otro dia', 'Programado para mas tarde',
+                'Cancelado', 'Novedad Solucionada', 'Esperando Ubicacion', 'Confirmado'
+            ];
+            
+            if ($userRole === 'Vendedor' && !in_array($statusName, $sellerPublicStatuses)) {
+                return $hasPayments && $hasChangeInfo;
+            }
+            
+            return true;
+        });
+        
+        return response()->json([
+            'statuses' => $availableStatuses->values(),
+            'current_status' => $currentStatus,
+            'validations' => [
+                'has_payments' => $hasPayments,
+                'has_change_info' => $hasChangeInfo,
+                'has_location' => $hasLocation,
+            ]
+        ]);
+    }

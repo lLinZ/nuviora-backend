@@ -129,7 +129,7 @@ class BusinessService
                 'Llamado 3',
                 'Esperando Ubicacion',
                 'Programado para mas tarde',
-                // Novedades removido de aquí para no resetear status
+                // Novedades y "Programado para otro dia" se manejan por separado
             ];
             
             $statusIds = Status::whereIn('description', $statusesToReset)->pluck('id');
@@ -149,6 +149,14 @@ class BusinessService
                 if ($novedadStatus) {
                     Order::where('shop_id', $shopId)
                         ->where('status_id', $novedadStatus->id)
+                        ->update(['agent_id' => null]);
+                }
+                
+                // 3. Para "Programado para otro dia": Solo quitar vendedor, mantener status
+                $programadoOtroDiaStatus = Status::where('description', 'Programado para otro dia')->first();
+                if ($programadoOtroDiaStatus) {
+                    Order::where('shop_id', $shopId)
+                        ->where('status_id', $programadoOtroDiaStatus->id)
                         ->update(['agent_id' => null]);
                 }
                 

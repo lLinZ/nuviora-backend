@@ -198,7 +198,20 @@ class BusinessMetricsController extends Controller
             ->get();
 
         $metrics = $agencies->map(function($a) use ($orders, $statusLogs) {
-            $aOrders = $orders->where('agency_id', '=', $a->id);
+            // Exclude orders that are still in 'Sales' statuses, even if assigned to agency ID
+            $salesStatuses = [
+                'Nuevo', 'Sin Stock', 'Asignado a vendedor', 
+                'Llamado 1', 'Llamado 2', 'Llamado 3',
+                'Esperando Ubicacion', 'Programado para mas tarde',
+                'Programado para otro dia', 'Reprogramado para hoy', 'Reprogramado',
+                'Confirmado' // Todavía no ha llegado a 'Asignar a agencia'
+            ];
+            
+            $salesStatusIds = Status::whereIn('description', $salesStatuses)->pluck('id');
+
+            $aOrders = $orders->where('agency_id', '=', $a->id)
+                              ->whereNotIn('status_id', $salesStatusIds); // ✅ Filter out sales orders
+
             $total = $aOrders->count();
             if ($total === 0) return null;
  
