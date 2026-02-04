@@ -14,7 +14,7 @@ class CurrencyController extends Controller
     protected function ensureManagerOrAdmin()
     {
         $role = Auth::user()->role?->description;
-        if (!in_array($role, ['Admin', 'Gerente', 'Vendedor'])) {
+        if (!in_array($role, ['Admin', 'Gerente', 'Vendedor', 'Agencia'])) {
             abort(403, 'No autorizado');
         }
     }

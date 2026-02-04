@@ -45,12 +45,10 @@ return [
         ],
 
         'transitions' => [
-            'Asignar a agencia'     => ['Asignar repartidor', 'Novedades'],
-            'Asignar repartidor'    => ['En ruta', 'Novedades'],
+            'Asignar a agencia'     => ['Asignado a repartidor', 'Novedades'],
+            'Asignado a repartidor' => ['En ruta', 'Novedades'],
             'En ruta'               => ['Entregado', 'Novedades'],
-            'Novedad Solucionada'   => ['Asignar repartidor', 'Asignar a agencia', 'En ruta'], 
-            // Nota: 'Asignado a repartidor' en DB suele ser 'Asignar repartidor' o 'Asignado a repartidor'. Ajustar segun DB real.
-            // Asumiré 'Asignar repartidor' según spreadsheet, pero revisaré si en DB es distinto.
+            'Novedad Solucionada'   => ['Asignado a repartidor', 'Asignar a agencia', 'En ruta'], 
         ]
     ],
 

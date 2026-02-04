@@ -592,6 +592,9 @@ class OrderController extends Controller
             }
         }
 
+        // 📡 BROADCAST EVENT: OrderUpdated
+        event(new \App\Events\OrderUpdated($order));
+
         return response()->json([
             'status' => true,
             'message' => 'Estado actualizado',
@@ -957,6 +960,9 @@ class OrderController extends Controller
         } catch (\Exception $e) {
             \Log::error('Error sending notification: ' . $e->getMessage());
         }
+
+        // 📡 BROADCAST EVENT: Ensure frontend updates for agency
+        event(new \App\Events\OrderUpdated($order));
 
         return response()->json([
             'status' => true,
