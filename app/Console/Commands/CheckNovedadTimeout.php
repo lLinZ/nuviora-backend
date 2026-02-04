@@ -51,9 +51,10 @@ class CheckNovedadTimeout extends Command
                 
                 $order->agent->notify(new OrderNovedadTimeoutNotification($order));
                 
-                // Update flag to prevent loop, but use the same column as other delays.
+                // Update flag to prevent loop
                 // Since this order is in "Novedades", setting this matches the current status state.
                 $order->delayed_notification_sent_at = now();
+                $order->timestamps = false; // Prevent updated_at from changing to not reset the timer
                 $order->save();
 
                 $this->info("Notificación enviada para orden #{$order->name} al vendedor {$order->agent->names}");
