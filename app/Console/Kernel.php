@@ -12,8 +12,10 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        $open  = \App\Models\Setting::get('business_open_at', '09:00');
-        $close = \App\Models\Setting::get('business_close_at', '18:00');
+        // $open  = \App\Models\Setting::get('business_open_at', '09:00');
+        // $close = \App\Models\Setting::get('business_close_at', '18:00');
+        $open = '09:00';
+        $close = '18:00';
 
         $schedule->command('orders:assign-backlog')->dailyAt($open);
 
