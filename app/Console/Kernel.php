@@ -18,6 +18,8 @@ class Kernel extends ConsoleKernel
         $schedule->command('orders:assign-backlog')->dailyAt($open);
 
         $schedule->command('orders:check-waiting-location')->everyFiveMinutes();
+        $schedule->command('orders:check-delayed')->everyMinute();
+
 
         $schedule->call(function () {
             \App\Models\Setting::set('round_robin_pointer', null);

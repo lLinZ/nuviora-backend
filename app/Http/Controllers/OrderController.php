@@ -505,6 +505,26 @@ class OrderController extends Controller
 
         $order->save();
 
+        // 🔔 NOTIFICAR AGENCIA SI HUBO CAMBIOS RELEVANTES
+        // Notificamos si:
+        // 1. El estado ahora es "Asignar a agencia" o "En ruta"
+        // 2. Y (Cambió el status O Cambió la agencia asignada)
+        if ($order->agency_id && $order->wasChanged(['status_id', 'agency_id'])) {
+            $isAgencyStatus = ($statusAsignarAgencia && (int)$order->status_id === (int)$statusAsignarAgencia->id) ||
+                              ($statusEnRuta && (int)$order->status_id === (int)$statusEnRuta->id);
+            
+            if ($isAgencyStatus) {
+                 $agency = User::find($order->agency_id);
+                 if ($agency) {
+                     try {
+                         $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+                     } catch (\Exception $e) {
+                         \Log::error('Error sending agency notification: ' . $e->getMessage());
+                     }
+                 }
+            }
+       }
+
         // Descontar inventario solo si cambia a Entregado
         if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
             // Solo descontamos y generamos ganancias cuando CAMBIA a Entregado
@@ -920,6 +940,12 @@ class OrderController extends Controller
 
         $order->status_id = $statusId;
         $order->agency_id = $agency->id;
+        
+        // ⏱️ TIMER: Iniciar cronómetro si no existe
+        if (!$order->received_at) {
+            $order->received_at = now();
+        }
+
         $order->save();
 
         // 📦 Immediately sync stock status after agency assignment
