@@ -46,6 +46,7 @@ class OrderNovedadTimeoutNotification extends Notification
             'type' => 'warning',
             'order_id' => $this->order->id,
             'action_url' => "/orders?id={$this->order->id}",
+            'sound' => 'novelty_sound', // Use specific sound
         ];
     }
 }
