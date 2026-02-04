@@ -364,13 +364,19 @@ class DashboardController extends Controller
         
         $statusCancelledId = Status::where('description', '=', 'Cancelado')->value('id');
         
-        // 'Asignadas Hoy': Órdenes que llegaron a la agencia o se movieron siendo de la agencia HOY.
-        // No necessarily created_at, but we can stick to updated_at for activity tracking or created_at if strictly "New orders for agency".
-        // Usually, 'Asignadas' implies they entered the agency's bucket today.
-        // Let's use `updated_at` today AND agency_id match.
-        $assigned = Order::where('agency_id', '=', $user->id)
-            ->whereDate('updated_at', $date) 
-            ->count();
+        // 'Asignadas Hoy': Órdenes que llegaron a la agencia HOY.
+        // Buscamos en el historial de status si la orden TRANSICIONÓ a un estado de agencia HOY.
+        // Estados relevantes de entrada: 'Asignar a agencia', 'Asignar repartidor' (si saltó directo).
+        $statusAsignarAgenciaId = Status::where('description', '=', 'Asignar a agencia')->value('id');
+        $statusAsignarRepartidorId = Status::where('description', '=', 'Asignar repartidor')->value('id');
+        
+        $assigned = \App\Models\OrderStatusLog::whereDate('created_at', $date)
+            ->whereIn('to_status_id', [$statusAsignarAgenciaId, $statusAsignarRepartidorId])
+            ->whereHas('order', function($q) use ($user) {
+                $q->where('agency_id', $user->id);
+            })
+            ->distinct('order_id')
+            ->count('order_id');
 
         $deliveredCount = Order::where('agency_id', '=', $user->id)
             ->where('status_id', '=', $statusDeliveredId)

@@ -397,14 +397,16 @@ class OrderController extends Controller
                     $order->city_id = $cityMatch->id;
                     $order->agency_id = $cityMatch->agency_id;
                     $order->delivery_cost = $cityMatch->delivery_cost_usd;
-                    // El status se guardará más abajo
                 } else {
-                    // Si no se pudo auto-asignar, devolvemos error para que se elija manualmente
-                    return response()->json([
-                        'status' => false,
-                        'message' => 'No se pudo auto-asignar una agencia para la ciudad "' . ($clientCityName ?? 'Sin Ciudad') . '". Por favor, asígnela manualmente.',
-                        'require_manual_agency' => true
-                    ], 422);
+                    // 🛑 RECHAZAR CAMBIO DE ESTADO
+                    // Si no tiene ubicación válida, NO DEBE pasar a "Asignar a Agencia"
+                    if (!$order->city_id && !$request->city_id && !$request->agency_id) {
+                         return response()->json([
+                            'status' => false,
+                            'message' => 'No se puede enviar a Agencia sin una ubicación. La ciudad "' . ($clientCityName ?? 'Sin Ciudad') . '" no tiene agencia automática. Selecciona una manualmente.',
+                            'require_manual_agency' => true
+                        ], 422);
+                    }
                 }
             }
         }
