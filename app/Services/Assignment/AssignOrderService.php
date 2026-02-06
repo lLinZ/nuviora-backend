@@ -53,6 +53,9 @@ class AssignOrderService
 
             $ord->update(['agent_id' => $agentId, 'status_id' => $statusId]);
 
+            // 📡 Broadcast for real-time updates
+            event(new \App\Events\OrderUpdated($ord));
+
             \App\Models\OrderAssignmentLog::create([
                 'order_id'    => $ord->id,
                 'agent_id'    => $agentId,
@@ -147,6 +150,9 @@ class AssignOrderService
                     : $assignmentStatusId;
                 
                 $ord->update(['agent_id' => $agentId, 'status_id' => $newStatusId]);
+
+                // 📡 Broadcast for real-time updates
+                event(new \App\Events\OrderUpdated($ord));
 
                 OrderAssignmentLog::create([
                     'order_id'    => $ord->id,

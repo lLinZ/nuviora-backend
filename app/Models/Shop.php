@@ -20,6 +20,10 @@ class Shop extends Model
         'auto_schedule_enabled',
     ];
 
+    protected $casts = [
+        'auto_schedule_enabled' => 'boolean',
+    ];
+
     public function status()
     {
         return $this->belongsTo(Status::class);

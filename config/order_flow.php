@@ -20,8 +20,10 @@ return [
         ],
 
         'transitions' => [
-            'Novedades'                 => ['Novedad Solucionada', 'Cancelado'],
-            'Novedad Solucionada'       => ['En ruta', 'Entregado'],
+            'Novedades'                 => ['Novedad Solucionada', 'Programado para otro dia', 'Programado para mas tarde', 'Cancelado'],
+            // Vendedor ya no mueve de Novedad Solucionada, eso lo hace la Agencia.
+            // Pero si necesita corregir, podría necesitarlo. Por ahora lo dejamos restringido según instrucción.
+            'Novedad Solucionada'       => [], 
             'Reprogramado'              => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Reprogramado para hoy'     => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Asignado a vendedor'       => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
@@ -31,11 +33,8 @@ return [
             'Esperando Ubicacion'       => ['Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Programado para mas tarde' => ['Esperando Ubicacion', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Programado para otro dia'  => ['Esperando Ubicacion', 'Asignar a agencia', 'Cancelado'],
-            'Asignar a agencia'         => [], // 🔒 BLOQUEADO: Vendedor no puede moverla una vez aquí.
-            'Entregado'         => [], // 🔒 BLOQUEADO: Vendedor no puede moverla una vez aquí.
-            // Confirmado -> 'QUITAR ESTE ESTATUS' (No incluido)
-            // Entregado -> No modification
-            // Cancelado -> No modification
+            'Asignar a agencia'         => [], // 🔒 BLOQUEADO
+            'Entregado'                 => [], // 🔒 BLOQUEADO
         ]
     ],
 
@@ -49,7 +48,8 @@ return [
             'Asignar a agencia'     => ['Asignado a repartidor', 'Novedades'],
             'Asignado a repartidor' => ['En ruta', 'Novedades'],
             'En ruta'               => ['Entregado', 'Novedades'],
-            'Novedad Solucionada'   => ['Asignado a repartidor', 'Asignar a agencia', 'En ruta'], 
+            // Novedad Solucionada -> Entregado o En Ruta (condicional en Controller)
+            'Novedad Solucionada'   => ['Entregado', 'En ruta'], 
         ]
     ],
 

@@ -18,6 +18,7 @@ try {
     Schedule::command('orders:check-waiting-location')->everyFiveMinutes();
     Schedule::command('orders:check-delayed')->everyMinute();
     Schedule::command('orders:check-novedad-timeout')->everyMinute();
+    Schedule::command('shops:check-schedule')->everyMinute();
 
     Schedule::call(function () {
         Setting::set('round_robin_pointer', null);

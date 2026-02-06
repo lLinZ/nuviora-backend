@@ -14,8 +14,9 @@ class OrderPostponementController extends Controller
     public function store(Request $request, Order $order)
     {
         $data = $request->validate([
-            'scheduled_for' => 'required|date', // ISO 8601 o datetime local
-            'reason'        => 'nullable|string|max:2000',
+            'scheduled_for'      => 'required|date',
+            'reason'             => 'nullable|string|max:2000',
+            'novedad_resolution' => 'nullable|string|max:2000',
         ]);
 
         // Guardamos historial
@@ -38,6 +39,10 @@ class OrderPostponementController extends Controller
             'status_id'     => $statusId,
             'scheduled_for' => $data['scheduled_for'],
         ];
+
+        if ($request->filled('novedad_resolution')) {
+            $updateData['novedad_resolution'] = $request->novedad_resolution;
+        }
 
         // Si se programa para otro día (NO es hoy), desasignamos a la vendedora
         if (!$scheduled->isToday()) {

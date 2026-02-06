@@ -18,6 +18,35 @@ class InventoryMovementController extends Controller
     }
 
     /**
+     * Helper to validate warehouse ownership
+     * @param int $warehouseId
+     * @return bool|string True if allowed, error message string if denied
+     */
+    private function validateOwnership($warehouseId)
+    {
+        $user = \Illuminate\Support\Facades\Auth::user();
+        if (!$user) return 'Usuario no autenticado';
+
+        // Superusers can access anything
+        if (in_array($user->role?->description, ['Admin', 'Gerente', 'Master'])) {
+            return true;
+        }
+
+        // Agencies can only access their own warehouses
+        if ($user->role?->description === 'Agencia') {
+            $warehouse = \App\Models\Warehouse::find($warehouseId);
+            if (!$warehouse) return 'Almacén no encontrado';
+            
+            if ($warehouse->user_id !== $user->id) {
+                return '⛔ ACCESO DENEGADO: No tienes permiso para modificar este almacén.';
+            }
+            return true;
+        }
+
+        return '⛔ Rol no autorizado para gestión de inventario.';
+    }
+
+    /**
      * Display a listing of inventory movements
      */
     public function index(Request $request)
@@ -97,6 +126,13 @@ class InventoryMovementController extends Controller
             ], 422);
         }
 
+        // 🔒 SECURITY CHECK
+        $checkFrom = $this->validateOwnership($request->from_warehouse_id);
+        if ($checkFrom !== true) return response()->json(['success' => false, 'message' => $checkFrom], 403);
+
+        // Si es Agencia, NO permitimos mover stock HACIA almacenes ajenos (a menos que sea devolución al central, lógica pendiente)
+        // Por ahora lo dejamos simple: validar origen.
+        
         try {
             $movement = $this->inventoryService->transferBetweenWarehouses(
                 $request->product_id,
@@ -140,6 +176,10 @@ class InventoryMovementController extends Controller
                 'errors' => $validator->errors(),
             ], 422);
         }
+
+        // 🔒 SECURITY CHECK
+        $checkTo = $this->validateOwnership($request->to_warehouse_id);
+        if ($checkTo !== true) return response()->json(['success' => false, 'message' => $checkTo], 403);
 
         try {
             $movement = $this->inventoryService->addStock(
@@ -186,6 +226,10 @@ class InventoryMovementController extends Controller
             ], 422);
         }
 
+        // 🔒 SECURITY CHECK
+        $checkFrom = $this->validateOwnership($request->from_warehouse_id);
+        if ($checkFrom !== true) return response()->json(['success' => false, 'message' => $checkFrom], 403);
+
         try {
             $movement = $this->inventoryService->removeStock(
                 $request->product_id,
@@ -228,6 +272,10 @@ class InventoryMovementController extends Controller
                 'errors' => $validator->errors(),
             ], 422);
         }
+
+        // 🔒 SECURITY CHECK
+        $check = $this->validateOwnership($request->warehouse_id);
+        if ($check !== true) return response()->json(['success' => false, 'message' => $check], 403);
 
         try {
             $movement = $this->inventoryService->adjustStock(

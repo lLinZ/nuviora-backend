@@ -26,6 +26,11 @@ class OrderController extends Controller
     public function products(Order $order) {}
     public function updatePayment(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $request->validate([
             'payments' => 'required|array|min:1',
             'payments.*.method' => 'required|string',
@@ -490,8 +495,8 @@ class OrderController extends Controller
             if ($order->agent) {
                 $order->agent->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
             }
-            // Notify Agency as well
-            if ($order->agency) {
+            // Notify Agency as well (Prevent double notification if logged user is the agency)
+            if ($order->agency && $order->agency_id !== Auth::id()) {
                 $order->agency->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
             } elseif ($order->agency_id) {
                 $agencyUser = User::find($order->agency_id);
@@ -530,6 +535,20 @@ class OrderController extends Controller
 
         $statusEnRuta = Status::where('description', '=', 'En ruta')->first();
         if ($statusEnRuta && (int)$statusEnRuta->id === (int)$order->status_id && (int)$oldStatusId !== (int)$statusEnRuta->id) {
+            
+            // 🛑 VALIDACIÓN AGENCIA: Solo pasar a En Ruta desde Solucionada si hubo cambio de ubicación
+            $statusNovedadSolucionada = Status::where('description', '=', 'Novedad Solucionada')->first();
+            if ($statusNovedadSolucionada && (int)$oldStatusId === (int)$statusNovedadSolucionada->id) {
+                // Verificar tipo de novedad
+                // Normalizamos el string por si acaso vienen con mayúsculas/tildes distintas
+                if (stripos($order->novedad_type, 'bicaci') === false) { // Busca 'ubicaci' de Ubicación
+                     return response()->json([
+                        'status' => false,
+                        'message' => '⛔ SOLO se puede volver a poner "En Ruta" si la novedad fue por "Cambio de ubicación".',
+                    ], 422);
+                }
+            }
+
             $order->was_shipped = true;
             $order->shipped_at = now();
 
@@ -575,7 +594,10 @@ class OrderController extends Controller
                  $agency = User::find($order->agency_id);
                  if ($agency) {
                      try {
-                         $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+                         // Evitar auto-notificación si la misma agencia está haciendo la acción (ej. mover a En ruta)
+                         if (\Illuminate\Support\Facades\Auth::id() !== $agency->id) {
+                             $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+                         }
                      } catch (\Exception $e) {
                          \Log::error('Error sending agency notification: ' . $e->getMessage());
                      }
@@ -809,6 +831,11 @@ class OrderController extends Controller
     }
     public function addLocation(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $user = Auth::user();
         $new_order = Order::with([
             'client',
@@ -858,17 +885,16 @@ class OrderController extends Controller
             ->orderBy('updated_at', 'desc')
             ->orderBy('id', 'desc');
 
-        // 🔒 Reglas por rol
-        $role = $user->role?->description; // "Vendedor", "Gerente", "Admin", etc.
+        // 🔒 Reglas por rol (Case insensitive & trimmed)
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
 
-        if ($role === 'Vendedor') {
-            // Un Vendedor SOLO ve lo que tiene asignado (Historial completo, no solo hoy)
+        if ($roleName === 'vendedor') {
+            // Un Vendedor SOLO ve lo que tiene asignado
             $query->where('agent_id', $user->id);
-            //      ->whereDate('updated_at', now()); // Comentado para persistencia de tareas
-        } elseif ($role === 'Repartidor') {
+        } elseif ($roleName === 'repartidor') {
             $query->where('deliverer_id', $user->id)
                   ->whereDate('updated_at', now());
-        } elseif ($role === 'Agencia') {
+        } elseif ($roleName === 'agencia') {
             $query->where('agency_id', $user->id)
                   ->whereDate('updated_at', now());
         }
@@ -968,6 +994,9 @@ class OrderController extends Controller
         $order->agent_id = $agent->id;
         $order->save();
 
+        // 📡 Broadcast for real-time updates
+        event(new \App\Events\OrderUpdated($order));
+
         // 🔔 Notify Agent
         try {
             $agent->notify(new OrderAssignedNotification($order, "Nueva orden asignada: #{$order->name}"));
@@ -1029,6 +1058,11 @@ class OrderController extends Controller
     }
     public function addUpsell(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         // For return orders, price validation is optional (always 0)
         $rules = [
             'product_id' => 'required|exists:products,id',
@@ -1082,6 +1116,11 @@ class OrderController extends Controller
 
     public function removeUpsell(Order $order, $itemId)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $item = OrderProduct::where('order_id', '=', $order->id)->where('id', '=', $itemId)->firstOrFail();
 
         // For return/exchange orders, allow deleting any product (not just upsells)
@@ -1212,6 +1251,11 @@ class OrderController extends Controller
     public function destroy(Order $order) {}
     public function uploadPaymentReceipt(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $request->validate([
             'payment_receipt' => 'required|image|max:10240', // 10MB
         ]);
@@ -1243,7 +1287,7 @@ class OrderController extends Controller
         return response()->json(['status' => false, 'message' => 'No se recibió ninguna imagen'], 400);
     }
 
-    public function getPaymentReceipt(Order $order)
+    public function getPaymentReceipt(Request $request, Order $order)
     {
         if (!$order->payment_receipt) {
             abort(404, 'No hay comprobante');
@@ -1256,11 +1300,21 @@ class OrderController extends Controller
             abort(404, 'Archivo no encontrado');
         }
 
+        if ($request->has('download')) {
+            $filename = "Pago_Orden_{$order->name}." . pathinfo($path, PATHINFO_EXTENSION);
+            return response()->download($path, $filename);
+        }
+
         return response()->file($path);
     }
 
     public function uploadChangeReceipt(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $request->validate([
             'change_receipt' => 'required|image|max:10240', // 10MB
         ]);
@@ -1315,7 +1369,7 @@ class OrderController extends Controller
         return response()->json(['status' => false, 'message' => 'No se recibió ninguna imagen'], 400);
     }
 
-    public function getChangeReceipt(Order $order)
+    public function getChangeReceipt(Request $request, Order $order)
     {
         if (!$order->change_receipt) {
             abort(404, 'No hay comprobante de vuelto');
@@ -1327,11 +1381,21 @@ class OrderController extends Controller
             abort(404, 'Archivo no encontrado');
         }
 
+        if ($request->has('download')) {
+            $filename = "Vuelto_Orden_{$order->name}." . pathinfo($path, PATHINFO_EXTENSION);
+            return response()->download($path, $filename);
+        }
+
         return response()->file($path);
     }
 
     public function setReminder(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $request->validate([
             'reminder_at' => 'required|date',
         ]);
@@ -1348,6 +1412,11 @@ class OrderController extends Controller
 
     public function updateChange(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         try {
             $userRole = Auth::user()->role?->description;
             if (!in_array($userRole, ['Gerente', 'Admin', 'Vendedor'])) {
@@ -1472,6 +1541,11 @@ class OrderController extends Controller
     }
     public function updateLogistics(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $userRole = Auth::user()->role?->description;
         if (!in_array($userRole, ['Gerente', 'Admin'])) {
             return response()->json(['status' => false, 'message' => 'No tiene permisos para editar la logística'], 403);

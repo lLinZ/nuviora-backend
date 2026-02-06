@@ -139,6 +139,14 @@ class EarningsService
         $statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
         $statusTransitId = \App\Models\Status::where('description', 'En ruta')->value('id');
 
+        // PRE-CALCULAR CONTEOS DE RUTA (Cuántas veces salió a ruta cada orden para pago múltiple)
+        $routeCounts = \App\Models\OrderStatusLog::whereIn('order_id', $orders->pluck('id'))
+            ->where('to_status_id', $statusTransitId)
+            ->select('order_id', \Illuminate\Support\Facades\DB::raw('count(*) as count'))
+            ->groupBy('order_id')
+            ->get()
+            ->pluck('count', 'order_id');
+
         return $orders->groupBy('agency_id')
             ->map(function (Collection $agencyOrders) use ($statusDeliveredId, $statusTransitId, $rateBinanceNow, $rateEuroNow) {
                 $agency = $agencyOrders->first()->agency;
@@ -193,13 +201,14 @@ class EarningsService
                         'change_company' => $amtCompany,
                         'method_company' => $methodCompany ?? 'N/A',
                         'updated_at'     => $o->updated_at->toDateTimeString(),
-                        'delivery_cost'  => $o->was_shipped ? (float) $o->delivery_cost : 0,
+                        'delivery_cost'  => ($routeCounts[$o->id] ?? ($o->was_shipped ? 1 : 0)) * (float) $o->delivery_cost,
                     ];
                 })
-                // Filtrar solo órdenes ENTREGADAS para el detalle y la liquidación
+                // Filtrar órdenes ENTREGADAS o EN RUTA (ya salidas) para la liquidación
                 ->filter(function($d) use ($agencyOrders, $statusDeliveredId) {
                     $order = $agencyOrders->firstWhere('id', $d['order_id']);
-                    return $order && $order->status_id == $statusDeliveredId;
+                    // Se incluye si ya se entregó O si ya salió a ruta (el servicio logístico se ejecutó/inició)
+                    return $order && ($order->status_id == $statusDeliveredId || $order->was_shipped);
                 });
 
                 if ($details->isEmpty()) return null;
