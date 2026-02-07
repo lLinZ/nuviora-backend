@@ -59,6 +59,18 @@ class OrderPostponementController extends Controller
 
         $order->update($updateData);
 
+        // 🔔 Evento Global para actualizar Kanban
+        event(new \App\Events\OrderUpdated($order));
+
+        // 🔔 Notificar si es "Programado para mas tarde"
+        if ($statusDesc === 'Programado para mas tarde') {
+             // Notificar a Admins/Gerentes
+             $admins = \App\Models\User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+             foreach ($admins as $admin) {
+                 $admin->notify(new \App\Notifications\OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
+             }
+        }
+
         return response()->json([
             'status' => true,
             'message' => 'Orden pospuesta correctamente',
