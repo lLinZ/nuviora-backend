@@ -1260,10 +1260,11 @@ class OrderController extends Controller
                 }
             }
             
-            // 🔒 Payment receipt validation for "Entregado"
-            if ($statusName === 'Entregado' && empty($order->payment_receipt)) {
+            // 🔒 Payment receipt validation for "Entregado" - REMOVED to allow option to show
+            // Validation remains in updateStatus() to ensure integrity
+            /*id ($statusName === 'Entregado' && empty($order->payment_receipt)) {
                 return false;
-            }
+            }*/
             
             // 🔒 General seller validation for non-public statuses
             if ($userRole === 'Vendedor' && !in_array($statusName, $sellerPublicStatuses)) {
