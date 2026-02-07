@@ -23,6 +23,11 @@ class OrderUpdateController extends Controller
 
     public function store(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $request->validate([
             'message' => 'required|string|max:1000',
             'image'   => 'nullable|image|max:4096', // hasta 4MB

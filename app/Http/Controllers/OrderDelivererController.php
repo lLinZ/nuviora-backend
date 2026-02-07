@@ -12,6 +12,11 @@ class OrderDelivererController extends Controller
     // PUT /orders/{order}/assign-deliverer
     public function assign(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $request->validate([
             'deliverer_id' => 'required|exists:users,id',
         ]);

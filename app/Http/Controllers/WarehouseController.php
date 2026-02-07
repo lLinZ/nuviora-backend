@@ -6,6 +6,7 @@ use App\Models\Warehouse;
 use App\Models\WarehouseType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Auth;
 
 class WarehouseController extends Controller
 {
@@ -17,6 +18,12 @@ class WarehouseController extends Controller
         $query = Warehouse::with(['warehouseType', 'user'])
             ->withCount('inventories as total_products_unique')
             ->withSum('inventories as total_items_stock', 'quantity');
+
+        // 🔒 RESTRICT AGENCY TO OWN WAREHOUSE
+        $user = Auth::user();
+        if ($user->role?->description === 'Agencia') {
+            $query->where('user_id', $user->id);
+        }
 
         // Filter by active status
         if ($request->has('active')) {
@@ -61,6 +68,11 @@ class WarehouseController extends Controller
      */
     public function store(Request $request)
     {
+        $user = Auth::user();
+        if ($user->role?->description === 'Agencia') {
+             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
         $validator = Validator::make($request->all(), [
             'warehouse_type_id' => 'required|exists:warehouse_types,id',
             'user_id' => 'nullable|exists:users,id',
@@ -95,6 +107,12 @@ class WarehouseController extends Controller
     {
         $warehouse = Warehouse::with('warehouseType')->findOrFail($id);
 
+        // 🔒 CHECK ACCESS
+        $user = Auth::user();
+        if ($user->role?->description === 'Agencia' && $warehouse->user_id !== $user->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
         return response()->json([
             'success' => true,
             'data' => $warehouse,
@@ -107,6 +125,12 @@ class WarehouseController extends Controller
     public function update(Request $request, $id)
     {
         $warehouse = Warehouse::findOrFail($id);
+
+        // 🔒 CHECK ACCESS
+        $user = Auth::user();
+        if ($user->role?->description === 'Agencia' && $warehouse->user_id !== $user->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
 
         $validator = Validator::make($request->all(), [
             'warehouse_type_id' => 'sometimes|exists:warehouse_types,id',
@@ -141,6 +165,13 @@ class WarehouseController extends Controller
     public function destroy($id)
     {
         $warehouse = Warehouse::findOrFail($id);
+        
+        // 🔒 CHECK ACCESS
+        $user = Auth::user();
+        // Prevent agency from deleting warehouses
+        if ($user->role?->description === 'Agencia') {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
 
         // Prevent deletion of main warehouse
         if ($warehouse->is_main) {
@@ -172,6 +203,12 @@ class WarehouseController extends Controller
     public function inventory(Request $request, $id)
     {
         $warehouse = Warehouse::findOrFail($id);
+
+        // 🔒 CHECK ACCESS
+        $user = Auth::user();
+        if ($user->role?->description === 'Agencia' && $warehouse->user_id !== $user->id) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
 
         $query = $warehouse->inventories()->with('product');
 

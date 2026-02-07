@@ -13,6 +13,11 @@ class OrderPostponementController extends Controller
 {
     public function store(Request $request, Order $order)
     {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
         $data = $request->validate([
             'scheduled_for'      => 'required|date',
             'reason'             => 'nullable|string|max:2000',
@@ -44,10 +49,13 @@ class OrderPostponementController extends Controller
             $updateData['novedad_resolution'] = $request->novedad_resolution;
         }
 
-        // Si se programa para otro día (NO es hoy), desasignamos a la vendedora
+        // NOTA: La vendedora mantiene la orden hasta que se cierre la tienda.
+        // La desasignación ocurre en el comando de cierre de tienda, no aquí al instante.
+        /* 
         if (!$scheduled->isToday()) {
             $updateData['agent_id'] = null;
-        }
+        } 
+        */
 
         $order->update($updateData);
 

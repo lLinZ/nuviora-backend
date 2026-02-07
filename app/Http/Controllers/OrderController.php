@@ -27,6 +27,7 @@ class OrderController extends Controller
     public function updatePayment(Request $request, Order $order)
     {
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        $order->load(['status']); 
         if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
@@ -159,7 +160,7 @@ class OrderController extends Controller
                 'currency'             => $order->currency,
                 'current_total_price'  => $order->current_total_price ?? $computedTotal,
                 'client'               => $order->client,
-                'agent'                => $order->agent,
+                'agent'                => (\Illuminate\Support\Facades\Auth::user()->role?->description === 'Agencia') ? null : $order->agent,
                 'status'               => $order->status,
                 'products'             => $items,
                 'updates'              => $order->updates,
@@ -206,6 +207,11 @@ class OrderController extends Controller
                 'status'    => 'required_without:status_id|string|exists:statuses,description',
                 'status_id' => 'required_without:status|integer|exists:statuses,id',
             ]);
+
+            // 🔒 LOCK: Si ya está Entregado, nadie (salvo Admin) puede cambiar el status
+            if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+                 return response()->json(['status' => false, 'message' => 'La orden ya fue entregada. Solo un Admin puede modificarla.'], 403);
+            }
 
             // Resolver el objeto Status
             if ($request->has('status')) {
@@ -895,8 +901,7 @@ class OrderController extends Controller
             $query->where('deliverer_id', $user->id)
                   ->whereDate('updated_at', now());
         } elseif ($roleName === 'agencia') {
-            $query->where('agency_id', $user->id)
-                  ->whereDate('updated_at', now());
+            $query->where('agency_id', $user->id);
         }
         
         // Filtros Generales (Aplican a todos si los parámetros están presentes)
@@ -949,6 +954,13 @@ class OrderController extends Controller
             
             $check = $order->getStockDetails();
             $orderArray = $order->toArray();
+
+            // 🔒 HIDE AGENT FOR AGENCIES
+            if (\Illuminate\Support\Facades\Auth::user()->role?->description === 'Agencia') {
+                $orderArray['agent'] = null;
+                $orderArray['agent_id'] = null;
+            }
+
             $orderArray['has_stock_warning'] = $check['has_warning'];
             $orderArray['binance_rate'] = $binanceRate;
             $orderArray['bcv_rate'] = $bcvRate;
@@ -977,6 +989,11 @@ class OrderController extends Controller
         $request->validate([
             'agent_id' => 'required|exists:users,id',
         ]);
+
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
 
         $agent = User::findOrFail($request->agent_id);
 
@@ -1015,6 +1032,11 @@ class OrderController extends Controller
         $request->validate([
             'agency_id' => 'required|exists:users,id',
         ]);
+
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
 
         $agency = User::findOrFail($request->agency_id);
 
@@ -1252,6 +1274,7 @@ class OrderController extends Controller
     public function uploadPaymentReceipt(Request $request, Order $order)
     {
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        $order->load(['status']);
         if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
@@ -1311,6 +1334,7 @@ class OrderController extends Controller
     public function uploadChangeReceipt(Request $request, Order $order)
     {
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        $order->load(['status']);
         if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
@@ -1413,6 +1437,7 @@ class OrderController extends Controller
     public function updateChange(Request $request, Order $order)
     {
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        $order->load(['status']);
         if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }

@@ -66,6 +66,18 @@ class InventoryMovementController extends Controller
             });
         }
 
+        // 🔒 RESTRICT AGENCY TO OWN WAREHOUSE MOVEMENTS
+        $user = \Illuminate\Support\Facades\Auth::user();
+        if ($user->role?->description === 'Agencia') {
+            $query->where(function($q) use ($user) {
+                $q->whereHas('fromWarehouse', function($qw) use ($user) {
+                    $qw->where('user_id', $user->id);
+                })->orWhereHas('toWarehouse', function($qw) use ($user) {
+                    $qw->where('user_id', $user->id);
+                });
+            });
+        }
+
         // Filter by movement type
         if ($request->has('movement_type')) {
             $query->where('movement_type', $request->movement_type);
@@ -99,6 +111,18 @@ class InventoryMovementController extends Controller
     {
         $movement = InventoryMovement::with(['product', 'fromWarehouse', 'toWarehouse', 'user'])
             ->findOrFail($id);
+
+        // 🔒 CHECK ACCESS
+        $user = \Illuminate\Support\Facades\Auth::user();
+        if ($user->role?->description === 'Agencia') {
+            $canView = false;
+            if ($movement->fromWarehouse && $movement->fromWarehouse->user_id === $user->id) $canView = true;
+            if ($movement->toWarehouse && $movement->toWarehouse->user_id === $user->id) $canView = true;
+            
+            if (!$canView) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+        }
 
         return response()->json([
             'success' => true,
