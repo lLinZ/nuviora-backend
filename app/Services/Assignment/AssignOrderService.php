@@ -144,10 +144,25 @@ class AssignOrderService
                 $agentId = $this->strategy->pickAgentId($agentsForShop, $ord);
                 
                 // Lógica de Status Inteligente:
-                // Si ya era Novedad, mantenemos Novedad. Si no, Asignado a Vendedor.
-                $newStatusId = ($novedadStatusId && $ordModel->status_id === $novedadStatusId)
-                    ? $novedadStatusId
-                    : $assignmentStatusId;
+                // Si ya era Novedad, mantenemos Novedad.
+                // Si venía de "Programado para otro dia", ahora es "Reprogramado para hoy".
+                // De lo contrario, "Asignado a Vendedor".
+                
+                $reprogramadoHoyStatus = Status::where('description', 'Reprogramado para hoy')->first();
+                $progOtroDiaStatus = Status::where('description', 'Programado para otro dia')->first();
+
+                if ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
+                    $newStatusId = $novedadStatusId;
+                } elseif ($progOtroDiaStatus && $ordModel->status_id === $progOtroDiaStatus->id) {
+                    // Verificar FECHA
+                    if ($ordModel->scheduled_for && \Carbon\Carbon::parse($ordModel->scheduled_for)->isFuture() && !\Carbon\Carbon::parse($ordModel->scheduled_for)->isToday()) {
+                         // Si es para mañana o después, NO ASIGNAR AÚN.
+                         return;
+                    }
+                    $newStatusId = $reprogramadoHoyStatus ? $reprogramadoHoyStatus->id : $assignmentStatusId;
+                } else {
+                    $newStatusId = $assignmentStatusId;
+                }
                 
                 $ord->update(['agent_id' => $agentId, 'status_id' => $newStatusId]);
 
