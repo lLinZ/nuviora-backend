@@ -49,7 +49,7 @@ return [
             'Asignado a repartidor' => ['En ruta', 'Novedades'],
             'En ruta'               => ['Entregado', 'Novedades'],
             // Novedad Solucionada -> Entregado o En Ruta (condicional en Controller)
-            'Novedad Solucionada'   => ['Entregado', 'En ruta'], 
+            'Novedad Solucionada'   => ['Entregado', 'En ruta', 'Novedades'], 
         ]
     ],
 
