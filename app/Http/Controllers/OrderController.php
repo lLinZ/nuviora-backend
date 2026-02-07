@@ -897,6 +897,20 @@ class OrderController extends Controller
         if ($roleName === 'vendedor') {
             // Un Vendedor SOLO ve lo que tiene asignado
             $query->where('agent_id', $user->id);
+            
+            // Restricción: Si es Entregado, solo mostrar de hoy
+            $query->where(function($q) {
+                // Mostrar si NO es Entregado
+                $q->whereDoesntHave('status', function($sq) {
+                    $sq->where('description', 'Entregado');
+                })
+                // O si ES Entregado, que sea de hoy
+                ->orWhere(function($q2) {
+                    $q2->whereHas('status', function($sq) {
+                        $sq->where('description', 'Entregado');
+                    })->whereDate('updated_at', now());
+                });
+            });
         } elseif ($roleName === 'repartidor') {
             $query->where('deliverer_id', $user->id)
                   ->whereDate('updated_at', now());
@@ -1254,6 +1268,14 @@ class OrderController extends Controller
             // 🔒 General seller validation for non-public statuses
             if ($userRole === 'Vendedor' && !in_array($statusName, $sellerPublicStatuses)) {
                 return $hasPayments && $hasChangeInfo;
+            }
+            
+            // 🔒 Special rule for "Novedad Solucionada" -> "En ruta"
+            // Solo permitir volver a ruta si la novedad fue por cambio de ubicación
+            if ($currentStatus === 'Novedad Solucionada' && $statusName === 'En ruta') {
+                 if (stripos($order->novedad_type, 'bicaci') === false) { 
+                      return false;
+                 }
             }
             
             return true;
