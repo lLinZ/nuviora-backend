@@ -1160,9 +1160,11 @@ class OrderController extends Controller
         $item = OrderProduct::where('order_id', '=', $order->id)->where('id', '=', $itemId)->firstOrFail();
 
         // For return/exchange orders, allow deleting any product (not just upsells)
-        // For regular orders, only allow deleting upsells
-        if (!($order->is_return || $order->is_exchange) && !$item->is_upsell) {
-            return response()->json(['status' => false, 'message' => 'No es un upsell'], 400);
+        // For regular orders, ONLY ADMIN can delete original products
+        $isAdmin = \Illuminate\Support\Facades\Auth::user()->role?->description === 'Admin';
+        
+        if (!$isAdmin && !($order->is_return || $order->is_exchange) && !$item->is_upsell) {
+            return response()->json(['status' => false, 'message' => 'No es un upsell. Solo admins pueden eliminar productos base.'], 403);
         }
 
         $deduction = $item->price * $item->quantity;
@@ -1171,9 +1173,10 @@ class OrderController extends Controller
         // Only update total for non-return/exchange orders (they always have $0 total)
         if (!($order->is_return || $order->is_exchange)) {
             $order->current_total_price -= $deduction;
+            if ($order->current_total_price < 0) $order->current_total_price = 0; // Safety check
             $order->save();
 
-            // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell del reporte)
+            // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell/producto del reporte)
             if ($order->status && $order->status->description === 'Entregado') {
                 app(CommissionService::class)->generateForDeliveredOrder($order);
             }
@@ -1181,7 +1184,7 @@ class OrderController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => ($order->is_return || $order->is_exchange) ? 'Producto eliminado de la devolución/cambio' : 'Upsell eliminado correctamente',
+            'message' => ($order->is_return || $order->is_exchange) ? 'Producto eliminado de la devolución/cambio' : 'Producto eliminado correctamente',
             'order' => $order->load('products.product', 'client', 'status', 'agent')
         ]);
     }
