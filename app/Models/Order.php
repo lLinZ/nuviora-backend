@@ -247,7 +247,7 @@ class Order extends Model
      */
     public function syncStockStatus()
     {
-        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock'];
+        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock', 'Novedades', 'Novedad Solucionada'];
         
         // Use relation if loaded, otherwise fresh query
         $statusDesc = $this->status ? $this->status->description : Status::find($this->status_id)?->description;
