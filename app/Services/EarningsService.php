@@ -126,7 +126,7 @@ class EarningsService
     /**
      * Calcula la liquidación de agencias: Efectivo cobrado - Vuelto entregado
      */
-    private function calculateAgencySettlement(Carbon $from, Carbon $to, ?int $agencyId = null): Collection
+    public function calculateAgencySettlement(Carbon $from, Carbon $to, ?int $agencyId = null): Collection
     {
         $rateBinanceNow = (float) (Setting::get('rate_binance_usd', 1) ?? 1);
         $rateEuroNow = (float) (Setting::get('rate_bcv_eur', 1) ?? 1);

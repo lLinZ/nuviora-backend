@@ -7,12 +7,20 @@ use App\Models\Role;
 use App\Models\Setting;
 use App\Models\Status;
 use App\Models\User;
+use App\Services\EarningsService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class DashboardController extends Controller
 {
+    protected $earningsService;
+
+    public function __construct(EarningsService $earningsService)
+    {
+        $this->earningsService = $earningsService;
+    }
+
     public function index(Request $request)
     {
         $user = Auth::user();
@@ -380,13 +388,14 @@ class DashboardController extends Controller
 
         $deliveredCount = Order::where('agency_id', '=', $user->id)
             ->where('status_id', '=', $statusDeliveredId)
-            ->whereDate('updated_at', $date) // Changed from processed_at to updated_at just to be safe/consistent with filtering
+            ->whereDate('updated_at', $date)
             ->count();
 
-        $totalSales = Order::where('agency_id', '=', $user->id)
-            ->where('status_id', '=', $statusDeliveredId)
-            ->whereDate('updated_at', $date)
-            ->sum('current_total_price') ?? 0;
+        // Calculate real net sales (Collected - Change) using EarningsService logic
+        $settlement = $this->earningsService->calculateAgencySettlement($date, $date, $user->id);
+        $totalNetUsd = $settlement->first()['total_net_usd'] ?? 0;
+
+        $totalSales = (float) $totalNetUsd;
 
         // Pending Route: Orders assigned to this agency currently in statuses that imply "Waiting for route/delivery"
         // Statuses: 'Asignar a agencia', 'Asignar repartidor', 'Novedades', 'Novedad Solucionada'
