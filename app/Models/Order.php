@@ -16,7 +16,7 @@ class Order extends Model
  
     protected $casts = [
         'change_payment_details' => 'array',
-        'scheduled_for'          => 'date',
+        'scheduled_for'          => 'datetime',
     ];
 
     // Relationship methods follow...
