@@ -236,6 +236,7 @@ class EarningsService
                     'agency_name'         => $agency->names,
                     'agency_color'        => $agency->color,
                     'total_orders'        => $agencyOrders->where('status_id', $statusDeliveredId)->count(),
+                    'count_delivered'     => $agencyOrders->where('status_id', $statusDeliveredId)->count(),
                     'count_in_transit'    => $agencyOrders->where('status_id', $statusTransitId)->count(),
                     'count_shipped'       => $agencyOrders->where('was_shipped', true)->count(),
                     'total_shipping_cost' => $details->sum('delivery_cost'),
@@ -243,8 +244,8 @@ class EarningsService
                     'total_collected_ves' => $details->sum('collected_ves'),
                     'total_change_usd'    => $details->sum('change_usd'),
                     'total_change_ves'    => $details->sum('change_ves'),
-                    'total_net_usd'       => $details->sum('net_usd'),
-                    'total_net_ves'       => $details->sum('net_ves'),
+                    'balance_usd'         => $details->sum('net_usd'),
+                    'balance_ves'         => $details->sum('net_ves'),
                     'order_details'       => $details->values()
                 ];
             })
