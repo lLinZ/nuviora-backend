@@ -38,6 +38,7 @@ Route::post('order/webhook/{shop_id?}', [ShopifyWebhookController::class, 'handl
 
 // Public route for payment receipts (no auth required to view images)
 Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt']);
+Route::get('/orders/receipt/{receipt}', [OrderController::class, 'getReceipt']);
 Route::get('/orders/{order}/change-receipt', [OrderController::class, 'getChangeReceipt']);
 Route::post('test/register', [AuthController::class, 'testRegister']);
 
@@ -244,6 +245,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('banks', \App\Http\Controllers\BankController::class);
 
     Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
+    Route::delete('/orders/{order}/payment-receipt/{receiptId}', [OrderController::class, 'deletePaymentReceipt']);
     Route::post('/orders/{order}/change-receipt', [OrderController::class, 'uploadChangeReceipt']);
     Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder']);
     Route::put('/orders/{order}/toggle-notification', [OrderController::class, 'toggleChangeNotification']);

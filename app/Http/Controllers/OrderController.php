@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\Status;
 use App\Models\User;
 use App\Models\City;
+use App\Models\PaymentReceipt;
 use App\Services\CommissionService;
 use App\Services\ShopifyService;
 use Illuminate\Http\Request;
@@ -119,6 +120,7 @@ class OrderController extends Controller
             'locationReviews', // 👈 enviamos al front
             'rejectionReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
+            'paymentReceipts', // 👈 Payment Receipts Gallery
             'agency', // 👈 incluimos agencia
             'postponements.user', // 👈 incluimos historial de reprogramación
             'shop', // 👈 incluimos tienda
@@ -196,6 +198,7 @@ class OrderController extends Controller
                 'parent_order_id'       => $order->parent_order_id,
                 'parent_order'          => $order->parentOrder,
                 'return_orders'         => $order->returnOrders,
+                'receipts_gallery'      => $order->paymentReceipts->toArray(),
             ]
         ]);
     }
@@ -888,6 +891,7 @@ class OrderController extends Controller
         $perPage = (int) $request->get('per_page', 50);
 
         $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])
+            ->withCount('updates')
             ->orderBy('updated_at', 'desc')
             ->orderBy('id', 'desc');
 
@@ -1542,34 +1546,93 @@ class OrderController extends Controller
         }
 
         $request->validate([
-            'payment_receipt' => 'required|image|max:10240', // 10MB
+            'payment_receipt' => 'nullable|image|max:10240', // 10MB
+            'payment_receipts' => 'nullable|array',
+            'payment_receipts.*' => 'image|max:10240',
         ]);
 
+        $files = [];
         if ($request->hasFile('payment_receipt')) {
-            // Eliminar anterior si existe
-            if ($order->payment_receipt) {
-                if (Storage::disk('public')->exists($order->payment_receipt)) {
-                    Storage::disk('public')->delete($order->payment_receipt);
-                }
+            $files[] = $request->file('payment_receipt');
+        }
+        if ($request->hasFile('payment_receipts')) {
+            foreach($request->file('payment_receipts') as $file) {
+                $files[] = $file;
             }
-
-            $path = $request->file('payment_receipt')->store('payment_receipts', 'public');
-            
-            $order->payment_receipt = $path;
-            $order->save();
-
-            // URL para el preview inmediato en frontend
-            $url = url("api/orders/{$order->id}/payment-receipt");
-
-            return response()->json([
-                'status' => true,
-                'message' => 'Comprobante subido exitosamente',
-                'payment_receipt_url' => $url,
-                'order' => $order
-            ]);
         }
 
-        return response()->json(['status' => false, 'message' => 'No se recibió ninguna imagen'], 400);
+        if (empty($files)) {
+             return response()->json(['status' => false, 'message' => 'No se recibió ninguna imagen'], 400);
+        }
+
+        foreach ($files as $file) {
+            $path = $file->store('payment_receipts', 'public');
+            $originalName = $file->getClientOriginalName();
+            
+            $order->paymentReceipts()->create([
+                'path' => $path,
+                'original_name' => $originalName
+            ]);
+            
+            // Backward compatibility (store the latest one)
+            $order->payment_receipt = $path;
+            $order->save();
+        }
+
+        // URL para el preview inmediato en frontend (de la última)
+    $url = url("api/orders/{$order->id}/payment-receipt");
+
+    $freshOrder = $order->fresh(['paymentReceipts', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
+    $orderArray = $freshOrder->toArray();
+    $orderArray['receipts_gallery'] = $freshOrder->paymentReceipts->toArray();
+
+    return response()->json([
+        'status' => true,
+        'message' => 'Comprobante(s) subido(s) exitosamente',
+        'payment_receipt_url' => $url,
+        'order' => $orderArray
+    ]);
+    }
+
+    public function deletePaymentReceipt(Order $order, $receiptId)
+    {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        $order->load(['status']);
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
+        $receipt = $order->paymentReceipts()->where('id', $receiptId)->first();
+        if (!$receipt) {
+            return response()->json(['status' => false, 'message' => 'Recibo no encontrado'], 404);
+        }
+
+        // Eliminar del storage
+        if (\Illuminate\Support\Facades\Storage::disk('public')->exists($receipt->path)) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($receipt->path);
+        }
+
+        // Eliminar de BD
+        $receipt->delete();
+
+        // Actualizar el campo payment_receipt si era el que se borró y quedan más
+        $remaining = $order->paymentReceipts()->latest()->first();
+        if ($remaining) {
+            $order->payment_receipt = $remaining->path;
+        } else {
+            $order->payment_receipt = null;
+        }
+        $order->save();
+
+        $freshOrder = $order->fresh(['paymentReceipts', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
+        $orderArray = $freshOrder->toArray();
+        $orderArray['receipts_gallery'] = $freshOrder->paymentReceipts->toArray();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Comprobante eliminado exitosamente',
+            'order' => $orderArray
+        ]);
     }
 
     public function getPaymentReceipt(Request $request, Order $order)
@@ -1588,6 +1651,22 @@ class OrderController extends Controller
         if ($request->has('download')) {
             $filename = "Pago_Orden_{$order->name}." . pathinfo($path, PATHINFO_EXTENSION);
             return response()->download($path, $filename);
+        }
+
+        return response()->file($path);
+    }
+
+    public function getReceipt(Request $request, PaymentReceipt $receipt)
+    {
+        $path = storage_path('app/public/' . $receipt->path);
+
+        if (!file_exists($path)) {
+            abort(404, 'Archivo no encontrado');
+        }
+        
+        if ($request->has('download')) {
+             $filename = "Recibo_" . $receipt->id . "." . pathinfo($path, PATHINFO_EXTENSION);
+             return response()->download($path, $filename);
         }
 
         return response()->file($path);

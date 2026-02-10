@@ -71,6 +71,11 @@ class Order extends Model
         return $this->hasMany(OrderPayment::class);
     }
 
+    public function paymentReceipts()
+    {
+        return $this->hasMany(PaymentReceipt::class);
+    }
+
     public function city()
     {
         return $this->belongsTo(City::class);
