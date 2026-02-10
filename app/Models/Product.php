@@ -9,6 +9,17 @@ class Product extends Model
 {
     //
     use HasFactory;
+    
+    protected static function booted()
+    {
+        static::updated(function ($product) {
+            if ($product->wasChanged('showable_name')) {
+                $product->orderProducts()->update([
+                    'showable_name' => $product->showable_name
+                ]);
+            }
+        });
+    }
 
     public function orderProducts()
     {
@@ -46,6 +57,7 @@ class Product extends Model
         'variant_id',
         'title',
         'name',
+        'showable_name',
         'price',
         'cost_usd',
         'sku',

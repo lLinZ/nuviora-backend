@@ -128,6 +128,14 @@ class OrderController extends Controller
             'parentOrder', // 👈 orden padre si es devolución
         ])->findOrFail($id);
 
+    // 🔒 RESTRICCIÓN AGENCIA: No deben ver órdenes canceladas
+    $user = \Illuminate\Support\Facades\Auth::user();
+    if ($user->role?->description === 'Agencia') {
+        if ($order->status?->description === 'Cancelado') {
+            return response()->json(['status' => false, 'message' => 'No tienes permiso para ver esta orden.'], 403);
+        }
+    }
+
         // 📦 CHECK STOCK AVAILABILITY
         $stockCheck = $order->getStockDetails();
         $hasStockWarning = $stockCheck['has_warning'];
@@ -138,6 +146,7 @@ class OrderController extends Controller
             return [
                 'id'        => $op->id,
                 'product_id' => $op->product_id,
+                'showable_name' => $op->showable_name ?? ($op->product->showable_name ?? null),
                 'title'     => $op->title ?? ($op->product->title ?? $op->product->name ?? 'Producto'),
                 'sku'       => $op->product->sku ?? null,
                 'image'     => $op->image ?? $op->product->image ?? null,
@@ -707,6 +716,7 @@ class OrderController extends Controller
                 return [
                     'product_id'   => $op->product_id,
                     'shopify_id'   => $op->product_number,
+                    'showable_name' => $op->showable_name ?? ($op->product->showable_name ?? null),
                     'title'        => $op->title,
                     'name'         => $op->name,
                     'sku'          => $op->product->sku ?? null,
@@ -919,7 +929,10 @@ class OrderController extends Controller
             $query->where('deliverer_id', $user->id)
                   ->whereDate('updated_at', now());
         } elseif ($roleName === 'agencia') {
-            $query->where('agency_id', $user->id);
+            $query->where('agency_id', $user->id)
+                  ->whereDoesntHave('status', function($sq) {
+                      $sq->where('description', 'Cancelado');
+                  });
         }
         
         // Filtros Generales (Aplican a todos si los parámetros están presentes)
@@ -1143,6 +1156,7 @@ class OrderController extends Controller
             'product_number' => $product->product_id,
             'title' => $product->title,
             'name' => $product->name,
+            'showable_name' => $product->showable_name,
             'price' => $productPrice,
             'quantity' => $request->quantity,
             'image' => $product->image,
@@ -1373,8 +1387,9 @@ class OrderController extends Controller
                     'product_id' => $product->id,
                     'product_number' => $product->product_id, // Shopify ID mapping
                     'name' => $product->name,
-                    'title' => $product->title,
-                    'sku' => $product->sku,
+                'title' => $product->title,
+                'showable_name' => $product->showable_name,
+                'sku' => $product->sku,
                     'price' => $price, 
                     'quantity' => $quantity,
                     'image' => $product->image
@@ -2135,6 +2150,8 @@ class OrderController extends Controller
                 'order_id' => $returnOrder->id,
                 'product_id' => $product->product_id,
                 'title' => $product->title,
+                'name' => $product->name,
+                'showable_name' => $product->showable_name,
                 'price' => 0, // No cost for return
                 'quantity' => $product->quantity,
                 'image' => $product->image,

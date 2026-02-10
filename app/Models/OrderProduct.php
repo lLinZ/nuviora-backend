@@ -15,6 +15,7 @@ class OrderProduct extends Model // 👈 mejor singular
         'product_number',
         'title',
         'name',
+        'showable_name',
         'price',
         'quantity',
         'image',

@@ -194,6 +194,7 @@ class ShopifyWebhookController extends Controller
                     'price'          => round($item['price']),
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl,
+                    'showable_name'  => $product->showable_name,
                 ]
             );
         }

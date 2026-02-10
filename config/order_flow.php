@@ -41,7 +41,7 @@ return [
     'Agencia' => [
         'visible_columns' => [
             'Novedades', 'Novedad Solucionada', 'Asignar a agencia',
-            'Asignado a repartidor', 'En ruta', 'Entregado', 'Cancelado'
+            'Asignado a repartidor', 'En ruta', 'Entregado'
         ],
 
         'transitions' => [

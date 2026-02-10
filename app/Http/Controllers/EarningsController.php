@@ -22,12 +22,14 @@ class EarningsController extends Controller
         $user = Auth::user();
         $roleDesc = $user->role?->description;
 
-        if (!in_array($roleDesc, ['Admin', 'Gerente'])) {
+        if (!in_array($roleDesc, ['Admin', 'Gerente', 'Agencia'])) {
             return response()->json([
                 'status'  => false,
                 'message' => 'No autorizado',
             ], 403);
         }
+
+        $agencyId = $roleDesc === 'Agencia' ? $user->id : null;
 
         $from = $request->query('from')
             ? Carbon::parse($request->query('from'))->startOfDay()
@@ -37,7 +39,7 @@ class EarningsController extends Controller
             ? Carbon::parse($request->query('to'))->endOfDay()
             : now()->endOfDay();
 
-        $data = $this->service->summary($from, $to);
+        $data = $this->service->summary($from, $to, $agencyId);
 
         return response()->json([
             'status' => true,

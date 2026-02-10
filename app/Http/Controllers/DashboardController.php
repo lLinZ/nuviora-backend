@@ -371,7 +371,7 @@ class DashboardController extends Controller
         $statusAsignarRepartidorId = Status::where('description', '=', 'Asignar repartidor')->value('id');
         
         $assigned = \App\Models\OrderStatusLog::whereDate('created_at', $date)
-            ->whereIn('to_status_id', [$statusAsignarAgenciaId, $statusAsignarRepartidorId])
+            ->where('to_status_id', $statusAsignarAgenciaId)
             ->whereHas('order', function($q) use ($user) {
                 $q->where('agency_id', $user->id);
             })

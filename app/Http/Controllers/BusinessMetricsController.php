@@ -81,6 +81,7 @@ class BusinessMetricsController extends Controller
         if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
 
         $states = [
+            'Asignado a vendedor',
             'Llamado 1', 'Llamado 2', 'Llamado 3', 
             'Programado para otro dia', 'Programado para mas tarde', 
             'Cancelado', 'Asignar a agencia', 'En ruta', 'Entregado'
@@ -92,7 +93,11 @@ class BusinessMetricsController extends Controller
             if (!$statusId) continue;
 
             // Pedidos que pasaron por este estado (en el log o actualmente)
-            $count = $orders->filter(function($o) use ($statusId, $statusLogs) {
+            $count = $orders->filter(function($o) use ($statusId, $statusLogs, $stateName) {
+                // ✅ Excluir devoluciones/cambios del conteo de 'Entregado' si el usuario lo pide
+                if ($stateName === 'Entregado' && ($o->is_return || $o->is_exchange)) {
+                    return false;
+                }
                 return (int)$o->status_id === (int)$statusId || $statusLogs->where('order_id', '=', $o->id)->where('to_status_id', '=', $statusId)->isNotEmpty();
             })->count();
 
@@ -177,7 +182,7 @@ class BusinessMetricsController extends Controller
                 'name' => $v->names,
                 'stats' => [
                     'assigned' => $total,
-                    'delivery_rate' => round(($vOrders->where('status_id', '=', $statusEntregadoId)->count() / $total) * 100, 2),
+                    'delivery_rate' => round(($vOrders->where('status_id', '=', $statusEntregadoId)->where('is_return', false)->where('is_exchange', false)->count() / $total) * 100, 2),
                     'cancel_rate' => round(($vOrders->where('status_id', '=', $statusCanceladoId)->count() / $total) * 100, 2),
                     'agency_rate' => round(($vOrders->filter(fn($o) => (int)$o->status_id === (int)$statusAgenciaId || $statusLogs->where('order_id', '=', $o->id)->where('to_status_id', '=', $statusAgenciaId)->isNotEmpty())->count() / $total) * 100, 2),
                 ],
@@ -225,7 +230,7 @@ class BusinessMetricsController extends Controller
                 'stats' => [
                     'received' => $total,
                     'in_route_rate' => round(($aOrders->filter(fn($o) => (int)$o->status_id === (int)$statusRutaId || $o->was_shipped)->count() / $total) * 100, 2),
-                    'delivered_rate' => round(($aOrders->where('status_id', '=', $statusEntregadoId)->count() / $total) * 100, 2),
+                    'delivered_rate' => round(($aOrders->where('status_id', '=', $statusEntregadoId)->where('is_return', false)->where('is_exchange', false)->count() / $total) * 100, 2),
                     'cancel_rate' => round(($aOrders->where('status_id', '=', $statusCanceladoId)->count() / $total) * 100, 2),
                     'novelty_rate' => round(($aOrders->filter(fn($o) => !empty($o->novedad_type))->count() / $total) * 100, 2),
                 ]
@@ -262,7 +267,7 @@ class BusinessMetricsController extends Controller
                     'rejected' => $pOrders->where('status_id', '=', $statusRechazadoId)->count(),
                     'in_route' => $pOrders->where('was_shipped', '=', true)->count(),
                 ],
-                'effectiveness' => round(($pOrders->where('status_id', '=', $statusEntregadoId)->count() / $total) * 100, 2),
+                'effectiveness' => round(($pOrders->where('status_id', '=', $statusEntregadoId)->where('is_return', false)->where('is_exchange', false)->count() / $total) * 100, 2),
                 'quality' => [
                     'rejection_rate' => round(($pOrders->where('status_id', '=', $statusRechazadoId)->count() / $total) * 100, 2),
                 ]

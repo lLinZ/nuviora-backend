@@ -19,6 +19,7 @@ class ProductController extends Controller
         if ($request->has('search')) {
             $search = $request->search;
             $query->where('name', 'like', "%{$search}%")
+                  ->orWhere('showable_name', 'like', "%{$search}%")
                   ->orWhere('title', 'like', "%{$search}%")
                   ->orWhere('sku', 'like', "%{$search}%");
         }
@@ -47,6 +48,7 @@ class ProductController extends Controller
             'sku' => 'nullable|string|unique:products,sku',
             'title' => 'nullable|string',
             'name' => 'nullable|string',
+            'showable_name' => 'nullable|string',
             'price' => 'required|numeric',
             'cost_usd' => 'required|numeric',
             'image' => 'nullable|string',
@@ -64,6 +66,7 @@ class ProductController extends Controller
             'sku' => 'nullable|string|unique:products,sku,' . $p->id,
             'title' => 'nullable|string',
             'name' => 'nullable|string',
+            'showable_name' => 'nullable|string',
             'price' => 'required|numeric',
             'cost_usd' => 'required|numeric',
             'image' => 'nullable|string',

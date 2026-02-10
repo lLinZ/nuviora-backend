@@ -22,7 +22,7 @@ class EarningsService
     /**
      * Devuelve resumen de ganancias por rol, por rango de fechas [from, to]
      */
-    public function summary(Carbon $from, Carbon $to): array
+    public function summary(Carbon $from, Carbon $to, ?int $agencyId = null): array
     {
         // Seleccionamos las tasas actuales
         $rateBCV = (float) (Setting::get('rate_bcv_usd', 1) ?? 1);
@@ -39,6 +39,7 @@ class EarningsService
         // Filtramos por created_at para capturar el momento de la transacción de ganancia
         $allEarnings = \App\Models\Earning::with(['user', 'order'])
             ->whereBetween('earning_date', [$from->toDateString(), $to->toDateString()])
+            ->when($agencyId, fn($q) => $q->where('user_id', $agencyId))
             ->get();
 
         // 1. VENDEDORAS
@@ -118,14 +119,14 @@ class EarningsService
                         'agency_id'        => $o->agency_id,
                     ];
                 }),
-            'agency_settlement' => $this->calculateAgencySettlement($from, $to)
+            'agency_settlement' => $this->calculateAgencySettlement($from, $to, $agencyId)
         ];
     }
 
     /**
      * Calcula la liquidación de agencias: Efectivo cobrado - Vuelto entregado
      */
-    private function calculateAgencySettlement(Carbon $from, Carbon $to): Collection
+    private function calculateAgencySettlement(Carbon $from, Carbon $to, ?int $agencyId = null): Collection
     {
         $rateBinanceNow = (float) (Setting::get('rate_binance_usd', 1) ?? 1);
         $rateEuroNow = (float) (Setting::get('rate_bcv_eur', 1) ?? 1);
@@ -134,6 +135,7 @@ class EarningsService
         $orders = Order::with(['payments', 'agency'])
             ->whereNotNull('agency_id')
             ->whereBetween('updated_at', [$from->startOfDay(), $to->endOfDay()])
+            ->when($agencyId, fn($q) => $q->where('agency_id', $agencyId))
             ->get();
 
         $statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
