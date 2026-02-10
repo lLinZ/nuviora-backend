@@ -142,6 +142,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
     // Listar ordenes
     Route::get('orders', [OrderController::class, 'index']);
+    // Crear orden manualmente
+    Route::post('orders', [OrderController::class, 'store']);
     // Historial de actividades (Audit log)
     Route::get('orders/{order}/activities', [OrderController::class, 'getActivityLogs']);
     // Upselling

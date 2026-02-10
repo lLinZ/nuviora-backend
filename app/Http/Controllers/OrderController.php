@@ -1190,7 +1190,174 @@ class OrderController extends Controller
     }
 
     public function create() {}
-    public function store(Request $request) {}
+    public function store(Request $request)
+    {
+        // 1. Validation
+        $request->validate([
+            'client_name' => 'required|string',
+            'client_phone' => 'required|string',
+            'client_province' => 'required|string',
+            'client_address' => 'nullable|string',
+            'products' => 'required|array|min:1',
+            'products.*.id' => 'required|exists:products,id',
+            'products.*.quantity' => 'required|integer|min:1',
+            'products.*.price' => 'nullable|numeric|min:0',
+            'agent_id' => 'nullable|exists:users,id'
+        ]);
+
+        \DB::beginTransaction();
+        try {
+            // 2. Client Logic
+            // Clean phone number / logic could be added here, but for now direct usage
+            // 2. Client Logic
+            // Clean phone number / logic check
+            $client = Client::where('phone', $request->client_phone)->first();
+
+            if (!$client) {
+                // Use a large random number ID for manual clients to mock Shopify ID
+                $tempId = (int) (microtime(true) * 1000); 
+                
+                $client = Client::create([
+                    'phone'           => $request->client_phone,
+                    'customer_id'     => $tempId,
+                    'customer_number' => $tempId,
+                    'first_name'      => $request->client_name,
+                    'province'        => $request->client_province,
+                    'city'            => $request->client_province, 
+                    'address1'        => $request->client_address,
+                    'country_name'    => 'Venezuela'
+                ]);
+            } else {
+                // Update basic info to match latest manual entry
+                $client->update([
+                    'first_name' => $request->client_name,
+                    'province'   => $request->client_province,
+                    'city'       => $request->client_province, 
+                    'address1'   => $request->client_address,
+                ]);
+            }
+
+            // 3. Determine Agent
+            $currentUser = Auth::user();
+            $agentId = null;
+
+            if ($currentUser->role->description === 'Vendedor') {
+                $agentId = $currentUser->id;
+            } else {
+                // Admin/Gerente logic
+                if ($request->has('agent_id')) {
+                    $agentId = $request->agent_id;
+                } else {
+                    $agentId = null; 
+                }
+            }
+
+            // 4. City/Agency Logic
+            $cityMatch = null;
+            if ($request->client_province) {
+                 $cityMatch = \App\Models\City::whereRaw('UPPER(name) = ?', [strtoupper(trim($request->client_province))])->first();
+            }
+            
+            $cityId = $cityMatch ? $cityMatch->id : null;
+            $agencyId = $cityMatch ? $cityMatch->agency_id : null;
+            $deliveryCost = $cityMatch ? $cityMatch->delivery_cost_usd : 0;
+
+            // 5. Create Order Header
+            $lastOrder = Order::orderBy('id', 'desc')->first();
+            $nextId = $lastOrder ? $lastOrder->id + 1 : 1;
+            $orderName = "MAN-" . $nextId;
+
+            $statusDescription = $agentId ? 'Asignado a vendedor' : 'Nuevo';
+            $status = Status::where('description', '=', $statusDescription)->first();
+
+            // Generate a manual order_id (mocking Shopify ID)
+            $manualOrderId = (int) (microtime(true) * 1000);
+
+            $order = Order::create([
+                'order_id' => $manualOrderId, // Add generated ID
+                'name' => $orderName,
+                'order_number' => $nextId, 
+                'currency' => 'USD', 
+                'current_total_price' => 0, 
+                'client_id' => $client->id,
+                'agent_id' => $agentId,
+                'agency_id' => $agencyId,
+                'city_id' => $cityId,
+                'delivery_cost' => $deliveryCost,
+                'status_id' => $status ? $status->id : 1,
+            ]);
+
+            // 6. Products
+            $total = 0;
+            foreach ($request->products as $p) {
+                $product = Product::find($p['id']);
+                $quantity = $p['quantity'];
+                
+                $price = isset($p['price']) ? $p['price'] : $product->price;
+
+                OrderProduct::create([
+                    'order_id' => $order->id,
+                    'product_id' => $product->id,
+                    'product_number' => $product->product_id, // Shopify ID mapping
+                    'name' => $product->name,
+                    'title' => $product->title,
+                    'sku' => $product->sku,
+                    'price' => $price, 
+                    'quantity' => $quantity,
+                    'image' => $product->image
+                ]);
+
+                $total += ($price * $quantity);
+            }
+
+            $order->current_total_price = $total;
+            $order->save();
+
+            // Log activity
+            \App\Models\OrderActivityLog::create([
+                'order_id' => $order->id,
+                'user_id' => $currentUser->id,
+                'action' => 'created',
+                'description' => "Orden creada manualmente por " . ($currentUser->name ?? 'Usuario')
+            ]);
+            
+            // Notify Agent if assigned and user is not the agent
+            if ($agentId && $agentId !== $currentUser->id) {
+                 $agent = User::find($agentId);
+                 if ($agent) {
+                     try {
+                         $agent->notify(new OrderAssignedNotification($order, "Nueva orden manual asignada: #{$order->name}"));
+                     } catch (\Exception $e) {}
+                 }
+            }
+
+            // 🔔 NOTIFY ADMINS 🔔
+            try {
+                $admins = User::whereHas('role', function($q) {
+                    $q->where('description', 'Admin');
+                })->get();
+                
+                foreach ($admins as $admin) {
+                     // Don't notify if the admin created it themselves (optional preference, but usually good to notify other admins)
+                     if ($admin->id !== $currentUser->id) { 
+                        $admin->notify(new OrderAssignedNotification($order, "Nueva orden manual creada: #{$order->name} por {$currentUser->names}"));
+                     }
+                }
+            } catch (\Exception $e) {}
+
+            \DB::commit();
+
+            return response()->json([
+                'status' => true, 
+                'order' => $order->fresh(['client', 'status', 'products', 'agent']),
+                'message' => 'Orden creada exitosamente'
+            ]);
+
+        } catch (\Exception $e) {
+            \DB::rollBack();
+            return response()->json(['status' => false, 'message' => 'Error: ' . $e->getMessage()], 500);
+        }
+    }
     public function edit(Order $order) {}
     
     /**
