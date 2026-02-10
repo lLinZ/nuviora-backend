@@ -149,6 +149,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Upselling
     Route::post('orders/{order}/upsell', [OrderController::class, 'addUpsell']);
     Route::delete('orders/{order}/upsell/{itemId}', [OrderController::class, 'removeUpsell']);
+    Route::put('orders/{order}/upsell/{itemId}', [OrderController::class, 'updateProductQuantity']);
     // Productos
     Route::get('products', [ProductController::class, 'index']);
 

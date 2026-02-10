@@ -1116,6 +1116,21 @@ class OrderController extends Controller
         
         // For return/exchange orders, price is always 0 and is_upsell is false
         $isReturnOrExchange = ($order->is_return || $order->is_exchange);
+        
+        // Determine if it is an upsell
+        // Default: YES (unless it's a return/exchange)
+        // If 'is_upsell' is explicitly FALSE in request AND user is Admin/Gerente -> NO
+        $userRole = auth()->user()->role?->description;
+        $isAdminOrManager = in_array($userRole, ['Admin', 'Gerente', 'Master']);
+        $requestedRegular = $request->has('is_upsell') && !$request->boolean('is_upsell');
+        
+        $isUpsell = !$isReturnOrExchange; // Default true for normal orders
+        if ($isReturnOrExchange) {
+            $isUpsell = false;
+        } elseif ($isAdminOrManager && $requestedRegular) {
+            $isUpsell = false;
+        }
+
         $productPrice = $isReturnOrExchange ? 0 : $request->price;
 
         OrderProduct::create([
@@ -1127,8 +1142,8 @@ class OrderController extends Controller
             'price' => $productPrice,
             'quantity' => $request->quantity,
             'image' => $product->image,
-            'is_upsell' => !$isReturnOrExchange, // Not an upsell for return/exchange orders
-            'upsell_user_id' => $isReturnOrExchange ? null : auth()->id(),
+            'is_upsell' => $isUpsell,
+            'upsell_user_id' => $isUpsell ? auth()->id() : null,
         ]);
 
         // Only update total for non-return/exchange orders
@@ -1186,6 +1201,60 @@ class OrderController extends Controller
             'status' => true,
             'message' => ($order->is_return || $order->is_exchange) ? 'Producto eliminado de la devolución/cambio' : 'Producto eliminado correctamente',
             'order' => $order->load('products.product', 'client', 'status', 'agent')
+        ]);
+    }
+
+    public function updateProductQuantity(Request $request, Order $order, $itemId)
+    {
+        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+
+        $request->validate([
+            'quantity' => 'required|integer|min:1',
+        ]);
+
+        $item = OrderProduct::where('order_id', $order->id)->where('id', $itemId)->firstOrFail();
+
+        // For return/exchange orders, price is 0 so impact is just quantity
+        // For regular orders, we recalculate total
+        
+        // Calculate difference for total price update
+        $oldQuantity = $item->quantity;
+        $newQuantity = $request->input('quantity');
+        
+        if ($oldQuantity == $newQuantity) {
+             return response()->json([
+                'status' => true,
+                'message' => 'Cantidad actualizada correctamente',
+                'order' => $order->fresh(['products.product', 'client', 'status', 'agent'])
+            ]);
+        }
+
+        $price = $item->price;
+        $diff = ($newQuantity - $oldQuantity) * $price;
+
+        // Update item
+        $item->quantity = $newQuantity;
+        $item->save();
+
+        // Update order total
+        if (!($order->is_return || $order->is_exchange)) {
+            $order->current_total_price += $diff;
+            if ($order->current_total_price < 0) $order->current_total_price = 0;
+            $order->save();
+            
+            // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones
+            if ($order->status && $order->status->description === 'Entregado') {
+                app(CommissionService::class)->generateForDeliveredOrder($order);
+            }
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Cantidad actualizada correctamente',
+            'order' => $order->fresh(['products.product', 'client', 'status', 'agent'])
         ]);
     }
 
