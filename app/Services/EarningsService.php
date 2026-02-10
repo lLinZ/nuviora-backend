@@ -131,18 +131,27 @@ class EarningsService
         $rateBinanceNow = (float) (Setting::get('rate_binance_usd', 1) ?? 1);
         $rateEuroNow = (float) (Setting::get('rate_bcv_eur', 1) ?? 1);
 
+        // Standardize the dates without modifying the original objects
+        $startDate = (clone $from)->startOfDay();
+        $endDate = (clone $to)->endOfDay();
+
         // Comparte de Agencias: Tomar todas las órdenes con agencia asignada en el periodo
-        $orders = Order::with(['payments', 'agency'])
+        $query = Order::with(['payments', 'agency'])
             ->whereNotNull('agency_id')
-            ->whereBetween('updated_at', [$from->startOfDay(), $to->endOfDay()])
-            ->when($agencyId, fn($q) => $q->where('agency_id', $agencyId))
-            ->get();
+            ->whereBetween('updated_at', [$startDate, $endDate]);
+
+        if ($agencyId) {
+            $query->where('agency_id', $agencyId);
+        }
+
+        $orders = $query->get();
 
         $statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
         $statusTransitId = \App\Models\Status::where('description', 'En ruta')->value('id');
 
-        // PRE-CALCULAR CONTEOS DE RUTA (Cuántas veces salió a ruta cada orden para pago múltiple)
-        $routeCounts = \App\Models\OrderStatusLog::whereIn('order_id', $orders->pluck('id'))
+        // PRE-CALCULAR CONTEOS DE RUTA
+        $orderIds = $orders->pluck('id');
+        $routeCounts = $orderIds->isEmpty() ? collect() : \App\Models\OrderStatusLog::whereIn('order_id', $orderIds)
             ->where('to_status_id', $statusTransitId)
             ->select('order_id', \Illuminate\Support\Facades\DB::raw('count(*) as count'))
             ->groupBy('order_id')
@@ -151,7 +160,14 @@ class EarningsService
 
         return $orders->groupBy('agency_id')
             ->map(function (Collection $agencyOrders) use ($statusDeliveredId, $statusTransitId, $rateBinanceNow, $rateEuroNow) {
+                // If the relationship is not eager loaded or missing, fallback to the object itself if it's the agency record
                 $agency = $agencyOrders->first()->agency;
+                
+                // If still no agency, try to find it (should not happen with with(['agency']) but for safety)
+                if (!$agency && $agencyOrders->first()->agency_id) {
+                    $agency = User::find($agencyOrders->first()->agency_id);
+                }
+
                 if (!$agency) return null;
 
                 $details = $agencyOrders->map(function (Order $o) use ($rateBinanceNow, $rateEuroNow) {
@@ -219,7 +235,7 @@ class EarningsService
                     'agency_id'           => $agency->id,
                     'agency_name'         => $agency->names,
                     'agency_color'        => $agency->color,
-                    'count_delivered'     => $agencyOrders->where('status_id', $statusDeliveredId)->count(),
+                    'total_orders'        => $agencyOrders->where('status_id', $statusDeliveredId)->count(),
                     'count_in_transit'    => $agencyOrders->where('status_id', $statusTransitId)->count(),
                     'count_shipped'       => $agencyOrders->where('was_shipped', true)->count(),
                     'total_shipping_cost' => $details->sum('delivery_cost'),
@@ -227,8 +243,8 @@ class EarningsService
                     'total_collected_ves' => $details->sum('collected_ves'),
                     'total_change_usd'    => $details->sum('change_usd'),
                     'total_change_ves'    => $details->sum('change_ves'),
-                    'balance_usd'         => $details->sum('net_usd'),
-                    'balance_ves'         => $details->sum('net_ves'),
+                    'total_net_usd'       => $details->sum('net_usd'),
+                    'total_net_ves'       => $details->sum('net_ves'),
                     'order_details'       => $details->values()
                 ];
             })
