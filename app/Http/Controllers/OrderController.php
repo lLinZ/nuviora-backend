@@ -960,7 +960,7 @@ class OrderController extends Controller
              if ($statusDesc === 'Reprogramado para hoy') {
                  $query->whereDate('scheduled_for', now()->toDateString())
                        ->whereHas('status', function($q) {
-                           $q->whereNotIn('description', ['Cancelado', 'Entregado']);
+                           $q->where('description', 'Programado para otro dia');
                        });
              } else {
                  $query->whereHas('status', function($q) use ($statusDesc) {
