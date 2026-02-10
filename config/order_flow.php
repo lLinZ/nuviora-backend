@@ -22,8 +22,8 @@ return [
         'transitions' => [
             'Novedades'                 => ['Novedad Solucionada', 'Programado para otro dia', 'Programado para mas tarde', 'Cancelado'],
             // Vendedor ya no mueve de Novedad Solucionada, eso lo hace la Agencia.
-            // Pero si necesita corregir, podría necesitarlo. Por ahora lo dejamos restringido según instrucción.
-            'Novedad Solucionada'       => [], 
+            // Pero si necesita corregir, podría necesitarlo. Por ahora lo dejamos restringido según instrucción del cliente.
+            'Novedad Solucionada'       => ['Programado para otro dia', 'Programado para mas tarde', 'Cancelado'], 
             'Reprogramado'              => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Reprogramado para hoy'     => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Asignado a vendedor'       => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
