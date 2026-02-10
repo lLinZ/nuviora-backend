@@ -1469,12 +1469,25 @@ class OrderController extends Controller
         
         // Get flow rules for this role
         $superRoles = ['Admin', 'Gerente', 'Master'];
+        
+        $roleFlow = config("order_flow.{$userRole}") 
+            ?? config("order_flow." . ucfirst($userRole)) 
+            ?? config("order_flow." . strtolower($userRole));
+            
         $transitions = in_array($userRole, $superRoles) 
             ? null 
-            : config("order_flow.{$userRole}.transitions");
+            : ($roleFlow['transitions'] ?? []);
         
         $currentStatus = $order->status?->description ?? 'Nuevo';
-        $allowedByFlow = $transitions ? ($transitions[$currentStatus] ?? []) : $allStatuses->pluck('description')->toArray();
+        
+        $transitionsNormalized = [];
+        if ($transitions) {
+            foreach ($transitions as $key => $value) {
+                $transitionsNormalized[strtolower(trim($key))] = $value;
+            }
+        }
+        
+        $allowedByFlow = $transitions ? ($transitionsNormalized[strtolower(trim($currentStatus))] ?? []) : $allStatuses->pluck('description')->toArray();
         
         // Business validations
         $totalPaid = $order->payments->sum('amount');
@@ -1486,11 +1499,11 @@ class OrderController extends Controller
         $hasLocation = !empty($order->location) && trim($order->location) !== '';
         
         // Public statuses for sellers (don't require payment validation)
-        $sellerPublicStatuses = [
+        $sellerPublicStatuses = array_map('strtolower', array_map('trim', [
             'Llamado 1', 'Llamado 2', 'Llamado 3',
             'Programado para otro dia', 'Programado para mas tarde',
             'Cancelado', 'Novedad Solucionada', 'Esperando Ubicacion', 'Confirmado'
-        ];
+        ]));
         
         // Filter statuses based on all validations
         $availableStatuses = $allStatuses->filter(function($status) use (
@@ -1504,7 +1517,8 @@ class OrderController extends Controller
             }
             
             // Check flow rules first
-            if (!in_array($statusName, $allowedByFlow)) {
+            $allowedByFlowNormalized = array_map('strtolower', array_map('trim', $allowedByFlow));
+            if (!in_array(strtolower(trim($statusName)), $allowedByFlowNormalized)) {
                 return false;
             }
             
@@ -1532,7 +1546,8 @@ class OrderController extends Controller
             }*/
             
             // 🔒 General seller validation for non-public statuses
-            if ($userRole === 'Vendedor' && !in_array($statusName, $sellerPublicStatuses)) {
+            $isPublic = in_array(strtolower(trim($statusName)), $sellerPublicStatuses);
+            if (strtolower(trim($userRole)) === 'vendedor' && !$isPublic) {
                 return $hasPayments && $hasChangeInfo;
             }
             
