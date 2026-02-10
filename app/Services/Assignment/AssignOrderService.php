@@ -151,14 +151,14 @@ class AssignOrderService
                 $reprogramadoHoyStatus = Status::where('description', 'Reprogramado para hoy')->first();
                 $progOtroDiaStatus = Status::where('description', 'Programado para otro dia')->first();
 
-                if ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
+                $isScheduledToday = $ordModel->scheduled_for && \Carbon\Carbon::parse($ordModel->scheduled_for)->isToday();
+
+                if ($isScheduledToday) {
+                    $newStatusId = $reprogramadoHoyStatus ? $reprogramadoHoyStatus->id : $assignmentStatusId;
+                } elseif ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
                     $newStatusId = $novedadStatusId;
                 } elseif ($progOtroDiaStatus && $ordModel->status_id === $progOtroDiaStatus->id) {
-                    // Verificar FECHA
-                    if ($ordModel->scheduled_for && \Carbon\Carbon::parse($ordModel->scheduled_for)->isFuture() && !\Carbon\Carbon::parse($ordModel->scheduled_for)->isToday()) {
-                         // Si es para mañana o después, NO ASIGNAR AÚN.
-                         return;
-                    }
+                    // Fallback para cuando conserva el status pero se asigna
                     $newStatusId = $reprogramadoHoyStatus ? $reprogramadoHoyStatus->id : $assignmentStatusId;
                 } else {
                     $newStatusId = $assignmentStatusId;

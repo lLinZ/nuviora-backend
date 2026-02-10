@@ -152,15 +152,17 @@ class BusinessService
                         ->update(['agent_id' => null]);
                 }
                 
-                // 3. Para "Programado para otro dia": Solo quitar vendedor, mantener status
-                $programadoOtroDiaStatus = Status::where('description', 'Programado para otro dia')->first();
-                if ($programadoOtroDiaStatus) {
+                // 3. Para "Programado para otro dia" y "Reprogramado": Solo quitar vendedor, mantener status
+                $statusesToKeep = ['Programado para otro dia', 'Reprogramado'];
+                $keepIds = Status::whereIn('description', $statusesToKeep)->pluck('id');
+
+                if ($keepIds->isNotEmpty()) {
                     Order::where('shop_id', $shopId)
-                        ->where('status_id', $programadoOtroDiaStatus->id)
+                        ->whereIn('status_id', $keepIds)
                         ->update(['agent_id' => null]);
                 }
                 
-                Log::info("Shop $shopId closed. Orders reset logic applied.");
+                Log::info("Shop $shopId closed. Orders reset logic applied. Rescheduled orders kept their status.");
             }
         } catch (\Exception $e) {
             Log::error("Error resetting orders on shop close: " . $e->getMessage());

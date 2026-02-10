@@ -957,9 +957,16 @@ class OrderController extends Controller
         }
         if ($request->filled('status')) {
              $statusDesc = $request->status;
-             $query->whereHas('status', function($q) use ($statusDesc) {
-                 $q->where('description', $statusDesc);
-             });
+             if ($statusDesc === 'Reprogramado para hoy') {
+                 $query->whereDate('scheduled_for', now()->toDateString())
+                       ->whereHas('status', function($q) {
+                           $q->whereNotIn('description', ['Cancelado', 'Entregado']);
+                       });
+             } else {
+                 $query->whereHas('status', function($q) use ($statusDesc) {
+                     $q->where('description', $statusDesc);
+                 });
+             }
         }
         if ($request->filled('search')) {
             $term = $request->search;
