@@ -32,7 +32,7 @@ return [
             'Llamado 3'                 => ['Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Esperando Ubicacion'       => ['Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Programado para mas tarde' => ['Esperando Ubicacion', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
-            'Programado para otro dia'  => ['Esperando Ubicacion', 'Asignar a agencia', 'Cancelado'],
+            'Programado para otro dia'  => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Asignar a agencia'         => [], // 🔒 BLOQUEADO
             'Entregado'                 => [], // 🔒 BLOQUEADO
         ]
