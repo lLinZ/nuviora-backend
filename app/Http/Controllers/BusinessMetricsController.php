@@ -189,60 +189,57 @@ class BusinessMetricsController extends Controller
         $statusAgenciaId = Status::where('description', '=', 'Asignar a agencia')->value('id');
 
         $metrics = $vendedores->map(function($v) use ($startDate, $endDate, $statusEntregadoId, $statusCanceladoId, $statusAgenciaId) {
-            // ✅ Obtener todas las órdenes que fueron asignadas a esta vendedora en el rango de fechas
-            // usando OrderAssignmentLog para rastrear asignaciones históricas
-            $assignedOrderIds = OrderAssignmentLog::where('agent_id', '=', $v->id)
-                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-                ->pluck('order_id')
-                ->unique();
-
-            if ($assignedOrderIds->isEmpty()) return null;
-
-            // ✅ Obtener las órdenes directamente desde la BD (no de la colección pre-filtrada)
-            // porque necesitamos órdenes asignadas en el rango, no creadas en el rango
-            $vOrders = Order::whereIn('id', $assignedOrderIds)->get();
-            $total = $vOrders->count();
-            if ($total === 0) return null;
-
-            // Obtener los logs de estado de estas órdenes
-            $vStatusLogs = OrderStatusLog::whereIn('order_id', $assignedOrderIds)->get();
- 
-            // ✅ Calcular órdenes entregadas: las que llegaron al estado "Entregado"
-            $entregadasCount = $vOrders->filter(function($o) use ($statusEntregadoId, $vStatusLogs) {
-                // Excluir devoluciones y cambios
-                if ($o->is_return || $o->is_exchange) return false;
+            $startDateFull = $startDate . ' 00:00:00';
+            $endDateFull = $endDate . ' 23:59:59';
+            
+            // ✅ 1. Asignadas en el periodo (Base para la métrica)
+            $assignedCount = OrderAssignmentLog::where('agent_id', '=', $v->id)
+                ->whereBetween('created_at', [$startDateFull, $endDateFull])
+                ->distinct('order_id')
+                ->count('order_id');
                 
-                // Verificar si la orden está o estuvo en "Entregado"
-                return (int)$o->status_id === (int)$statusEntregadoId || 
-                       $vStatusLogs->where('order_id', '=', $o->id)
-                                   ->where('to_status_id', '=', $statusEntregadoId)
-                                   ->isNotEmpty();
-            })->count();
+            // ✅ 2. Métricas basadas en EVENTOS REALES en el rango de fechas (Updated At)
+            // No dependemos de si la orden fue asignada hoy, sino de si se entregó/canceló HOY.
+            
+            // Entregadas
+            $entregadasCount = OrderStatusLog::whereBetween('created_at', [$startDateFull, $endDateFull])
+                ->where('to_status_id', $statusEntregadoId)
+                ->whereHas('order', fn($q) => $q->where('agent_id', $v->id))
+                ->distinct('order_id')
+                ->count('order_id');
+                
+            // Canceladas
+            $canceladasCount = OrderStatusLog::whereBetween('created_at', [$startDateFull, $endDateFull])
+                ->where('to_status_id', $statusCanceladoId)
+                ->whereHas('order', fn($q) => $q->where('agent_id', $v->id))
+                ->distinct('order_id')
+                ->count('order_id');
+                
+            // Agencia
+            $agenciaCount = OrderStatusLog::whereBetween('created_at', [$startDateFull, $endDateFull])
+                ->where('to_status_id', $statusAgenciaId)
+                ->whereHas('order', fn($q) => $q->where('agent_id', $v->id))
+                ->distinct('order_id')
+                ->count('order_id');
 
-            // ✅ Calcular órdenes asignadas a agencia
-            $agenciaCount = $vOrders->filter(function($o) use ($statusAgenciaId, $vStatusLogs) {
-                return (int)$o->status_id === (int)$statusAgenciaId || 
-                       $vStatusLogs->where('order_id', '=', $o->id)
-                                   ->where('to_status_id', '=', $statusAgenciaId)
-                                   ->isNotEmpty();
-            })->count();
+            // Recuperamos órdenes asignadas para calcular novedades (manteniendo lógica original para novedades)
+            $assignedOrderIds = OrderAssignmentLog::where('agent_id', '=', $v->id)
+                ->whereBetween('created_at', [$startDateFull, $endDateFull])
+                ->pluck('order_id');
+            $vOrders = Order::whereIn('id', $assignedOrderIds)->get();
 
-            // ✅ Calcular órdenes canceladas
-            $canceladasCount = $vOrders->filter(function($o) use ($statusCanceladoId, $vStatusLogs) {
-                return (int)$o->status_id === (int)$statusCanceladoId || 
-                       $vStatusLogs->where('order_id', '=', $o->id)
-                                   ->where('to_status_id', '=', $statusCanceladoId)
-                                   ->isNotEmpty();
-            })->count();
- 
+            // Evitar división por cero
+            $base = $assignedCount > 0 ? $assignedCount : 1;
+            
             return [
                 'id' => $v->id,
                 'name' => $v->names,
                 'stats' => [
-                    'assigned' => $total,
-                    'delivery_rate' => round(($entregadasCount / $total) * 100, 2),
-                    'cancel_rate' => round(($canceladasCount / $total) * 100, 2),
-                    'agency_rate' => round(($agenciaCount / $total) * 100, 2),
+                    'assigned' => $assignedCount,
+                    // Permitimos > 100% si entregan backlog de días anteriores
+                    'delivery_rate' => $assignedCount > 0 ? round(($entregadasCount / $assignedCount) * 100, 2) : 0,
+                    'cancel_rate' => $assignedCount > 0 ? round(($canceladasCount / $assignedCount) * 100, 2) : 0,
+                    'agency_rate' => $assignedCount > 0 ? round(($agenciaCount / $assignedCount) * 100, 2) : 0,
                 ],
                 'novelties' => [
                     'total' => $vOrders->filter(fn($o) => !empty($o->novedad_type))->count(),
