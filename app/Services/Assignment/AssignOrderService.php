@@ -148,18 +148,16 @@ class AssignOrderService
                 // Si venía de "Programado para otro dia", ahora es "Reprogramado para hoy".
                 // De lo contrario, "Asignado a Vendedor".
                 
-                $reprogramadoHoyStatus = Status::where('description', 'Reprogramado para hoy')->first();
-                $progOtroDiaStatus = Status::where('description', 'Programado para otro dia')->first();
+                // 🔥 CLIENT FIX: Preservar status "Programado para otro dia"
+                // Para que aparezcan en la columna "Reprogramado para hoy" (que filtra por ese status + fecha hoy),
+                // NO debemos cambiarles el status a "Asignado a Vendedor" ni a "Reprogramado para hoy".
 
-                $isScheduledToday = $ordModel->scheduled_for && \Carbon\Carbon::parse($ordModel->scheduled_for)->isToday();
+                $currentStatusDesc = $ordModel->status ? $ordModel->status->description : '';
 
-                if ($isScheduledToday) {
-                    $newStatusId = $reprogramadoHoyStatus ? $reprogramadoHoyStatus->id : $assignmentStatusId;
+                if ($currentStatusDesc === 'Programado para otro dia') {
+                    $newStatusId = $ordModel->status_id;
                 } elseif ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
                     $newStatusId = $novedadStatusId;
-                } elseif ($progOtroDiaStatus && $ordModel->status_id === $progOtroDiaStatus->id) {
-                    // Fallback para cuando conserva el status pero se asigna
-                    $newStatusId = $reprogramadoHoyStatus ? $reprogramadoHoyStatus->id : $assignmentStatusId;
                 } else {
                     $newStatusId = $assignmentStatusId;
                 }

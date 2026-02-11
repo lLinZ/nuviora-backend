@@ -961,11 +961,24 @@ class OrderController extends Controller
         }
         if ($request->filled('status')) {
              $statusDesc = $request->status;
+             
              if ($statusDesc === 'Reprogramado para hoy') {
-                 $query->whereDate('scheduled_for', now()->toDateString())
-                       ->whereHas('status', function($q) {
-                           $q->where('description', 'Programado para otro dia');
-                       });
+                 // 🔥 CLIENT REQUEST STRICT: Solo "Programado para otro dia" con fecha HOY.
+                 // "En la lista del kanban que se llama reprogramado para hoy... programado para otro dia pero que tengan fecha de reagendamiento para hoy"
+                 $query->whereHas('status', function ($q) {
+                     $q->where('description', 'Programado para otro dia');
+                 })
+                 ->whereDate('scheduled_for', '<=', now()->toDateString());
+             } elseif ($statusDesc === 'Programado para otro dia') {
+                 // 🔥 CLIENT FIX: Mostrar SOLO futuro, procesado HOY.
+                 // "status programado para otro dia" + "fecha > hoy" + "updated_at = hoy" + "vendedor logueado"
+                 $query->whereHas('status', function ($q) {
+                     $q->where('description', 'Programado para otro dia');
+                 })
+                 ->whereDate('scheduled_for', '>', now()->toDateString())
+                 ->whereDate('updated_at', now()->toDateString());
+                 
+                 // Nota: La restricción de vendedor ya se aplica al inicio del método para el rol Vendedor.
              } else {
                  $query->whereHas('status', function($q) use ($statusDesc) {
                      $q->where('description', $statusDesc);

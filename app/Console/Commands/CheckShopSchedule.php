@@ -57,10 +57,12 @@ class CheckShopSchedule extends Command
 
         try {
             $this->info("Opening shop {$shop->name}...");
-            $service->openShop($shop->id, true); // True to assign backlog
             
-            // Activate Default Roster
+            // 1. Activate Default Roster FIRST so we have active agents
             $service->activateDefaultRoster($shop->id);
+
+            // 2. Open Shop and assign backlog (now with active agents)
+            $service->openShop($shop->id, true); 
             
             Log::info("Auto-opened shop {$shop->id}: {$shop->name}");
         } catch (\Exception $e) {
