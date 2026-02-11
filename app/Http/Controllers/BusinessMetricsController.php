@@ -146,7 +146,16 @@ class BusinessMetricsController extends Controller
     private function getSectionB($startDate, $endDate, $sellerId, $agencyId, $productId)
     {
         // "Programado para hoy" son pedidos que tenían reminder_at en el rango seleccionado
-        $scheduledOrders = Order::whereBetween('reminder_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+        // 🔥 FIX: Buscar por CUALQUIER actividad en el rango, no solo reminder_at
+        // Ahora incluye: Creadas hoy, Actualizadas hoy, o Agendadas para hoy.
+        $scheduledOrders = Order::where(function($q) use ($startDate, $endDate) {
+            $start = $startDate . ' 00:00:00';
+            $end = $endDate . ' 23:59:59';
+            
+            $q->whereBetween('reminder_at', [$start, $end])
+              ->orWhereBetween('created_at', [$start, $end])
+              ->orWhereBetween('updated_at', [$start, $end]);
+        })
             ->when($sellerId, fn($q) => $q->where('agent_id', '=', $sellerId), fn($q) => $q)
             ->when($agencyId, fn($q) => $q->where('agency_id', '=', $agencyId), fn($q) => $q)
             ->get();
