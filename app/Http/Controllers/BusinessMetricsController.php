@@ -113,14 +113,29 @@ class BusinessMetricsController extends Controller
                 ->whereIn('order_id', $ordersInPeriod->pluck('id')) // 🔥 FILTRO CLAVE
                 ->get();
             
+            if ($stateName === 'Asignado a vendedor') {
+                // 🔥 FIX: Usar OrderAssignmentLog para que coincida con la tarjeta del vendedor (Total Asignados)
+                // Esto refleja la CARGA ASIGNADA real, incluyendo reasignaciones y reprogramados.
+                $count = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                    ->whereIn('order_id', $ordersInPeriod->pluck('id'))
+                    ->distinct('order_id')
+                    ->count('order_id');
+            } else {
+                // Para el resto de estados, usamos los logs de cambio de estado
+                $count = $logsForStatus->pluck('order_id')->unique()->count();
+            }
+
             // Excluir devoluciones/cambios del conteo de 'Entregado'
             if ($stateName === 'Entregado') {
-                $count = $logsForStatus->filter(function($log) use ($ordersInPeriod) {
+                // Si ya calculamos $count arriba (logica standar), lo re-filtramos. 
+                // Pero como 'Entregado' no es 'Asignado a vendedor', entra en el else anterior.
+                // Sin embargo, necesitamos re-aplicar el filtro de retorno/cambio sobre los logs obtenidos.
+                
+                // Recalculamos usando la logica especifica de Entregado sobre los logs
+                 $count = $logsForStatus->filter(function($log) use ($ordersInPeriod) {
                     $order = $ordersInPeriod->firstWhere('id', $log->order_id);
                     return $order && !$order->is_return && !$order->is_exchange;
                 })->pluck('order_id')->unique()->count();
-            } else {
-                $count = $logsForStatus->pluck('order_id')->unique()->count();
             }
 
             $tracking[] = [
@@ -159,7 +174,7 @@ class BusinessMetricsController extends Controller
             $start = $startDate . ' 00:00:00';
             $end = $endDate . ' 23:59:59';
             
-            $q->whereBetween('reminder_at', [$start, $end])
+            $q->whereBetween('scheduled_for', [$start, $end])
               ->orWhereBetween('created_at', [$start, $end])
               ->orWhereBetween('updated_at', [$start, $end]);
         })
