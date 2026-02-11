@@ -143,6 +143,12 @@ class AssignOrderService
 
                 $agentId = $this->strategy->pickAgentId($agentsForShop, $ord);
                 
+                // 🛡️ SAFETY CHECK: Si no hay agente, no cambiamos el status a "Asignado..."
+                if (!$agentId) {
+                    \Illuminate\Support\Facades\Log::warning("AssignBacklog: pickAgentId returned null/empty for Order #{$ord->id}. Skipping update.");
+                    return;
+                }
+
                 // Lógica de Status Inteligente:
                 // Si ya era Novedad, mantenemos Novedad.
                 // Si venía de "Programado para otro dia", ahora es "Reprogramado para hoy".
