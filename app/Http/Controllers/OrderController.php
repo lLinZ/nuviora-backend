@@ -943,6 +943,10 @@ class OrderController extends Controller
         if ($request->filled('agent_id')) {
             $query->where('agent_id', $request->agent_id);
         }
+        // seller_id es un alias de agent_id para compatibilidad frontend
+        if ($request->filled('seller_id')) {
+            $query->where('agent_id', $request->seller_id);
+        }
         if ($request->filled('agency_id')) {
             $query->where('agency_id', '=', $request->agency_id);
         }
