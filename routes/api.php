@@ -59,6 +59,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Dashboard data
     // Dashboard data
     Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, 'index']);
+    
+    // 🔥 CLIENT REQUEST: Payment reports by method
+    Route::get('/reports/payments-by-method', [\App\Http\Controllers\PaymentReportController::class, 'paymentsByMethod']);
 
     // Statuses
     Route::get('/statuses', [StatusController::class, 'index']);
