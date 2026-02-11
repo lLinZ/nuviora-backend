@@ -979,6 +979,11 @@ class OrderController extends Controller
                  ->whereDate('updated_at', now()->toDateString());
                  
                  // Nota: La restricción de vendedor ya se aplica al inicio del método para el rol Vendedor.
+             } elseif ($statusDesc === 'Con Comprobante') {
+                 // 📸 CLIENT REQUEST: Ver todas las órdenes (del usuario) que tienen comprobante de VUELTO subido
+                 $query->whereHas('changeExtra', function($q) {
+                     $q->whereNotNull('change_receipt')->where('change_receipt', '!=', '');
+                 });
              } else {
                  $query->whereHas('status', function($q) use ($statusDesc) {
                      $q->where('description', $statusDesc);
@@ -1211,6 +1216,14 @@ class OrderController extends Controller
             }
         }
 
+        // 📝 LOG: Registrar adición
+        $productName = $product->title ?? $product->name;
+        \App\Models\OrderUpdate::create([
+            'order_id' => $order->id,
+            'user_id' => auth()->id() ?? 1,
+            'message' => "➕ Producto agregado: {$productName} (x{$request->quantity}).",
+        ]);
+
         return response()->json([
             'status' => true,
             'message' => $isReturnOrExchange ? 'Producto agregado a la devolución/cambio' : 'Upsell agregado correctamente',
@@ -1255,6 +1268,14 @@ class OrderController extends Controller
                     app(CommissionService::class)->generateForDeliveredOrder($order);
                 }
             }
+
+            // 📝 LOG: Registrar eliminación
+            $productName = $item->name ?? ($item->product ? $item->product->title : 'Producto #' . $item->id);
+            \App\Models\OrderUpdate::create([
+                'order_id' => $order->id,
+                'user_id' => auth()->id() ?? 1,
+                'message' => "🗑️ Producto eliminado: {$productName} (x{$item->quantity}).",
+            ]);
 
             return response()->json([
                 'status' => true,
@@ -1329,6 +1350,24 @@ class OrderController extends Controller
                 app(CommissionService::class)->generateForDeliveredOrder($order);
             }
         }
+
+        // 📝 LOG: Registrar el cambio en el historial
+        $changeDetails = [];
+        if ($oldQuantity != $newQuantity) {
+            $changeDetails[] = "cantidad de {$oldQuantity} a {$newQuantity}";
+        }
+        if ($oldPrice != $newPrice) {
+            $changeDetails[] = "precio de $" . number_format($oldPrice, 2) . " a $" . number_format($newPrice, 2);
+        }
+        
+        $productName = $item->name ?? ($item->product ? $item->product->title : 'Producto #' . $item->id);
+        $message = "🛠️ Producto '{$productName}' actualizado: " . implode(', ', $changeDetails) . ".";
+
+        \App\Models\OrderUpdate::create([
+            'order_id' => $order->id,
+            'user_id' => auth()->id() ?? 1,
+            'message' => $message,
+        ]);
 
         return response()->json([
             'status' => true,
@@ -2164,9 +2203,27 @@ class OrderController extends Controller
                 ->groupBy('statuses.description')
                 ->pluck('total', 'status_name');
 
+            // 🔥 COUNT EXTRA: Con Comprobante
+            // Debemos contar cuántas órdenes (del usuario o del día) tienen comprobante, sin importar el status.
+            $receiptQuery = Order::query();
+            if ($user && $user->role && $user->role->description === 'Vendedor') {
+                $receiptQuery->where('orders.agent_id', $user->id);
+            } else {
+                 $receiptQuery->whereDate('orders.updated_at', now());
+            }
+            
+            // 🔥 COUNT EXTRA: Con Comprobante DE VUELTO
+            $receiptCount = $receiptQuery->whereHas('changeExtra', function($q) {
+                 $q->whereNotNull('change_receipt')->where('change_receipt', '!=', '');
+            })->count();
+            
+            // Merge count
+            $countsArray = $counts->toArray();
+            $countsArray['Con Comprobante'] = $receiptCount;
+
             return response()->json([
                 'status' => true,
-                'counts' => $counts
+                'counts' => $countsArray
             ]);
         } catch (\Exception $e) {
             \Log::error("Error in liteCounts: " . $e->getMessage());
