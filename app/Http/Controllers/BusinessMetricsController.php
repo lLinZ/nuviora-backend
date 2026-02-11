@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\OrderStatusLog;
+use App\Models\OrderAssignmentLog;
 use App\Models\Status;
 use App\Models\User;
 use App\Models\Product;
@@ -168,23 +169,60 @@ class BusinessMetricsController extends Controller
             ->when($sellerId, fn($q) => $q->where('id', $sellerId))
             ->get();
 
-        $metrics = $vendedores->map(function($v) use ($orders, $statusLogs) {
-            $vOrders = $orders->where('agent_id', '=', $v->id);
+        // Obtener IDs de estados relevantes
+        $statusEntregadoId = Status::where('description', '=', 'Entregado')->value('id');
+        $statusCanceladoId = Status::where('description', '=', 'Cancelado')->value('id');
+        $statusAgenciaId = Status::where('description', '=', 'Asignar a agencia')->value('id');
+
+        $metrics = $vendedores->map(function($v) use ($startDate, $endDate, $statusEntregadoId, $statusCanceladoId, $statusAgenciaId, $orders, $statusLogs) {
+            // ✅ Obtener todas las órdenes que fueron asignadas a esta vendedora en el rango de fechas
+            // usando OrderAssignmentLog para rastrear asignaciones históricas
+            $assignedOrderIds = OrderAssignmentLog::where('agent_id', '=', $v->id)
+                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                ->pluck('order_id')
+                ->unique();
+
+            // Filtrar las órdenes que corresponden a esta vendedora
+            $vOrders = $orders->whereIn('id', $assignedOrderIds);
             $total = $vOrders->count();
             if ($total === 0) return null;
  
-            $statusEntregadoId = Status::where('description', '=', 'Entregado')->value('id');
-            $statusCanceladoId = Status::where('description', '=', 'Cancelado')->value('id');
-            $statusAgenciaId = Status::where('description', '=', 'Asignar a agencia')->value('id');
+            // ✅ Calcular órdenes entregadas: las que llegaron al estado "Entregado"
+            $entregadasCount = $vOrders->filter(function($o) use ($statusEntregadoId, $statusLogs) {
+                // Excluir devoluciones y cambios
+                if ($o->is_return || $o->is_exchange) return false;
+                
+                // Verificar si la orden está o estuvo en "Entregado"
+                return (int)$o->status_id === (int)$statusEntregadoId || 
+                       $statusLogs->where('order_id', '=', $o->id)
+                                  ->where('to_status_id', '=', $statusEntregadoId)
+                                  ->isNotEmpty();
+            })->count();
+
+            // ✅ Calcular órdenes asignadas a agencia
+            $agenciaCount = $vOrders->filter(function($o) use ($statusAgenciaId, $statusLogs) {
+                return (int)$o->status_id === (int)$statusAgenciaId || 
+                       $statusLogs->where('order_id', '=', $o->id)
+                                  ->where('to_status_id', '=', $statusAgenciaId)
+                                  ->isNotEmpty();
+            })->count();
+ 
+            // ✅ Calcular órdenes canceladas
+            $canceladasCount = $vOrders->filter(function($o) use ($statusCanceladoId, $statusLogs) {
+                return (int)$o->status_id === (int)$statusCanceladoId || 
+                       $statusLogs->where('order_id', '=', $o->id)
+                                  ->where('to_status_id', '=', $statusCanceladoId)
+                                  ->isNotEmpty();
+            })->count();
  
             return [
                 'id' => $v->id,
                 'name' => $v->names,
                 'stats' => [
                     'assigned' => $total,
-                    'delivery_rate' => round(($vOrders->where('status_id', '=', $statusEntregadoId)->where('is_return', false)->where('is_exchange', false)->count() / $total) * 100, 2),
-                    'cancel_rate' => round(($vOrders->where('status_id', '=', $statusCanceladoId)->count() / $total) * 100, 2),
-                    'agency_rate' => round(($vOrders->filter(fn($o) => (int)$o->status_id === (int)$statusAgenciaId || $statusLogs->where('order_id', '=', $o->id)->where('to_status_id', '=', $statusAgenciaId)->isNotEmpty())->count() / $total) * 100, 2),
+                    'delivery_rate' => round(($entregadasCount / $total) * 100, 2),
+                    'cancel_rate' => round(($canceladasCount / $total) * 100, 2),
+                    'agency_rate' => round(($agenciaCount / $total) * 100, 2),
                 ],
                 'novelties' => [
                     'total' => $vOrders->filter(fn($o) => !empty($o->novedad_type))->count(),
