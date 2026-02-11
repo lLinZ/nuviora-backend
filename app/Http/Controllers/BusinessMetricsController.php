@@ -82,7 +82,7 @@ class BusinessMetricsController extends Controller
             'Asignado a vendedor',
             'Llamado 1', 'Llamado 2', 'Llamado 3', 
             'Programado para otro dia', 'Programado para mas tarde', 
-            'Esperando ubicación', 
+            'Esperando Ubicacion', 
             'Cancelado', 'Asignar a agencia', 'En ruta', 'Entregado'
         ];
 
