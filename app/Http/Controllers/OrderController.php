@@ -1220,41 +1220,54 @@ class OrderController extends Controller
 
     public function removeUpsell(Order $order, $itemId)
     {
-        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
-        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
-            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
-        }
-
-        $item = OrderProduct::where('order_id', '=', $order->id)->where('id', '=', $itemId)->firstOrFail();
-
-        // For return/exchange orders, allow deleting any product (not just upsells)
-        // For regular orders, ONLY ADMIN can delete original products
-        $isAdmin = \Illuminate\Support\Facades\Auth::user()->role?->description === 'Admin';
-        
-        if (!$isAdmin && !($order->is_return || $order->is_exchange) && !$item->is_upsell) {
-            return response()->json(['status' => false, 'message' => 'No es un upsell. Solo admins pueden eliminar productos base.'], 403);
-        }
-
-        $deduction = $item->price * $item->quantity;
-        $item->delete();
-
-        // Only update total for non-return/exchange orders (they always have $0 total)
-        if (!($order->is_return || $order->is_exchange)) {
-            $order->current_total_price -= $deduction;
-            if ($order->current_total_price < 0) $order->current_total_price = 0; // Safety check
-            $order->save();
-
-            // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell/producto del reporte)
-            if ($order->status && $order->status->description === 'Entregado') {
-                app(CommissionService::class)->generateForDeliveredOrder($order);
+        try {
+            // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+            $order->load('status');
+            if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+                return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
             }
-        }
 
-        return response()->json([
-            'status' => true,
-            'message' => ($order->is_return || $order->is_exchange) ? 'Producto eliminado de la devolución/cambio' : 'Producto eliminado correctamente',
-            'order' => $order->load('products.product', 'client', 'status', 'agent')
-        ]);
+            $item = OrderProduct::where('order_id', '=', $order->id)->where('id', '=', $itemId)->first();
+            
+            if (!$item) {
+                return response()->json(['status' => false, 'message' => "Producto #{$itemId} no encontrado en la orden #{$order->id}."], 404);
+            }
+
+            // For return/exchange orders, allow deleting any product (not just upsells)
+            // For regular orders, ONLY ADMIN can delete original products
+            $isAdmin = \Illuminate\Support\Facades\Auth::user()->role?->description === 'Admin';
+            
+            if (!$isAdmin && !($order->is_return || $order->is_exchange) && !$item->is_upsell) {
+                return response()->json(['status' => false, 'message' => 'No es un upsell. Solo admins pueden eliminar productos base.'], 403);
+            }
+
+            $deduction = $item->price * $item->quantity;
+            $item->delete();
+
+            // Only update total for non-return/exchange orders (they always have $0 total)
+            if (!($order->is_return || $order->is_exchange)) {
+                $order->current_total_price -= $deduction;
+                if ($order->current_total_price < 0) $order->current_total_price = 0; // Safety check
+                $order->save();
+
+                // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell/producto del reporte)
+                if ($order->status && $order->status->description === 'Entregado') {
+                    app(CommissionService::class)->generateForDeliveredOrder($order);
+                }
+            }
+
+            return response()->json([
+                'status' => true,
+                'message' => ($order->is_return || $order->is_exchange) ? 'Producto eliminado de la devolución/cambio' : 'Producto eliminado correctamente',
+                'order' => $order->load('products.product', 'client', 'status', 'agent')
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Error al eliminar producto: ' . $e->getMessage(),
+                'trace' => config('app.debug') ? $e->getTraceAsString() : null,
+            ], 500);
+        }
     }
 
     public function updateProductQuantity(Request $request, Order $order, $itemId)

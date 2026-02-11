@@ -8,9 +8,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\BroadcastMessage;
 use Illuminate\Notifications\Notification;
 
-class OrderNoveltyNotification extends Notification implements ShouldQueue
+class OrderNoveltyNotification extends Notification
 {
-    use Queueable;
 
     public $order;
     public $message;

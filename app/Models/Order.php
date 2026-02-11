@@ -286,6 +286,10 @@ class Order extends Model
                     'message' => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' debido a falta de producto en almacén."
                 ]);
 
+                // 📡 Broadcast via WebSocket for real-time Kanban update
+                $this->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+                event(new \App\Events\OrderUpdated($this));
+
                 return true;
             }
         }

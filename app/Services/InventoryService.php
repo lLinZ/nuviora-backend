@@ -266,7 +266,7 @@ class InventoryService
         if (!$sinStockStatus) return;
 
         // Excluded statuses (don't de-assign if already finished)
-        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock'];
+        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock', 'Novedades', 'Novedad Solucionada'];
 
         // Find orders assigned to this agency
         $orders = \App\Models\Order::where('agency_id', '=', $warehouse->user_id)
@@ -323,6 +323,10 @@ class InventoryService
                     'user_id' => auth()->id() ?? \App\Models\User::whereHas('role', function($q){ $q->where('description', '=', 'Admin'); })->first()?->id ?? 1,
                     'message' => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' y se removió la vendedora asignada debido a falta de existencias de un producto en la bodega de la agencia."
                 ]);
+
+                // 📡 Broadcast via WebSocket for real-time Kanban update
+                $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+                event(new \App\Events\OrderUpdated($order));
             }
         }
     }
