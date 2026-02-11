@@ -114,12 +114,21 @@ class BusinessMetricsController extends Controller
                 ->get();
             
             if ($stateName === 'Asignado a vendedor') {
-                // 🔥 FIX: Usar OrderAssignmentLog para que coincida con la tarjeta del vendedor (Total Asignados)
-                // Esto refleja la CARGA ASIGNADA real, incluyendo reasignaciones y reprogramados.
-                $count = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-                    ->whereIn('order_id', $ordersInPeriod->pluck('id'))
-                    ->distinct('order_id')
-                    ->count('order_id');
+                // 🔥 FIX: Consultar DIRECTAMENTE OrderAssignmentLog con los filtros de vendedor/agencia
+                // No dependemos de $ordersInPeriod porque eso excluye órdenes que se asignaron pero no cambiaron de status hoy.
+                $assignmentQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+
+                if ($sellerId) {
+                    $assignmentQuery->where('agent_id', $sellerId);
+                }
+                
+                if ($agencyId) {
+                    $assignmentQuery->whereHas('agent', function($q) use ($agencyId) {
+                        $q->where('agency_id', $agencyId);
+                    });
+                }
+
+                $count = $assignmentQuery->distinct('order_id')->count('order_id');
             } else {
                 // Para el resto de estados, usamos los logs de cambio de estado
                 $count = $logsForStatus->pluck('order_id')->unique()->count();
