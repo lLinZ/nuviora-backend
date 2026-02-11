@@ -82,6 +82,7 @@ class BusinessMetricsController extends Controller
             'Asignado a vendedor',
             'Llamado 1', 'Llamado 2', 'Llamado 3', 
             'Programado para otro dia', 'Programado para mas tarde', 
+            'Esperando ubicación', 
             'Cancelado', 'Asignar a agencia', 'En ruta', 'Entregado'
         ];
 
@@ -98,7 +99,25 @@ class BusinessMetricsController extends Controller
             ->when($agencyId, fn($q) => $q->where('agency_id', '=', $agencyId))
             ->get();
         
-        $totalOrders = $ordersInPeriod->count();
+        // 🔥 FIX: La BASE para el porcentaje debe ser el TOTAL DE ASIGNACIONES (Carga de trabajo), 
+        // no el conteo de órdenes que tuvieron cambios de status.
+        // Así los porcentajes coincidirán con la tarjeta del vendedor (ej: 7 entregadas / 41 asignadas = 17%).
+        
+        $assignmentBaseQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+        if ($sellerId) {
+            $assignmentBaseQuery->where('agent_id', $sellerId);
+        }
+        if ($agencyId) {
+            $assignmentBaseQuery->whereHas('agent', function($q) use ($agencyId) {
+                $q->where('agency_id', $agencyId);
+            });
+        }
+        
+        $totalAsignaciones = $assignmentBaseQuery->distinct('order_id')->count('order_id');
+        
+        // Si no hay asignaciones (ej. admin global sin asignaciones), usamos el conteo de órdenes activas como fallback
+        $totalOrders = $totalAsignaciones > 0 ? $totalAsignaciones : $ordersInPeriod->count();
+
         if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
 
         $tracking = [];
@@ -131,16 +150,25 @@ class BusinessMetricsController extends Controller
                 $count = $assignmentQuery->distinct('order_id')->count('order_id');
             } else {
                 // Para el resto de estados, usamos los logs de cambio de estado
+                // 🔥 FIX: Quitamos el filtro de fecha AQUÍ para ver el FUNNEL COMPLETO de las órdenes seleccionadas.
+                // Si la orden se gestionó hoy (está en $ordersInPeriod) pero el "Llamado 1" fue ayer,
+                // queremos que cuente para mostrar la "Penetración" real (Ej: De las 41 de hoy, 40 pasaron por Llamado 1 alguna vez).
+                
+                $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
+                    ->whereIn('order_id', $ordersInPeriod->pluck('id'))
+                    ->get();
+                    
                 $count = $logsForStatus->pluck('order_id')->unique()->count();
             }
 
             // Excluir devoluciones/cambios del conteo de 'Entregado'
             if ($stateName === 'Entregado') {
-                // Si ya calculamos $count arriba (logica standar), lo re-filtramos. 
-                // Pero como 'Entregado' no es 'Asignado a vendedor', entra en el else anterior.
-                // Sin embargo, necesitamos re-aplicar el filtro de retorno/cambio sobre los logs obtenidos.
-                
-                // Recalculamos usando la logica especifica de Entregado sobre los logs
+                // Si ya calculamos $count arriba (logica standar sin fecha), lo re-filtramos.
+                // Re-consultamos para asegurar consistencia si entró por el else
+                 $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
+                    ->whereIn('order_id', $ordersInPeriod->pluck('id')) // Sin filtro de fecha, solo por ID
+                    ->get();
+
                  $count = $logsForStatus->filter(function($log) use ($ordersInPeriod) {
                     $order = $ordersInPeriod->firstWhere('id', $log->order_id);
                     return $order && !$order->is_return && !$order->is_exchange;
