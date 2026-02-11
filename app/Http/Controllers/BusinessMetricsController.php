@@ -45,7 +45,7 @@ class BusinessMetricsController extends Controller
         $statusLogs = OrderStatusLog::whereIn('order_id', $orderIds)->get();
 
         // 1. SECCIÓN A: FLUJO DE PEDIDOS NUEVOS
-        $sectionA = $this->getSectionA($orders, $statusLogs);
+        $sectionA = $this->getSectionA($startDate, $endDate, $orders, $statusLogs);
 
         // 2. SECCIÓN B: PROGRAMADO PARA HOY
         $sectionB = $this->getSectionB($startDate, $endDate, $sellerId, $agencyId, $productId);
@@ -76,11 +76,8 @@ class BusinessMetricsController extends Controller
         ]);
     }
 
-    private function getSectionA($orders, $statusLogs)
+    private function getSectionA($startDate, $endDate, $orders, $statusLogs)
     {
-        $totalOrders = $orders->count();
-        if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
-
         $states = [
             'Asignado a vendedor',
             'Llamado 1', 'Llamado 2', 'Llamado 3', 
@@ -88,19 +85,36 @@ class BusinessMetricsController extends Controller
             'Cancelado', 'Asignar a agencia', 'En ruta', 'Entregado'
         ];
 
+        // ✅ Obtener todas las órdenes únicas que pasaron por algún estado en el rango de fechas
+        $allOrderIdsInPeriod = OrderStatusLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->pluck('order_id')
+            ->unique();
+
+        $totalOrders = $allOrderIdsInPeriod->count();
+        if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
+
+        // ✅ Obtener todas las órdenes que tuvieron actividad en el período
+        $ordersInPeriod = Order::whereIn('id', $allOrderIdsInPeriod)->get();
+
         $tracking = [];
         foreach ($states as $stateName) {
             $statusId = Status::where('description', '=', $stateName)->value('id');
             if (!$statusId) continue;
 
-            // Pedidos que pasaron por este estado (en el log o actualmente)
-            $count = $orders->filter(function($o) use ($statusId, $statusLogs, $stateName) {
-                // ✅ Excluir devoluciones/cambios del conteo de 'Entregado' si el usuario lo pide
-                if ($stateName === 'Entregado' && ($o->is_return || $o->is_exchange)) {
-                    return false;
-                }
-                return (int)$o->status_id === (int)$statusId || $statusLogs->where('order_id', '=', $o->id)->where('to_status_id', '=', $statusId)->isNotEmpty();
-            })->count();
+            // ✅ Contar cuántas órdenes pasaron por este estado EN EL RANGO DE FECHAS
+            $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
+                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                ->get();
+
+            // Excluir devoluciones/cambios del conteo de 'Entregado'
+            if ($stateName === 'Entregado') {
+                $count = $logsForStatus->filter(function($log) use ($ordersInPeriod) {
+                    $order = $ordersInPeriod->firstWhere('id', $log->order_id);
+                    return $order && !$order->is_return && !$order->is_exchange;
+                })->pluck('order_id')->unique()->count();
+            } else {
+                $count = $logsForStatus->pluck('order_id')->unique()->count();
+            }
 
             $tracking[] = [
                 'name' => $stateName,
@@ -110,8 +124,8 @@ class BusinessMetricsController extends Controller
             ];
         }
 
-        // Novedades
-        $noveltyOrders = $orders->filter(fn($o) => !empty($o->novedad_type));
+        // ✅ Novedades: órdenes que tuvieron actividad en el período y tienen novedad
+        $noveltyOrders = $ordersInPeriod->filter(fn($o) => !empty($o->novedad_type));
         $totalNovelties = $noveltyOrders->count();
         
         $noveltyStats = [
