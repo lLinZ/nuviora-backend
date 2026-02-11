@@ -134,10 +134,14 @@ class EarningsService
         // Standardize the dates without modifying the original objects
         $startDate = (clone $from)->startOfDay();
         $endDate = (clone $to)->endOfDay();
+        
+        // 🔒 STRICT: Solo órdenes entregadas para la liquidación y métricas
+        $statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
 
         // Comparte de Agencias: Tomar todas las órdenes con agencia asignada en el periodo
         $query = Order::with(['payments', 'agency'])
             ->whereNotNull('agency_id')
+            ->where('status_id', $statusDeliveredId)
             ->whereBetween('updated_at', [$startDate, $endDate]);
 
         if ($agencyId) {
@@ -146,7 +150,8 @@ class EarningsService
 
         $orders = $query->get();
 
-        $statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
+        // Ya tenemos el ID, no necesitamos buscarlo de nuevo
+        //$statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
         $statusTransitId = \App\Models\Status::where('description', 'En ruta')->value('id');
 
         // PRE-CALCULAR CONTEOS DE RUTA
@@ -222,11 +227,11 @@ class EarningsService
                         'delivery_cost'  => ($routeCounts[$o->id] ?? ($o->was_shipped ? 1 : 0)) * (float) $o->delivery_cost,
                     ];
                 })
-                // Filtrar órdenes ENTREGADAS o EN RUTA (ya salidas) para la liquidación
+                // Filtrar órdenes ENTREGADAS EXCLUSIVAMENTE para la liquidación
                 ->filter(function($d) use ($agencyOrders, $statusDeliveredId) {
                     $order = $agencyOrders->firstWhere('id', $d['order_id']);
-                    // Se incluye si ya se entregó O si ya salió a ruta (el servicio logístico se ejecutó/inició)
-                    return $order && ($order->status_id == $statusDeliveredId || $order->was_shipped);
+                    // 🔒 STRICT: Solo pagar/liquidar lo que está efectivamente ENTREGADO
+                    return $order && ((int)$order->status_id === (int)$statusDeliveredId);
                 });
 
                 if ($details->isEmpty()) return null;

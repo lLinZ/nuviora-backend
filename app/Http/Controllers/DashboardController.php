@@ -393,7 +393,8 @@ class DashboardController extends Controller
 
         // Calculate real net sales (Collected - Change) using EarningsService logic
         $settlement = $this->earningsService->calculateAgencySettlement($date, $date, $user->id);
-        $totalNetUsd = $settlement->first()['total_net_usd'] ?? 0;
+        $item = $settlement->first();
+        $totalNetUsd = $item ? ($item['balance_usd'] ?? 0) : 0;
 
         $totalSales = (float) $totalNetUsd;
 
