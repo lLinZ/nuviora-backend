@@ -1206,8 +1206,11 @@ class OrderController extends Controller
 
         // Only update total for non-return/exchange orders
         if (!$isReturnOrExchange) {
-            $upsellAmount = $request->price * $request->quantity;
-            $order->current_total_price += $upsellAmount;
+            // 🔥 FIX: Recalcular TOTAL desde cero
+            $newTotal = \App\Models\OrderProduct::where('order_id', $order->id)
+                ->sum(\Illuminate\Support\Facades\DB::raw('price * quantity'));
+                
+            $order->current_total_price = $newTotal;
             $order->save();
 
             // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones de inmediato
@@ -1254,13 +1257,15 @@ class OrderController extends Controller
                 return response()->json(['status' => false, 'message' => 'No es un upsell. Solo admins pueden eliminar productos base.'], 403);
             }
 
-            $deduction = $item->price * $item->quantity;
             $item->delete();
 
             // Only update total for non-return/exchange orders (they always have $0 total)
             if (!($order->is_return || $order->is_exchange)) {
-                $order->current_total_price -= $deduction;
-                if ($order->current_total_price < 0) $order->current_total_price = 0; // Safety check
+                // 🔥 FIX: Recalcular TOTAL desde cero
+                $newTotal = \App\Models\OrderProduct::where('order_id', $order->id)
+                    ->sum(\Illuminate\Support\Facades\DB::raw('price * quantity'));
+                
+                $order->current_total_price = $newTotal;
                 $order->save();
 
                 // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones (quitará el upsell/producto del reporte)
@@ -1341,8 +1346,12 @@ class OrderController extends Controller
 
         // Update order total
         if (!($order->is_return || $order->is_exchange)) {
-            $order->current_total_price += $diff;
-            if ($order->current_total_price < 0) $order->current_total_price = 0;
+            // 🔥 FIX: Recalcular TOTAL desde cero sumando todos los items
+            // Esto corrige errores de cálculo incremental si el precio base cambia
+            $newTotal = \App\Models\OrderProduct::where('order_id', $order->id)
+                ->sum(\Illuminate\Support\Facades\DB::raw('price * quantity'));
+                
+            $order->current_total_price = $newTotal;
             $order->save();
             
             // 🆕 Si la orden ya está ENTREGADA, sincronizamos las comisiones
