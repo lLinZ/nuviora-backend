@@ -260,36 +260,71 @@ class BusinessMetricsController extends Controller
             ->when($agencyId, fn($q) => $q->where('id', $agencyId))
             ->get();
 
-        $metrics = $agencies->map(function($a) use ($orders, $statusLogs) {
-            // Exclude orders that are still in 'Sales' statuses, even if assigned to agency ID
-            $salesStatuses = [
-                'Nuevo', 'Sin Stock', 'Asignado a vendedor', 
-                'Llamado 1', 'Llamado 2', 'Llamado 3',
-                'Esperando Ubicacion', 'Programado para mas tarde',
-                'Programado para otro dia', 'Reprogramado para hoy', 'Reprogramado',
-                'Confirmado' // Todavía no ha llegado a 'Asignar a agencia'
-            ];
-            
-            $salesStatusIds = Status::whereIn('description', $salesStatuses)->pluck('id');
+        // Obtener ID del estado "Asignar a agencia"
+        $statusAgenciaId = Status::where('description', '=', 'Asignar a agencia')->value('id');
+        $statusRutaId = Status::where('description', '=', 'En ruta')->value('id');
+        $statusEntregadoId = Status::where('description', '=', 'Entregado')->value('id');
+        $statusCanceladoId = Status::where('description', '=', 'Cancelado')->value('id');
 
-            $aOrders = $orders->where('agency_id', '=', $a->id)
-                              ->whereNotIn('status_id', $salesStatusIds); // ✅ Filter out sales orders
+        $metrics = $agencies->map(function($a) use ($startDate, $endDate, $statusAgenciaId, $statusRutaId, $statusEntregadoId, $statusCanceladoId) {
+            // ✅ Obtener todas las órdenes que fueron asignadas a esta agencia en el rango de fechas
+            // Buscamos cuando el estado cambió a "Asignar a agencia" y la orden tiene este agency_id
+            $assignedToAgencyLogs = OrderStatusLog::where('to_status_id', '=', $statusAgenciaId)
+                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                ->get();
 
+            // Filtrar logs que corresponden a esta agencia
+            $agencyOrderIds = $assignedToAgencyLogs->filter(function($log) use ($a) {
+                $order = Order::find($log->order_id);
+                return $order && $order->agency_id === $a->id;
+            })->pluck('order_id')->unique();
+
+            if ($agencyOrderIds->isEmpty()) return null;
+
+            // ✅ Obtener las órdenes directamente desde la BD
+            $aOrders = Order::whereIn('id', $agencyOrderIds)->get();
             $total = $aOrders->count();
             if ($total === 0) return null;
+
+            // Obtener los logs de estado de estas órdenes
+            $aStatusLogs = OrderStatusLog::whereIn('order_id', $agencyOrderIds)->get();
  
-            $statusRutaId = Status::where('description', '=', 'En ruta')->value('id');
-            $statusEntregadoId = Status::where('description', '=', 'Entregado')->value('id');
-            $statusCanceladoId = Status::where('description', '=', 'Cancelado')->value('id');
+            // ✅ Calcular órdenes en ruta
+            $enRutaCount = $aOrders->filter(function($o) use ($statusRutaId, $aStatusLogs) {
+                return (int)$o->status_id === (int)$statusRutaId || 
+                       $o->was_shipped ||
+                       $aStatusLogs->where('order_id', '=', $o->id)
+                                   ->where('to_status_id', '=', $statusRutaId)
+                                   ->isNotEmpty();
+            })->count();
+
+            // ✅ Calcular órdenes entregadas
+            $entregadasCount = $aOrders->filter(function($o) use ($statusEntregadoId, $aStatusLogs) {
+                // Excluir devoluciones y cambios
+                if ($o->is_return || $o->is_exchange) return false;
+                
+                return (int)$o->status_id === (int)$statusEntregadoId || 
+                       $aStatusLogs->where('order_id', '=', $o->id)
+                                   ->where('to_status_id', '=', $statusEntregadoId)
+                                   ->isNotEmpty();
+            })->count();
+
+            // ✅ Calcular órdenes canceladas
+            $canceladasCount = $aOrders->filter(function($o) use ($statusCanceladoId, $aStatusLogs) {
+                return (int)$o->status_id === (int)$statusCanceladoId || 
+                       $aStatusLogs->where('order_id', '=', $o->id)
+                                   ->where('to_status_id', '=', $statusCanceladoId)
+                                   ->isNotEmpty();
+            })->count();
  
             return [
                 'id' => $a->id,
                 'name' => $a->names,
                 'stats' => [
                     'received' => $total,
-                    'in_route_rate' => round(($aOrders->filter(fn($o) => (int)$o->status_id === (int)$statusRutaId || $o->was_shipped)->count() / $total) * 100, 2),
-                    'delivered_rate' => round(($aOrders->where('status_id', '=', $statusEntregadoId)->where('is_return', false)->where('is_exchange', false)->count() / $total) * 100, 2),
-                    'cancel_rate' => round(($aOrders->where('status_id', '=', $statusCanceladoId)->count() / $total) * 100, 2),
+                    'in_route_rate' => round(($enRutaCount / $total) * 100, 2),
+                    'delivered_rate' => round(($entregadasCount / $total) * 100, 2),
+                    'cancel_rate' => round(($canceladasCount / $total) * 100, 2),
                     'novelty_rate' => round(($aOrders->filter(fn($o) => !empty($o->novedad_type))->count() / $total) * 100, 2),
                 ]
             ];
