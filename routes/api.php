@@ -151,6 +151,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('orders/{order}/upsell', [OrderController::class, 'addUpsell']);
     Route::delete('orders/{order}/upsell/{itemId}', [OrderController::class, 'removeUpsell']);
     Route::put('orders/{order}/upsell/{itemId}', [OrderController::class, 'updateProductQuantity']);
+    // 🔥 CLIENT REQUEST: Admin can manually edit order total
+    Route::put('orders/{order}/total', [OrderController::class, 'updateTotal']);
     // Productos
     Route::get('products', [ProductController::class, 'index']);
 

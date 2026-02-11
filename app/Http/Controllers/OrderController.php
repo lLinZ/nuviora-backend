@@ -1127,7 +1127,18 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
 
-        // For return orders, price validation is optional (always 0)
+        // 🔥 CLIENT REQUEST: Si se modificaron productos originales y usuario NO es Admin, 
+        // NO permitir agregar upsells. Mensaje: contactar al admin
+        $userRole = auth()->user()->role?->description;
+        $isAdminOrManager = in_array($userRole, ['Admin', 'Gerente', 'Master']);
+        $isRequestingUpsell = !$request->has('is_upsell') || $request->boolean('is_upsell');
+        
+        if ($order->has_modified_original_products && !$isAdminOrManager && $isRequestingUpsell) {
+            return response()->json([
+                'status' => false, 
+                'message' => 'No puedes agregar upsells porque modificaste productos originales. Contacta al administrador.'
+            ], 403);
+        }
         $rules = [
             'product_id' => 'required|exists:products,id',
             'quantity' => 'required|integer|min:1',
@@ -1241,31 +1252,44 @@ class OrderController extends Controller
         }
 
         $request->validate([
-            'quantity' => 'required|integer|min:1',
+            'quantity' => 'nullable|integer|min:1',
+            'price' => 'nullable|numeric|min:0', // 🆕 Permitir editar precio
         ]);
 
         $item = OrderProduct::where('order_id', $order->id)->where('id', $itemId)->firstOrFail();
 
+        // 🔥 CLIENT REQUEST: Si se modifica un producto original (no upsell), marcar la orden
+        // Esto bloqueará la posibilidad de agregar upsells
+        if (!$item->is_upsell && $order->has_modified_original_products !== true) {
+            $order->has_modified_original_products = true;
+            $order->save();
+        }
+
         // For return/exchange orders, price is 0 so impact is just quantity
-        // For regular orders, we recalculate total
+        // For regular orders,we recalculate total
         
         // Calculate difference for total price update
         $oldQuantity = $item->quantity;
-        $newQuantity = $request->input('quantity');
+        $oldPrice = $item->price;
         
-        if ($oldQuantity == $newQuantity) {
+        $newQuantity = $request->filled('quantity') ? $request->input('quantity') : $oldQuantity;
+        $newPrice = $request->filled('price') ? $request->input('price') : $oldPrice;
+        
+        if ($oldQuantity == $newQuantity && $oldPrice == $newPrice) {
              return response()->json([
                 'status' => true,
-                'message' => 'Cantidad actualizada correctamente',
+                'message' => 'Producto actualizado correctamente',
                 'order' => $order->fresh(['products.product', 'client', 'status', 'agent'])
             ]);
         }
 
-        $price = $item->price;
-        $diff = ($newQuantity - $oldQuantity) * $price;
+        $oldSubtotal = $oldQuantity * $oldPrice;
+        $newSubtotal = $newQuantity * $newPrice;
+        $diff = $newSubtotal - $oldSubtotal;
 
         // Update item
         $item->quantity = $newQuantity;
+        $item->price = $newPrice;
         $item->save();
 
         // Update order total
@@ -1282,7 +1306,34 @@ class OrderController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'Cantidad actualizada correctamente',
+            'message' => 'Producto actualizado correctamente',
+            'order' => $order->fresh(['products.product', 'client', 'status', 'agent'])
+        ]);
+    }
+
+    // 🔥 CLIENT REQUEST: Allow Admin to manually edit order total
+    public function updateTotal(Request $request, Order $order)
+    {
+        // 🔒 Only Admin can do this
+        if (auth()->user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'Solo el administrador puede editar el total manualmente.'], 403);
+        }
+
+        $request->validate([
+            'total' => 'required|numeric|min:0',
+        ]);
+
+        $order->current_total_price = $request->total;
+        $order->save();
+
+        // If order is delivered, regenerate commissions
+        if ($order->status && $order->status->description === 'Entregado') {
+            app(CommissionService::class)->generateForDeliveredOrder($order);
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Total actualizado correctamente',
             'order' => $order->fresh(['products.product', 'client', 'status', 'agent'])
         ]);
     }
