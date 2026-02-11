@@ -176,13 +176,17 @@ class BusinessMetricsController extends Controller
                 // Dado el requerimiento "ver cual orden fue", enviamos todas (son reportes filtrados).
                 $orderDetails = Order::whereIn('id', $finalIds)
                     ->select('id', 'name', 'client_id')
-                    ->with('client:id,name')
+                    ->with('client:id,first_name,last_name') // 🔥 FIX: 'name' no existe en clients, usamos first/last
                     ->get()
                     ->map(function($o) {
+                        $clientName = $o->client 
+                            ? trim($o->client->first_name . ' ' . $o->client->last_name) 
+                            : 'Sin Cliente';
+                            
                         return [
                             'id' => $o->id,
                             'number' => $o->name,
-                            'client' => $o->client?->name ?? 'Sin Cliente'
+                            'client' => $clientName ?: 'Sin Nombre'
                         ];
                     });
             }
