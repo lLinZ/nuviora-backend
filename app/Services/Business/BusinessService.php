@@ -144,13 +144,16 @@ class BusinessService
                         'status_id' => $nuevoId
                     ]);
 
-                // 2. Para Novedades: Solo quitar vendedor, mantener status
+                // 2. 🔥 CLIENT REQUEST: Novedades y Novedad Solucionada NO deben desasignarse
+                // El cliente pidió explícitamente que no se quite el vendedor ni desaparezcan.
+                /*
                 $novedadStatus = Status::where('description', 'Novedades')->first();
                 if ($novedadStatus) {
                     Order::where('shop_id', $shopId)
                         ->where('status_id', $novedadStatus->id)
                         ->update(['agent_id' => null]);
                 }
+                */
                 
                 // 3. Para "Programado para otro dia" y "Reprogramado": Solo quitar vendedor, mantener status
                 $statusesToKeep = ['Programado para otro dia', 'Reprogramado'];
