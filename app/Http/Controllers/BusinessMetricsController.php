@@ -174,7 +174,7 @@ class BusinessMetricsController extends Controller
         $statusCanceladoId = Status::where('description', '=', 'Cancelado')->value('id');
         $statusAgenciaId = Status::where('description', '=', 'Asignar a agencia')->value('id');
 
-        $metrics = $vendedores->map(function($v) use ($startDate, $endDate, $statusEntregadoId, $statusCanceladoId, $statusAgenciaId, $orders, $statusLogs) {
+        $metrics = $vendedores->map(function($v) use ($startDate, $endDate, $statusEntregadoId, $statusCanceladoId, $statusAgenciaId) {
             // ✅ Obtener todas las órdenes que fueron asignadas a esta vendedora en el rango de fechas
             // usando OrderAssignmentLog para rastrear asignaciones históricas
             $assignedOrderIds = OrderAssignmentLog::where('agent_id', '=', $v->id)
@@ -182,37 +182,43 @@ class BusinessMetricsController extends Controller
                 ->pluck('order_id')
                 ->unique();
 
-            // Filtrar las órdenes que corresponden a esta vendedora
-            $vOrders = $orders->whereIn('id', $assignedOrderIds);
+            if ($assignedOrderIds->isEmpty()) return null;
+
+            // ✅ Obtener las órdenes directamente desde la BD (no de la colección pre-filtrada)
+            // porque necesitamos órdenes asignadas en el rango, no creadas en el rango
+            $vOrders = Order::whereIn('id', $assignedOrderIds)->get();
             $total = $vOrders->count();
             if ($total === 0) return null;
+
+            // Obtener los logs de estado de estas órdenes
+            $vStatusLogs = OrderStatusLog::whereIn('order_id', $assignedOrderIds)->get();
  
             // ✅ Calcular órdenes entregadas: las que llegaron al estado "Entregado"
-            $entregadasCount = $vOrders->filter(function($o) use ($statusEntregadoId, $statusLogs) {
+            $entregadasCount = $vOrders->filter(function($o) use ($statusEntregadoId, $vStatusLogs) {
                 // Excluir devoluciones y cambios
                 if ($o->is_return || $o->is_exchange) return false;
                 
                 // Verificar si la orden está o estuvo en "Entregado"
                 return (int)$o->status_id === (int)$statusEntregadoId || 
-                       $statusLogs->where('order_id', '=', $o->id)
-                                  ->where('to_status_id', '=', $statusEntregadoId)
-                                  ->isNotEmpty();
+                       $vStatusLogs->where('order_id', '=', $o->id)
+                                   ->where('to_status_id', '=', $statusEntregadoId)
+                                   ->isNotEmpty();
             })->count();
 
             // ✅ Calcular órdenes asignadas a agencia
-            $agenciaCount = $vOrders->filter(function($o) use ($statusAgenciaId, $statusLogs) {
+            $agenciaCount = $vOrders->filter(function($o) use ($statusAgenciaId, $vStatusLogs) {
                 return (int)$o->status_id === (int)$statusAgenciaId || 
-                       $statusLogs->where('order_id', '=', $o->id)
-                                  ->where('to_status_id', '=', $statusAgenciaId)
-                                  ->isNotEmpty();
+                       $vStatusLogs->where('order_id', '=', $o->id)
+                                   ->where('to_status_id', '=', $statusAgenciaId)
+                                   ->isNotEmpty();
             })->count();
- 
+
             // ✅ Calcular órdenes canceladas
-            $canceladasCount = $vOrders->filter(function($o) use ($statusCanceladoId, $statusLogs) {
+            $canceladasCount = $vOrders->filter(function($o) use ($statusCanceladoId, $vStatusLogs) {
                 return (int)$o->status_id === (int)$statusCanceladoId || 
-                       $statusLogs->where('order_id', '=', $o->id)
-                                  ->where('to_status_id', '=', $statusCanceladoId)
-                                  ->isNotEmpty();
+                       $vStatusLogs->where('order_id', '=', $o->id)
+                                   ->where('to_status_id', '=', $statusCanceladoId)
+                                   ->isNotEmpty();
             })->count();
  
             return [
