@@ -132,9 +132,10 @@ class BusinessMetricsController extends Controller
                 ->whereIn('order_id', $ordersInPeriod->pluck('id')) // 🔥 FILTRO CLAVE
                 ->get();
             
+            $finalIds = collect([]);
+
             if ($stateName === 'Asignado a vendedor') {
                 // 🔥 FIX: Consultar DIRECTAMENTE OrderAssignmentLog con los filtros de vendedor/agencia
-                // No dependemos de $ordersInPeriod porque eso excluye órdenes que se asignaron pero no cambiaron de status hoy.
                 $assignmentQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
 
                 if ($sellerId) {
@@ -147,39 +148,51 @@ class BusinessMetricsController extends Controller
                     });
                 }
 
-                $count = $assignmentQuery->distinct('order_id')->count('order_id');
+                $finalIds = $assignmentQuery->distinct('order_id')->pluck('order_id');
             } else {
                 // Para el resto de estados, usamos los logs de cambio de estado
                 // 🔥 FIX: Quitamos el filtro de fecha AQUÍ para ver el FUNNEL COMPLETO de las órdenes seleccionadas.
-                // Si la orden se gestionó hoy (está en $ordersInPeriod) pero el "Llamado 1" fue ayer,
-                // queremos que cuente para mostrar la "Penetración" real (Ej: De las 41 de hoy, 40 pasaron por Llamado 1 alguna vez).
-                
                 $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
                     ->whereIn('order_id', $ordersInPeriod->pluck('id'))
                     ->get();
                     
-                $count = $logsForStatus->pluck('order_id')->unique()->count();
+                $finalIds = $logsForStatus->pluck('order_id')->unique();
             }
 
             // Excluir devoluciones/cambios del conteo de 'Entregado'
             if ($stateName === 'Entregado') {
-                // Si ya calculamos $count arriba (logica standar sin fecha), lo re-filtramos.
-                // Re-consultamos para asegurar consistencia si entró por el else
-                 $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
-                    ->whereIn('order_id', $ordersInPeriod->pluck('id')) // Sin filtro de fecha, solo por ID
-                    ->get();
-
-                 $count = $logsForStatus->filter(function($log) use ($ordersInPeriod) {
-                    $order = $ordersInPeriod->firstWhere('id', $log->order_id);
+                 $finalIds = $finalIds->filter(function($id) use ($ordersInPeriod) {
+                    $order = $ordersInPeriod->firstWhere('id', $id);
                     return $order && !$order->is_return && !$order->is_exchange;
-                })->pluck('order_id')->unique()->count();
+                });
+            }
+
+            $count = $finalIds->count();
+
+            // ✅ Obtener detalles de las órdenes para mostrar en el frontend
+            $orderDetails = [];
+            if ($count > 0) {
+                // Limitamos a 50 para no sobrecargar si son muchas, o enviamos todas si el cliente lo requiere.
+                // Dado el requerimiento "ver cual orden fue", enviamos todas (son reportes filtrados).
+                $orderDetails = Order::whereIn('id', $finalIds)
+                    ->select('id', 'name', 'client_id')
+                    ->with('client:id,name')
+                    ->get()
+                    ->map(function($o) {
+                        return [
+                            'id' => $o->id,
+                            'number' => $o->name,
+                            'client' => $o->client?->name ?? 'Sin Cliente'
+                        ];
+                    });
             }
 
             $tracking[] = [
                 'name' => $stateName,
                 'count' => $count,
                 'percentage' => round(($count / $totalOrders) * 100, 2),
-                'avg_time' => 'N/A'
+                'avg_time' => 'N/A',
+                'orders' => $orderDetails
             ];
         }
 
