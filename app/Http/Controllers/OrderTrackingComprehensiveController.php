@@ -22,6 +22,19 @@ class OrderTrackingComprehensiveController extends Controller
             'previousSeller' => fn($q) => $q->select('id', 'names as name')
         ]);
 
+        // 🛡️ SECURITY: Role-based filtering
+        $user = auth()->user();
+        if ($user->role?->description === 'Agencia') {
+            $query->whereHas('order', function($q) use ($user) {
+                $q->where('agency_id', $user->id);
+            });
+        } elseif ($user->role?->description === 'Vendedor') {
+            $query->where(function($q) use ($user) {
+                $q->where('seller_id', $user->id)
+                  ->orWhere('user_id', $user->id);
+            });
+        }
+
         // Filtro por Agente (Vendedora encargada en ese momento)
         if ($request->filled('agent_id')) {
             $query->where('seller_id', $request->agent_id);

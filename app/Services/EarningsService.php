@@ -142,7 +142,7 @@ class EarningsService
         $query = Order::with(['payments', 'agency'])
             ->whereNotNull('agency_id')
             ->where('status_id', $statusDeliveredId)
-            ->whereBetween('updated_at', [$startDate, $endDate]);
+            ->whereBetween('processed_at', [$startDate, $endDate]);
 
         if ($agencyId) {
             $query->where('agency_id', $agencyId);
@@ -251,6 +251,8 @@ class EarningsService
                     'total_change_ves'    => $details->sum('change_ves'),
                     'balance_usd'         => $details->sum('net_usd'),
                     'balance_ves'         => $details->sum('net_ves'),
+                    'total_net_usd'       => $details->sum('net_usd'), // Alias for frontend compatibility
+                    'total_net_ves'       => $details->sum('net_ves'), // Alias for frontend compatibility
                     'order_details'       => $details->values()
                 ];
             })

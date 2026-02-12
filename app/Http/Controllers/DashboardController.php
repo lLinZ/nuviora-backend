@@ -79,7 +79,9 @@ class DashboardController extends Controller
 
         // General Counts
         $created = Order::whereDate('created_at', '=', $date->toDateString())->count();
-        $delivered = Order::whereDate('processed_at', '=', $date->toDateString())->where('status_id', '=', $statusDeliveredId)->count();
+        $delivered = Order::whereDate('processed_at', '=', $date->toDateString())
+            ->whereIn('status_id', [$statusCompletedId, $statusDeliveredId])
+            ->count();
         $cancelled = Order::whereDate('created_at', '=', $date->toDateString())->where('status_id', '=', $statusCancelledId)->count();
 
         $totalSales = Order::whereDate('processed_at', '=', $date->toDateString())
@@ -337,7 +339,8 @@ class DashboardController extends Controller
 
     private function getDelivererStats($user, $date, $rate)
     {
-        $statusDeliveredId = Status::where('description', '=', 'Entregado')->value('id');
+        // IDs de status importantes
+        $statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
         $commissionPerOrder = 2.5; // $2.5 USD
 
         $assigned = Order::whereDate('created_at', '=', $date)->where('deliverer_id', '=', $user->id)->count();
@@ -388,15 +391,16 @@ class DashboardController extends Controller
 
         $deliveredCount = Order::where('agency_id', '=', $user->id)
             ->where('status_id', '=', $statusDeliveredId)
-            ->whereDate('updated_at', $date)
+            ->whereDate('processed_at', $date)
             ->count();
 
         // Calculate real net sales (Collected - Change) using EarningsService logic
         $settlement = $this->earningsService->calculateAgencySettlement($date, $date, $user->id);
         $item = $settlement->first();
-        $totalNetUsd = $item ? ($item['balance_usd'] ?? 0) : 0;
+        $totalNetUsd = $item ? (float) ($item['balance_usd'] ?? 0) : 0;
+        $deliveredCountFromSettlement = $item ? (int) ($item['count_delivered'] ?? 0) : 0;
 
-        $totalSales = (float) $totalNetUsd;
+        $totalSales = $totalNetUsd;
 
         // Pending Route: Orders assigned to this agency currently in statuses that imply "Waiting for route/delivery"
         // Statuses: 'Asignar a agencia', 'Asignar repartidor', 'Novedades', 'Novedad Solucionada'
@@ -430,7 +434,7 @@ class DashboardController extends Controller
             'earnings_local' => (float) ($earningsUsd * $rate),
             'orders_today' => [
                 'assigned' => $assigned,
-                'delivered' => $deliveredCount,
+                'delivered' => $deliveredCount ?: $deliveredCountFromSettlement,
                 'pending'   => $pendingCount
             ],
             'pending_route_orders' => $pendingRoute,

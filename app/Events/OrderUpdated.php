@@ -32,8 +32,18 @@ class OrderUpdated implements ShouldBroadcast
      */
     public function broadcastOn(): array
     {
-        return [
-            new PrivateChannel('orders'),
-        ];
+        $channels = [new PrivateChannel('orders')];
+
+        if ($this->order->agency_id) {
+            $channels[] = new PrivateChannel('orders.agency.' . $this->order->agency_id);
+        }
+        if ($this->order->agent_id) {
+            $channels[] = new PrivateChannel('orders.agent.' . $this->order->agent_id);
+        }
+        if ($this->order->deliverer_id) {
+            $channels[] = new PrivateChannel('orders.deliverer.' . $this->order->deliverer_id);
+        }
+
+        return $channels;
     }
 }
