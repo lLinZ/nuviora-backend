@@ -22,7 +22,7 @@ class OrderUpdated implements ShouldBroadcast
     public function __construct($order)
     {
         // 🔄 Asegurarnos de tener las relaciones cargadas para el frontend
-        $this->order = $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+        $this->order = $order->load(['status', 'client', 'agent', 'agency', 'deliverer', 'shop']);
     }
 
     /**

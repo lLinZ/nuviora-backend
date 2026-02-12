@@ -186,6 +186,7 @@ class OrderController extends Controller
                 'bcv_rate'             => \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0,
                 'eur_rate'             => \App\Models\Setting::where('key', '=', 'rate_bcv_eur')->first()?->value ?? 0,
                 'agency'               => $order->agency,
+                'shop'                 => $order->shop,
                 'has_stock_warning'    => $hasStockWarning, // 👈 New flag
                 'novedad_type'         => $order->novedad_type,
                 'novedad_description'  => $order->novedad_description,
