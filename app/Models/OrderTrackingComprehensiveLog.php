@@ -72,13 +72,13 @@ class OrderTrackingComprehensiveLog extends Model
             if ($wasReassigned) {
                 $prev = User::find($previousSellerId);
                 $curr = User::find($currentSellerId);
-                $parts[] = "Reasignada de " . ($prev->name ?? 'Anterior') . " a " . ($curr->name ?? 'Nueva');
+                $parts[] = "Reasignada de " . ($prev?->names ?? 'Anterior') . " a " . ($curr?->names ?? 'Nueva');
             } elseif ($wasUnassigned) {
                 $prev = User::find($previousSellerId);
-                $parts[] = "Desasignada de " . ($prev->name ?? 'Anterior');
+                $parts[] = "Desasignada de " . ($prev?->names ?? 'Anterior');
             } elseif (!$previousSellerId && $currentSellerId) {
                 $curr = User::find($currentSellerId);
-                $parts[] = "Asignada a " . ($curr->name ?? 'Vendedora');
+                $parts[] = "Asignada a " . ($curr?->names ?? 'Vendedora');
             }
 
             $description = implode(". ", $parts);

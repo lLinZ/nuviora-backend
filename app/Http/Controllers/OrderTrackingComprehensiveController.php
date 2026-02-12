@@ -14,12 +14,12 @@ class OrderTrackingComprehensiveController extends Controller
     public function index(Request $request)
     {
         $query = OrderTrackingComprehensiveLog::with([
-            'order:id,number',
+            'order' => fn($q) => $q->select('id', 'order_number as number'),
             'fromStatus:id,description',
             'toStatus:id,description',
-            'seller:id,name',
-            'user:id,name',
-            'previousSeller:id,name'
+            'seller' => fn($q) => $q->select('id', 'names as name'),
+            'user' => fn($q) => $q->select('id', 'names as name'),
+            'previousSeller' => fn($q) => $q->select('id', 'names as name')
         ]);
 
         // Filtro por Agente (Vendedora encargada en ese momento)
@@ -52,7 +52,7 @@ class OrderTrackingComprehensiveController extends Controller
     {
         return response()->json([
             'status' => true,
-            'agents' => User::whereHas('role', fn($q) => $q->where('description', 'Vendedor'))->select('id', 'name')->get(),
+            'agents' => User::whereHas('role', fn($q) => $q->where('description', 'Vendedor'))->select('id', 'names as name')->get(),
             'statuses' => Status::select('id', 'description')->get(),
         ]);
     }
