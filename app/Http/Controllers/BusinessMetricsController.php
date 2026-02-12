@@ -86,18 +86,22 @@ class BusinessMetricsController extends Controller
             'Cancelado', 'Asignar a agencia', 'En ruta', 'Entregado'
         ];
 
-        // ✅ Obtener todas las órdenes únicas que pasaron por algún estado en el rango de fechas
-        $allOrderIdsInPeriod = OrderStatusLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-            ->pluck('order_id')
-            ->unique();
+        // ✅ 1. Órdenes con cambios de status hoy
+    $orderIdsWithLogs = OrderStatusLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+        ->pluck('order_id');
 
-        if ($allOrderIdsInPeriod->isEmpty()) return ['tracking' => [], 'novelties' => []];
+    // ✅ 2. Órdenes que entren en el "Universo" del reporte:
+    // Creadas hoy OR con logs hoy OR programadas para hoy
+    $ordersInPeriod = Order::where(function($q) use ($startDate, $endDate, $orderIdsWithLogs) {
+            $q->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+              ->orWhereIn('id', $orderIdsWithLogs)
+              ->orWhereBetween('scheduled_for', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+        })
+        ->when($sellerId, fn($q) => $q->where('agent_id', '=', $sellerId))
+        ->when($agencyId, fn($q) => $q->where('agency_id', '=', $agencyId))
+        ->get();
 
-        // ✅ Obtener todas las órdenes que tuvieron actividad en el período Y cumplir filtros
-        $ordersInPeriod = Order::whereIn('id', $allOrderIdsInPeriod)
-            ->when($sellerId, fn($q) => $q->where('agent_id', '=', $sellerId))
-            ->when($agencyId, fn($q) => $q->where('agency_id', '=', $agencyId))
-            ->get();
+    if ($ordersInPeriod->isEmpty()) return ['tracking' => [], 'novelties' => []];
         
         // 🔥 FIX: La BASE para el porcentaje debe ser el TOTAL DE ASIGNACIONES (Carga de trabajo), 
         // no el conteo de órdenes que tuvieron cambios de status.
@@ -121,85 +125,65 @@ class BusinessMetricsController extends Controller
         if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
 
         $tracking = [];
-        foreach ($states as $stateName) {
-            $statusId = Status::where('description', '=', $stateName)->value('id');
-            if (!$statusId) continue;
+    foreach ($states as $stateName) {
+        $statusId = Status::where('description', '=', $stateName)->value('id');
+        if (!$statusId) continue;
 
-            // ✅ Contar cuántas órdenes pasaron por este estado EN EL RANGO DE FECHAS
-            // Y que pertenezcan al conjunto filtrado ($ordersInPeriod)
-            $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
-                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-                ->whereIn('order_id', $ordersInPeriod->pluck('id')) // 🔥 FILTRO CLAVE
-                ->get();
+        if ($stateName === 'Asignado a vendedor') {
+            $assignmentQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+            if ($sellerId) $assignmentQuery->where('agent_id', $sellerId);
+            if ($agencyId) {
+                $assignmentQuery->whereHas('agent', fn($q) => $q->where('agency_id', $agencyId));
+            }
+            $finalIds = $assignmentQuery->distinct('order_id')->pluck('order_id');
+        } else {
+            // Buscamos órdenes que entraron en este estado hoy
+            $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
+                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
             
-            $finalIds = collect([]);
+            // Aplicamos filtros de vendedor/agencia sobre las órdenes de esos logs
+            $logsQuery->whereHas('order', function($q) use ($sellerId, $agencyId) {
+                if ($sellerId) $q->where('agent_id', $sellerId);
+                if ($agencyId) $q->where('agency_id', $agencyId);
+            });
 
-            if ($stateName === 'Asignado a vendedor') {
-                // 🔥 FIX: Consultar DIRECTAMENTE OrderAssignmentLog con los filtros de vendedor/agencia
-                $assignmentQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
-
-                if ($sellerId) {
-                    $assignmentQuery->where('agent_id', $sellerId);
-                }
-                
-                if ($agencyId) {
-                    $assignmentQuery->whereHas('agent', function($q) use ($agencyId) {
-                        $q->where('agency_id', $agencyId);
-                    });
-                }
-
-                $finalIds = $assignmentQuery->distinct('order_id')->pluck('order_id');
-            } else {
-                // Para el resto de estados, usamos los logs de cambio de estado
-                // 🔥 FIX: Quitamos el filtro de fecha AQUÍ para ver el FUNNEL COMPLETO de las órdenes seleccionadas.
-                $logsForStatus = OrderStatusLog::where('to_status_id', '=', $statusId)
-                    ->whereIn('order_id', $ordersInPeriod->pluck('id'))
-                    ->get();
-                    
-                $finalIds = $logsForStatus->pluck('order_id')->unique();
-            }
-
-            // Excluir devoluciones/cambios del conteo de 'Entregado'
-            if ($stateName === 'Entregado') {
-                 $finalIds = $finalIds->filter(function($id) use ($ordersInPeriod) {
-                    $order = $ordersInPeriod->firstWhere('id', $id);
-                    return $order && !$order->is_return && !$order->is_exchange;
-                });
-            }
-
-            $count = $finalIds->count();
-
-            // ✅ Obtener detalles de las órdenes para mostrar en el frontend
-            $orderDetails = [];
-            if ($count > 0) {
-                // Limitamos a 50 para no sobrecargar si son muchas, o enviamos todas si el cliente lo requiere.
-                // Dado el requerimiento "ver cual orden fue", enviamos todas (son reportes filtrados).
-                $orderDetails = Order::whereIn('id', $finalIds)
-                    ->select('id', 'name', 'client_id')
-                    ->with('client:id,first_name,last_name') // 🔥 FIX: 'name' no existe en clients, usamos first/last
-                    ->get()
-                    ->map(function($o) {
-                        $clientName = $o->client 
-                            ? trim($o->client->first_name . ' ' . $o->client->last_name) 
-                            : 'Sin Cliente';
-                            
-                        return [
-                            'id' => $o->id,
-                            'number' => $o->name,
-                            'client' => $clientName ?: 'Sin Nombre'
-                        ];
-                    });
-            }
-
-            $tracking[] = [
-                'name' => $stateName,
-                'count' => $count,
-                'percentage' => round(($count / $totalOrders) * 100, 2),
-                'avg_time' => 'N/A',
-                'orders' => $orderDetails
-            ];
+            $finalIds = $logsQuery->distinct('order_id')->pluck('order_id');
         }
 
+        // Excluir devoluciones/cambios del conteo de 'Entregado'
+        if ($stateName === 'Entregado') {
+             $finalIds = Order::whereIn('id', $finalIds)
+                ->where('is_return', false)
+                ->where('is_exchange', false)
+                ->pluck('id');
+        }
+
+        $count = $finalIds->count();
+
+        // ✅ Detalles de las órdenes
+        $orderDetails = [];
+        if ($count > 0) {
+            $orderDetails = Order::whereIn('id', $finalIds)
+                ->select('id', 'name', 'client_id')
+                ->with('client:id,first_name,last_name')
+                ->get()
+                ->map(function($o) {
+                    return [
+                        'id' => $o->id,
+                        'number' => str_replace('#', '', $o->name), // Limpiamos el # para la URL
+                        'display_number' => $o->name,
+                        'client' => $o->client ? trim($o->client->first_name . ' ' . $o->client->last_name) : 'Sin Cliente'
+                    ];
+                });
+        }
+
+        $tracking[] = [
+            'name' => $stateName,
+            'count' => $count,
+            'percentage' => $totalOrders > 0 ? round(($count / $totalOrders) * 100, 2) : 0,
+            'orders' => $orderDetails
+        ];
+    }
         // ✅ Novedades: órdenes que tuvieron actividad en el período y tienen novedad
         $noveltyOrders = $ordersInPeriod->filter(fn($o) => !empty($o->novedad_type));
         $totalNovelties = $noveltyOrders->count();
