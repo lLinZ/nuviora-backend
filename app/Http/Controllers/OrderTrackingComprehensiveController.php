@@ -40,11 +40,37 @@ class OrderTrackingComprehensiveController extends Controller
             ]);
         }
 
+        // Calcular estadísticas antes de paginar
+        $statsQuery = clone $query;
+        
+        $statsByStatus = $statsQuery->select('to_status_id', \DB::raw('count(*) as total'))
+            ->groupBy('to_status_id')
+            ->with('toStatus:id,description')
+            ->get()
+            ->map(fn($item) => [
+                'status' => $item->toStatus?->description ?? 'Desconocido',
+                'total' => $item->total
+            ]);
+
+        $statsBySeller = (clone $query)->select('seller_id', \DB::raw('count(*) as total'))
+            ->groupBy('seller_id')
+            ->with(['seller' => fn($q) => $q->select('id', 'names as name')])
+            ->get()
+            ->map(fn($item) => [
+                'seller' => $item->seller?->name ?? 'Sin asignar',
+                'total' => $item->total
+            ]);
+
         $logs = $query->orderBy('updated_at', 'desc')->paginate(50);
 
         return response()->json([
             'status' => true,
-            'data' => $logs
+            'data' => $logs,
+            'stats' => [
+                'by_status' => $statsByStatus,
+                'by_seller' => $statsBySeller,
+                'total_movements' => $logs->total()
+            ]
         ]);
     }
 
