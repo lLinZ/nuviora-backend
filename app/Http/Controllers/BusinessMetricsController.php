@@ -137,17 +137,27 @@ class BusinessMetricsController extends Controller
             }
             $finalIds = $assignmentQuery->distinct('order_id')->pluck('order_id');
         } else {
-            // Buscamos órdenes que entraron en este estado hoy
-            $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
-                ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+            // Buscamos el ID del estado de forma flexible (ignorando mayúsculas/minúsculas)
+            $statusId = Status::whereRaw('LOWER(description) = ?', [strtolower($stateName)])->value('id');
             
-            // Aplicamos filtros de vendedor/agencia sobre las órdenes de esos logs
-            $logsQuery->whereHas('order', function($q) use ($sellerId, $agencyId) {
-                if ($sellerId) $q->where('agent_id', $sellerId);
-                if ($agencyId) $q->where('agency_id', $agencyId);
-            });
+            if (!$statusId) {
+                $finalIds = collect([]);
+            } else {
+                $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
+                    ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+                
+                if ($sellerId || $agencyId) {
+                    $orderIdsAsignados = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                        ->when($sellerId, fn($q) => $q->where('agent_id', $sellerId))
+                        ->when($agencyId, fn($q) => $q->whereHas('agent', fn($aq) => $aq->where('agency_id', $agencyId)))
+                        ->pluck('order_id')
+                        ->unique();
+                    
+                    $logsQuery->whereIn('order_id', $orderIdsAsignados);
+                }
 
-            $finalIds = $logsQuery->distinct('order_id')->pluck('order_id');
+                $finalIds = $logsQuery->distinct('order_id')->pluck('order_id');
+            }
         }
 
         // Excluir devoluciones/cambios del conteo de 'Entregado'
