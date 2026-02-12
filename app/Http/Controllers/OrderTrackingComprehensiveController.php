@@ -41,25 +41,45 @@ class OrderTrackingComprehensiveController extends Controller
         }
 
         // Calcular estadísticas antes de paginar
-        $statsQuery = clone $query;
+        $allLogs = (clone $query)->get();
         
-        $statsByStatus = $statsQuery->select('to_status_id', \DB::raw('count(*) as total'))
-            ->groupBy('to_status_id')
-            ->with('toStatus:id,description')
-            ->get()
-            ->map(fn($item) => [
-                'status' => $item->toStatus?->description ?? 'Desconocido',
-                'total' => $item->total
-            ]);
+        // 1. Movimientos por Status
+        $statsByStatus = $allLogs->groupBy('to_status_id')->map(fn($group) => [
+            'status' => $group->first()->toStatus?->description ?? 'Desconocido',
+            'total' => $group->count()
+        ])->values();
 
-        $statsBySeller = (clone $query)->select('seller_id', \DB::raw('count(*) as total'))
-            ->groupBy('seller_id')
-            ->with(['seller' => fn($q) => $q->select('id', 'names as name')])
-            ->get()
-            ->map(fn($item) => [
-                'seller' => $item->seller?->name ?? 'Sin asignar',
-                'total' => $item->total
-            ]);
+        // 2. Movimientos por vendedora + Tasa de entrega
+        $statusEntregadoId = Status::where('description', 'Entregado')->value('id');
+        $statusAsignarAgenciaId = Status::where('description', 'Asignar a agencia')->value('id');
+        $statusNovedadId = Status::where('description', 'Novedades')->value('id');
+        $statusSolucionadaId = Status::where('description', 'Novedad Solucionada')->value('id');
+
+        $statsBySeller = $allLogs->groupBy('seller_id')->map(function ($group) use ($statusEntregadoId) {
+            $seller = $group->first()->seller;
+            $totalMovements = $group->count();
+            
+            // Tasa de entrega: órdenes de esta vendedora que pasaron a Entregado en este periodo
+            $deliveredOrdersCount = $group->where('to_status_id', $statusEntregadoId)->unique('order_id')->count();
+            $uniqueOrdersCount = $group->unique('order_id')->count();
+            $deliveryRate = $uniqueOrdersCount > 0 ? round(($deliveredOrdersCount / $uniqueOrdersCount) * 100, 2) : 0;
+
+            return [
+                'seller' => $seller?->name ?? 'Sin asignar',
+                'total' => $totalMovements,
+                'delivered' => $deliveredOrdersCount,
+                'delivery_rate' => $deliveryRate . '%'
+            ];
+        })->values();
+
+        // 3. Métricas Globales Adicionales
+        $totalUniqueOrders = $allLogs->unique('order_id')->count();
+        $agencyAssignments = $allLogs->where('to_status_id', $statusAsignarAgenciaId)->unique('order_id')->count();
+        $agencyRate = $totalUniqueOrders > 0 ? round(($agencyAssignments / $totalUniqueOrders) * 100, 2) : 0;
+
+        $noveltiesCount = $allLogs->where('to_status_id', $statusNovedadId)->unique('order_id')->count();
+        $resolvedCount = $allLogs->where('to_status_id', $statusSolucionadaId)->unique('order_id')->count();
+        $resolutionRate = $noveltiesCount > 0 ? round(($resolvedCount / $noveltiesCount) * 100, 2) : 0;
 
         $logs = $query->orderBy('updated_at', 'desc')->paginate(50);
 
@@ -69,7 +89,14 @@ class OrderTrackingComprehensiveController extends Controller
             'stats' => [
                 'by_status' => $statsByStatus,
                 'by_seller' => $statsBySeller,
-                'total_movements' => $logs->total()
+                'total_movements' => $allLogs->count(),
+                'total_orders' => $totalUniqueOrders,
+                'agency_rate' => $agencyRate . '%',
+                'novelty_stats' => [
+                    'total' => $noveltiesCount,
+                    'resolved' => $resolvedCount,
+                    'rate' => $resolutionRate . '%'
+                ]
             ]
         ]);
     }
