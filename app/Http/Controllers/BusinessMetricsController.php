@@ -141,16 +141,35 @@ class BusinessMetricsController extends Controller
             if (!$statusId) {
                 $finalIds = collect([]);
             } else {
-                // 🔥 FIX: Contamos logs de hoy para este estado
+                // Logs de hoy para este estado
                 $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
                     ->whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                 
-                // 🔥 FIX CLAVE: Si hay filtro de vendedor/agencia, miramos el dueño ACTUAL de la orden.
-                // Esto permite que órdenes asignadas ayer pero entregadas hoy cuenten en el reporte de hoy.
                 if ($sellerId || $agencyId) {
-                    $logsQuery->whereHas('order', function($q) use ($sellerId, $agencyId) {
-                        if ($sellerId) $q->where('agent_id', $sellerId);
-                        if ($agencyId) $q->where('agency_id', $agencyId);
+                    $logsQuery->where(function($q) use ($sellerId, $agencyId, $startDate, $endDate) {
+                        // Opción A: Es el dueño actual según la tabla orders
+                        $q->whereHas('order', function($oq) use ($sellerId, $agencyId) {
+                            if ($sellerId) $oq->where('agent_id', $sellerId);
+                            if ($agencyId) $oq->where('agency_id', $agencyId);
+                        });
+
+                        // Opción B: Fue asignado a este vendedor/agencia hoy según los logs
+                        $q->orWhereIn('order_id', function($aq) use ($sellerId, $agencyId, $startDate, $endDate) {
+                            $aq->select('order_id')
+                               ->from('order_assignment_logs')
+                               ->whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+                            
+                            if ($sellerId) {
+                                $aq->where('agent_id', $sellerId);
+                            }
+                            
+                            if ($agencyId) {
+                                // Join para filtrar por agencia en los logs de asignación
+                                $aq->whereIn('agent_id', function($uq) use ($agencyId) {
+                                    $uq->select('id')->from('users')->where('agency_id', $agencyId);
+                                });
+                            }
+                        });
                     });
                 }
 
