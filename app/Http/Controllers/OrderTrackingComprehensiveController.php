@@ -69,7 +69,8 @@ class OrderTrackingComprehensiveController extends Controller
                 'total' => $totalMovements,
                 'delivered' => $deliveredOrdersCount,
                 'unique_orders' => $uniqueOrdersCount,
-                'delivery_rate' => $deliveryRate . '%'
+                'delivery_rate' => $deliveryRate . '%',
+                'delivery_rate_numeric' => $deliveryRate
             ];
         })->values();
 
