@@ -68,6 +68,7 @@ class OrderTrackingComprehensiveController extends Controller
                 'seller' => $seller?->name ?? 'Sin asignar',
                 'total' => $totalMovements,
                 'delivered' => $deliveredOrdersCount,
+                'unique_orders' => $uniqueOrdersCount,
                 'delivery_rate' => $deliveryRate . '%'
             ];
         })->values();
