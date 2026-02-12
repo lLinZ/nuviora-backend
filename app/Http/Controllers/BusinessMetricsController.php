@@ -135,24 +135,23 @@ class BusinessMetricsController extends Controller
             }
             $finalIds = $assignmentQuery->distinct('order_id')->pluck('order_id');
         } else {
-            // Buscamos el ID del estado de forma flexible (ignorando mayúsculas/minúsculas)
+            // Buscamos el ID del estado de forma flexible
             $statusId = Status::whereRaw('LOWER(description) = ?', [strtolower($stateName)])->value('id');
             
             if (!$statusId) {
                 $finalIds = collect([]);
             } else {
-                // 🔥 CAMBIO: Usamos updated_at para los logs de estado
+                // 🔥 FIX: Contamos logs de hoy para este estado
                 $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
                     ->whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                 
+                // 🔥 FIX CLAVE: Si hay filtro de vendedor/agencia, miramos el dueño ACTUAL de la orden.
+                // Esto permite que órdenes asignadas ayer pero entregadas hoy cuenten en el reporte de hoy.
                 if ($sellerId || $agencyId) {
-                    $orderIdsAsignados = \App\Models\OrderAssignmentLog::whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-                        ->when($sellerId, fn($q) => $q->where('agent_id', $sellerId))
-                        ->when($agencyId, fn($q) => $q->whereHas('agent', fn($aq) => $aq->where('agency_id', $agencyId)))
-                        ->pluck('order_id')
-                        ->unique();
-                    
-                    $logsQuery->whereIn('order_id', $orderIdsAsignados);
+                    $logsQuery->whereHas('order', function($q) use ($sellerId, $agencyId) {
+                        if ($sellerId) $q->where('agent_id', $sellerId);
+                        if ($agencyId) $q->where('agency_id', $agencyId);
+                    });
                 }
 
                 $finalIds = $logsQuery->distinct('order_id')->pluck('order_id');
