@@ -26,6 +26,7 @@ use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
 use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\WarehouseController;
+use App\Http\Controllers\OrderTrackingComprehensiveController;
 use Illuminate\Support\Facades\Route;
 
 
@@ -62,6 +63,10 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // 🔥 CLIENT REQUEST: Payment reports by method
     Route::get('/reports/payments-by-method', [\App\Http\Controllers\PaymentReportController::class, 'paymentsByMethod']);
+
+    // Comprehensive Tracking Report
+    Route::get('/reports/tracking-comprehensive', [OrderTrackingComprehensiveController::class, 'index']);
+    Route::get('/reports/tracking-comprehensive/filters', [OrderTrackingComprehensiveController::class, 'getFilters']);
 
     // Statuses
     Route::get('/statuses', [StatusController::class, 'index']);

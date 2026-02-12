@@ -14,7 +14,8 @@ class OrderTrackingComprehensiveLog extends Model
         'user_id',
         'was_unassigned',
         'was_reassigned',
-        'previous_seller_id'
+        'previous_seller_id',
+        'description'
     ];
 
     public function order()
@@ -47,20 +48,52 @@ class OrderTrackingComprehensiveLog extends Model
         return $this->belongsTo(User::class, 'previous_seller_id');
     }
 
-    public static function log(Order $order, $toStatusId, $userId = null)
+    public static function log(Order $order, $toStatusId, $userId = null, $description = null)
     {
+        $fromStatusId = $order->getOriginal('status_id');
         $previousSellerId = $order->getOriginal('agent_id');
         $currentSellerId = $order->agent_id;
+        
+        $wasUnassigned = $previousSellerId && !$currentSellerId;
+        $wasReassigned = $previousSellerId && $currentSellerId && $previousSellerId != $currentSellerId;
+
+        // Generación 100% automática para que las vendedoras no tengan que hacer nada
+        if (!$description) {
+            $parts = [];
+
+            // 1. Detectar cambio de status
+            if ($fromStatusId != $toStatusId) {
+                $fromStatus = Status::find($fromStatusId)?->description ?? 'Inicio';
+                $toStatus = Status::find($toStatusId)?->description ?? 'Desconocido';
+                $parts[] = "Estado cambió de '{$fromStatus}' a '{$toStatus}'";
+            }
+
+            // 2. Detectar reasignación
+            if ($wasReassigned) {
+                $prev = User::find($previousSellerId);
+                $curr = User::find($currentSellerId);
+                $parts[] = "Reasignada de " . ($prev->name ?? 'Anterior') . " a " . ($curr->name ?? 'Nueva');
+            } elseif ($wasUnassigned) {
+                $prev = User::find($previousSellerId);
+                $parts[] = "Desasignada de " . ($prev->name ?? 'Anterior');
+            } elseif (!$previousSellerId && $currentSellerId) {
+                $curr = User::find($currentSellerId);
+                $parts[] = "Asignada a " . ($curr->name ?? 'Vendedora');
+            }
+
+            $description = implode(". ", $parts);
+        }
 
         return self::create([
             'order_id' => $order->id,
-            'from_status_id' => $order->getOriginal('status_id'),
+            'from_status_id' => $fromStatusId,
             'to_status_id' => $toStatusId,
             'seller_id' => $currentSellerId,
             'user_id' => $userId ?? auth()->id(),
-            'was_unassigned' => $previousSellerId && !$currentSellerId,
-            'was_reassigned' => $previousSellerId && $currentSellerId && $previousSellerId != $currentSellerId,
+            'was_unassigned' => $wasUnassigned,
+            'was_reassigned' => $wasReassigned,
             'previous_seller_id' => $previousSellerId,
+            'description' => $description ?: "Movimiento registrado"
         ]);
     }
 }
