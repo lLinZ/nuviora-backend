@@ -115,7 +115,7 @@ class ShopifyWebhookController extends Controller
             ['order_id' => $orderData['id']],
             [
                 'name'                => $orderData['name'],
-                'current_total_price' => round($orderData['current_total_price']),
+                'current_total_price' => round($orderData['current_total_price'] ?? $orderData['total_price'] ?? 0),
                 'order_number'        => $orderData['order_number'],
                 'processed_at'        => $orderData['processed_at']
                     ? Carbon::parse($orderData['processed_at'])->toDateTimeString()

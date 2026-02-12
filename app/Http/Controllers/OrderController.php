@@ -1197,7 +1197,7 @@ class OrderController extends Controller
             'title' => $product->title,
             'name' => $product->name,
             'showable_name' => $product->showable_name,
-            'price' => $productPrice,
+            'price' => round($productPrice),
             'quantity' => $request->quantity,
             'image' => $product->image,
             'is_upsell' => $isUpsell,
@@ -1341,7 +1341,7 @@ class OrderController extends Controller
 
         // Update item
         $item->quantity = $newQuantity;
-        $item->price = $newPrice;
+        $item->price = round($newPrice);
         $item->save();
 
         // Update order total
@@ -1397,7 +1397,7 @@ class OrderController extends Controller
             'total' => 'required|numeric|min:0',
         ]);
 
-        $order->current_total_price = $request->total;
+        $order->current_total_price = round($request->total);
         $order->save();
 
         // If order is delivered, regenerate commissions
@@ -1526,7 +1526,7 @@ class OrderController extends Controller
                 'title' => $product->title,
                 'showable_name' => $product->showable_name,
                 'sku' => $product->sku,
-                    'price' => $price, 
+                    'price' => round($price), 
                     'quantity' => $quantity,
                     'image' => $product->image
                 ]);

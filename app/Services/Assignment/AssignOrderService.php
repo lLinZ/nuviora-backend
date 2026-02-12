@@ -161,6 +161,15 @@ class AssignOrderService
                 $currentStatusDesc = $ordModel->status ? $ordModel->status->description : '';
 
                 if ($currentStatusDesc === 'Programado para otro dia') {
+                    // 🛡️ Filtro estricto: Solo asignar si es para hoy o pasado. 
+                    // Si es para el futuro, debe permanecer sin agente en el backlog.
+                    $scheduledDate = $ordModel->scheduled_for ? $ordModel->scheduled_for->toDateString() : null;
+                    $today = now()->toDateString();
+                    
+                    if ($scheduledDate && $scheduledDate > $today) {
+                        return; // Salir de la transacción sin asignar
+                    }
+
                     $newStatusId = $ordModel->status_id;
                 } elseif ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
                     $newStatusId = $novedadStatusId;
