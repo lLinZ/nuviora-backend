@@ -107,30 +107,28 @@ class BusinessMetricsController extends Controller
         // no el conteo de órdenes que tuvieron cambios de status.
         // Así los porcentajes coincidirán con la tarjeta del vendedor (ej: 7 entregadas / 41 asignadas = 17%).
         
-        $assignmentBaseQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
-        if ($sellerId) {
-            $assignmentBaseQuery->where('agent_id', $sellerId);
-        }
-        if ($agencyId) {
-            $assignmentBaseQuery->whereHas('agent', function($q) use ($agencyId) {
-                $q->where('agency_id', $agencyId);
-            });
-        }
-        
-        $totalAsignaciones = $assignmentBaseQuery->distinct('order_id')->count('order_id');
-        
-        // Si no hay asignaciones (ej. admin global sin asignaciones), usamos el conteo de órdenes activas como fallback
-        $totalOrders = $totalAsignaciones > 0 ? $totalAsignaciones : $ordersInPeriod->count();
+        // 🔥 CAMBIO: Usamos updated_at para capturar la actividad real del periodo
+    $assignmentBaseQuery = \App\Models\OrderAssignmentLog::whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+    if ($sellerId) {
+        $assignmentBaseQuery->where('agent_id', $sellerId);
+    }
+    if ($agencyId) {
+        $assignmentBaseQuery->whereHas('agent', function($q) use ($agencyId) {
+            $q->where('agency_id', $agencyId);
+        });
+    }
+    
+    $totalAsignaciones = $assignmentBaseQuery->distinct('order_id')->count('order_id');
+    
+    // Si no hay asignaciones (ej. admin global sin asignaciones), usamos el conteo de órdenes activas como fallback
+    $totalOrders = $totalAsignaciones > 0 ? $totalAsignaciones : 1; // Evitar división por cero
 
-        if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
+    if ($totalOrders === 0) return ['tracking' => [], 'novelties' => []];
 
-        $tracking = [];
+    $tracking = [];
     foreach ($states as $stateName) {
-        $statusId = Status::where('description', '=', $stateName)->value('id');
-        if (!$statusId) continue;
-
         if ($stateName === 'Asignado a vendedor') {
-            $assignmentQuery = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+            $assignmentQuery = \App\Models\OrderAssignmentLog::whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
             if ($sellerId) $assignmentQuery->where('agent_id', $sellerId);
             if ($agencyId) {
                 $assignmentQuery->whereHas('agent', fn($q) => $q->where('agency_id', $agencyId));
@@ -143,11 +141,12 @@ class BusinessMetricsController extends Controller
             if (!$statusId) {
                 $finalIds = collect([]);
             } else {
+                // 🔥 CAMBIO: Usamos updated_at para los logs de estado
                 $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
-                    ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+                    ->whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                 
                 if ($sellerId || $agencyId) {
-                    $orderIdsAsignados = \App\Models\OrderAssignmentLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+                    $orderIdsAsignados = \App\Models\OrderAssignmentLog::whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
                         ->when($sellerId, fn($q) => $q->where('agent_id', $sellerId))
                         ->when($agencyId, fn($q) => $q->whereHas('agent', fn($aq) => $aq->where('agency_id', $agencyId)))
                         ->pluck('order_id')
