@@ -56,10 +56,10 @@ class OrderTrackingComprehensiveController extends Controller
         // Calcular estadísticas antes de paginar
         $allLogs = (clone $query)->get();
         
-        // 1. Movimientos por Status
+        // 1. Movimientos por Status (Órdenes únicas por cada estado)
         $statsByStatus = $allLogs->groupBy('to_status_id')->map(fn($group) => [
             'status' => $group->first()->toStatus?->description ?? 'Desconocido',
-            'total' => $group->count()
+            'total' => $group->unique('order_id')->count()
         ])->values();
 
         // 2. Movimientos por vendedora + Tasa de entrega

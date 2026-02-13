@@ -919,11 +919,11 @@ class OrderController extends Controller
                 $q->whereDoesntHave('status', function($sq) {
                     $sq->where('description', 'Entregado');
                 })
-                // O si ES Entregado, que sea de hoy
+                // O si ES Entregado, mostrar todos (sin restricción de fecha)
                 ->orWhere(function($q2) {
                     $q2->whereHas('status', function($sq) {
                         $sq->where('description', 'Entregado');
-                    })->whereDate('updated_at', now());
+                    });
                 });
             });
         } elseif ($roleName === 'repartidor') {
@@ -2204,11 +2204,20 @@ class OrderController extends Controller
                 $query->whereDate('orders.updated_at', now());
             }
 
-            // 3. Agrupar y contar por descripcion del status
-            $counts = $query->join('statuses', 'orders.status_id', '=', 'statuses.id')
-                ->select(\DB::raw('statuses.description as status_name'), \DB::raw('count(*) as total'))
-                ->groupBy('statuses.description')
-                ->pluck('total', 'status_name');
+            // 3. Contar por cada status aplicando la lógica específica de cada uno (idéntica a index())
+            $statuses = Status::all();
+            $countsArray = [];
+
+            foreach ($statuses as $status) {
+                $statusQuery = (clone $query)->where('orders.status_id', $status->id);
+
+                if ($status->description === 'Programado para otro dia') {
+                    $statusQuery->whereDate('scheduled_for', '>', now()->toDateString())
+                                ->whereDate('updated_at', now()->toDateString());
+                }
+
+                $countsArray[$status->description] = $statusQuery->count();
+            }
 
             // 🔥 COUNT EXTRA: Con Comprobante
             // Debemos contar cuántas órdenes (del usuario o del día) tienen comprobante, sin importar el status.
@@ -2224,8 +2233,6 @@ class OrderController extends Controller
                  $q->whereNotNull('change_receipt')->where('change_receipt', '!=', '');
             })->count();
             
-            // Merge count
-            $countsArray = $counts->toArray();
             $countsArray['Con Comprobante'] = $receiptCount;
 
             return response()->json([
