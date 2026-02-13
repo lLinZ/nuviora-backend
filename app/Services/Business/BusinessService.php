@@ -42,6 +42,9 @@ class BusinessService
         Setting::set('business_last_open_dt', $now->toDateTimeString());
         Setting::set('round_robin_pointer', null);
 
+        // 3. 🔥 CLIENT REQUEST: Detectar órdenes programadas para hoy
+        $this->processScheduledOrders($shopId);
+
         $assigned = 0;
         if ($assignBacklog) {
             $from = Setting::get('business_last_close_dt', now()->yesterday()->endOfDay()->toDateTimeString());
@@ -156,7 +159,7 @@ class BusinessService
                 */
                 
                 // 3. Para "Programado para otro dia" y "Reprogramado": Solo quitar vendedor, mantener status
-                $statusesToKeep = ['Programado para otro dia', 'Reprogramado'];
+                $statusesToKeep = ['Programado para otro dia', 'Reprogramado', 'Reprogramado para hoy'];
                 $keepIds = Status::whereIn('description', $statusesToKeep)->pluck('id');
 
                 if ($keepIds->isNotEmpty()) {
@@ -169,6 +172,32 @@ class BusinessService
             }
         } catch (\Exception $e) {
             Log::error("Error resetting orders on shop close: " . $e->getMessage());
+        }
+    }
+
+    protected function processScheduledOrders(int $shopId): void
+    {
+        try {
+            $scheduledStatus = Status::where('description', 'Programado para otro dia')->first();
+            $reprogrammedTodayStatus = Status::firstOrCreate(['description' => 'Reprogramado para hoy']);
+            
+            if ($scheduledStatus && $reprogrammedTodayStatus) {
+                $today = now()->toDateString();
+                
+                $updatedCount = Order::where('shop_id', $shopId)
+                    ->where('status_id', $scheduledStatus->id)
+                    ->whereDate('scheduled_for', '<=', $today)
+                    ->update([
+                        'status_id' => $reprogrammedTodayStatus->id,
+                        'agent_id'  => null // Asegurar que no tienen agente para que el backlog los tome
+                    ]);
+                    
+                if ($updatedCount > 0) {
+                    Log::info("BusinessService: Updated {$updatedCount} orders from 'Programado para otro dia' to 'Reprogramado para hoy' for shop {$shopId}.");
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error("BusinessService: Error processing scheduled orders: " . $e->getMessage());
         }
     }
 }

@@ -964,12 +964,9 @@ class OrderController extends Controller
              $statusDesc = $request->status;
              
              if ($statusDesc === 'Reprogramado para hoy') {
-                 // 🔥 CLIENT REQUEST STRICT: Solo "Programado para otro dia" con fecha HOY.
-                 // "En la lista del kanban que se llama reprogramado para hoy... programado para otro dia pero que tengan fecha de reagendamiento para hoy"
                  $query->whereHas('status', function ($q) {
-                     $q->where('description', 'Programado para otro dia');
-                 })
-                 ->whereDate('scheduled_for', '<=', now()->toDateString());
+                     $q->where('description', 'Reprogramado para hoy');
+                 });
              } elseif ($statusDesc === 'Programado para otro dia') {
                  // 🔥 CLIENT FIX: Mostrar SOLO futuro, procesado HOY.
                  // "status programado para otro dia" + "fecha > hoy" + "updated_at = hoy" + "vendedor logueado"
