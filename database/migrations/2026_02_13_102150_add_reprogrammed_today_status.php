@@ -11,7 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        \DB::table('statuses')->updateOrInsert(['description' => 'Reprogramado para hoy'], ['color' => '#EAB308']);
+        \DB::table('statuses')->updateOrInsert(['description' => 'Reprogramado para hoy']);
     }
 
     /**
