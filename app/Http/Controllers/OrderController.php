@@ -340,8 +340,8 @@ class OrderController extends Controller
                 ], 422);
             }
 
-            // b) Validar Pagos (Si no es retorno/cambio)
-            if (!$order->is_return && !$order->is_exchange) {
+            // b) Validar Pagos (Si no es retorno/cambio y tiene un monto que cobrar)
+            if (!$order->is_return && !$order->is_exchange && $order->current_total_price > 0) {
                 // Verificar existencia de pagos
                 if ($order->payments()->count() === 0) {
                      return response()->json([
