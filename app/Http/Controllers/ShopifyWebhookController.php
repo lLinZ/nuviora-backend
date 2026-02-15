@@ -49,43 +49,47 @@ class ShopifyWebhookController extends Controller
         }
 
         // 1️⃣ Guardar/actualizar cliente
-        // ⚠️ Defensive check: Some POS orders or draft orders might not have customer data
-        if (!isset($orderData['customer']) || empty($orderData['customer']['id'])) {
-            \Log::warning("ShopifyWebhook: Order {$orderData['id']} has no customer data. Skipping client creation.");
-            // We can still process the order but without client? Or maybe create a "Guest" client?
-            // For now, let's create a placeholder or return if strictly required.
-            // But usually we need client_id for orders table foreign key.
-            // Let's create a generic "Walk-in Customer" if null.
-            $client = Client::firstOrCreate(
-                ['email' => 'guest@nuviora.com'],
-                ['first_name' => 'Guest', 'last_name' => 'Customer', 'customer_id' => 0]
-            );
-        } else {
-            // Safe access to default_address
-            $defaultAddress = $orderData['customer']['default_address'] ?? [];
+        // ⚠️ Mejorado: Si no viene el objeto 'customer' (POS, Guest checkout), intentamos sacar la info de shipping/billing
+        $customerData = $orderData['customer'] ?? null;
+        $shipping = $orderData['shipping_address'] ?? null;
+        $billing = $orderData['billing_address'] ?? null;
+        $fallbackSource = $shipping ?? $billing ?? [];
 
-            $client = Client::updateOrCreate(
-                ['customer_id' => $orderData['customer']['id']],
-                [
-                    'customer_number' => $orderData['customer']['id'],
-                    'first_name'      => $orderData['customer']['first_name'] ?? null,
-                    'last_name'       => $orderData['customer']['last_name'] ?? null,
-                    'phone'           => $orderData['customer']['phone'] ?? null,
-                    'email'           => $orderData['customer']['email'] ?? null,
-                    'country_name'    => $defaultAddress['country'] ?? null,
-                    'country_code'    => $defaultAddress['country_code'] ?? null,
-                    'province'        => $defaultAddress['province'] ?? null,
-                    // Guardamos province en el campo city para reutilizar la infraestructura existente
-                    'city'            => $defaultAddress['province'] ?? null,
-                    'address1'        => $defaultAddress['address1'] ?? null,
-                    'address2'        => $defaultAddress['address2'] ?? null,
-                ]
-            );
-        }
+        // Definir ID de cliente (Si no hay ID de Shopify, usamos el ID de la orden como temporal para este "Guest")
+        $shopifyCustomerId = $customerData['id'] ?? null;
+        $finalCustomerId = $shopifyCustomerId ?? $orderData['id'];
+
+        // Extraer email
+        $email = $customerData['email'] ?? $orderData['email'] ?? null;
+        
+        // Extraer nombres (Prioridad Cliente -> Shipping -> Billing)
+        $firstName = $customerData['first_name'] ?? $fallbackSource['first_name'] ?? 'Guest';
+        $lastName = $customerData['last_name'] ?? $fallbackSource['last_name'] ?? 'Customer';
+        $phone = $customerData['phone'] ?? $orderData['phone'] ?? $shipping['phone'] ?? $billing['phone'] ?? null;
+
+        // Extraer dirección para ciudad/provincia
+        $addressSource = $customerData['default_address'] ?? $shipping ?? $billing ?? [];
+
+        $client = Client::updateOrCreate(
+            ['customer_id' => $finalCustomerId],
+            [
+                'customer_number' => $finalCustomerId,
+                'first_name'      => $firstName,
+                'last_name'       => $lastName,
+                'phone'           => $phone,
+                'email'           => $email,
+                'country_name'    => $addressSource['country'] ?? null,
+                'country_code'    => $addressSource['country_code'] ?? null,
+                'province'        => $addressSource['province'] ?? null,
+                'city'            => $addressSource['province'] ?? null,
+                'address1'        => $addressSource['address1'] ?? null,
+                'address2'        => $addressSource['address2'] ?? null,
+            ]
+        );
 
         // 2️⃣ Guardar/actualizar orden
         // Buscar "ciudad" (que ahora es provincia) en la tabla cities
-        $provinceName = $orderData['customer']['default_address']['province'] ?? null;
+        $provinceName = $client->province;
         $cityId = null;
         $candidateAgencyId = null;
         if ($provinceName) {
@@ -98,7 +102,6 @@ class ShopifyWebhookController extends Controller
         }
 
         // Buscar provincia si existe
-        $provinceName = $orderData['customer']['default_address']['province'] ?? null;
         $provinceId = null;
         if ($provinceName) {
             $provinceMatch = \App\Models\Province::where('name', 'LIKE', trim($provinceName))->first();
