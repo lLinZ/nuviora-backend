@@ -47,9 +47,23 @@ class BusinessService
 
         $assigned = 0;
         if ($assignBacklog) {
-            $from = Setting::get('business_last_close_dt', now()->yesterday()->endOfDay()->toDateTimeString());
-            $to   = now();
-            $assigned = app(AssignOrderService::class)->assignBacklog(now()->parse($from), $to, $shopId);
+            // 🔥 FIX: Usar el inicio del día actual como límite inferior.
+            // El 'business_last_close_dt' puede ser de ayer, pero las órdenes que llegaron
+            // de madrugada tienen updated_at/created_at de HOY, por lo que no caían en el rango.
+            // Tomamos el mínimo entre el último cierre y el inicio del día para no perder ninguna.
+            $lastClose = Setting::get('business_last_close_dt');
+            $startOfDay = now()->startOfDay();
+            
+            if ($lastClose) {
+                $lastCloseDate = now()->parse($lastClose);
+                // Usar el más antiguo de los dos para capturar todo
+                $from = $lastCloseDate->lessThan($startOfDay) ? $lastCloseDate : $startOfDay;
+            } else {
+                $from = $startOfDay;
+            }
+            
+            $to = now();
+            $assigned = app(AssignOrderService::class)->assignBacklog($from, $to, $shopId);
         }
 
         return [

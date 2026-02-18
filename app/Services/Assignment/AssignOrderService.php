@@ -96,34 +96,41 @@ class AssignOrderService
 
 
     /**
-     * Asigna todas las órdenes sin agente en un rango de tiempo.
-     * Devuelve cantidad asignada.
+     * Asigna todas las órdenes sin agente en estados asignables.
+     * El parámetro $from/$to se mantiene por compatibilidad pero ya NO filtra por fecha:
+     * el bug original era que órdenes en "Nuevo" de días anteriores nunca eran encontradas
+     * porque su updated_at/created_at estaba fuera del rango.
      */
     public function assignBacklog(\DateTimeInterface $from, \DateTimeInterface $to, ?int $shopId = null): int
     {
         $date = $to->format('Y-m-d');
         
-        $sinStockStatus = Status::where('description', 'Sin Stock')->first();
-        $sinStockStatusId = $sinStockStatus?->id;
+        // Statuses que NUNCA deben ser asignados automáticamente
+        $excludedStatuses = [
+            'Sin Stock',
+            'Entregado',
+            'Cancelado',
+            'Rechazado',
+            'En ruta',
+            'Asignar a agencia',
+            'Por aprobar cambio de ubicacion',
+            'Por aprobar rechazo',
+        ];
+        $excludedIds = Status::whereIn('description', $excludedStatuses)->pluck('id');
 
+        // 🔥 FIX: Sin filtro de fecha. Buscamos TODAS las órdenes sin agente
+        // en estados asignables, independientemente de cuándo fueron creadas.
+        // Esto captura órdenes que llevan días en "Nuevo" sin asignar.
         $query = Order::query()
-            ->where(function($q) use ($sinStockStatusId) {
-                $q->whereNull('agent_id');
-                if ($sinStockStatusId) {
-                    $q->orWhere('status_id', $sinStockStatusId);
-                }
-            })
-            // Usamos updated_at para capturar las que se desasignaron ayer al cierre
-            // O created_at para las nuevas que entraron hoy
-            ->where(function($q) use ($from, $to) {
-                $q->whereBetween('updated_at', [$from, $to])
-                  ->orWhereBetween('created_at', [$from, $to]);
-            });
+            ->whereNull('agent_id')
+            ->whereNotIn('status_id', $excludedIds);
 
         // 🛡️ Filtro por Tienda (Aislamiento)
         if ($shopId) {
             $query->where('shop_id', $shopId);
         }
+
+        \Illuminate\Support\Facades\Log::info("AssignBacklog: Buscando órdenes sin agente para shop_id={$shopId}. Rango referencial: {$from->format('Y-m-d H:i')} → {$to->format('Y-m-d H:i')}");
 
         $ids = $query->get(['*']);
 
