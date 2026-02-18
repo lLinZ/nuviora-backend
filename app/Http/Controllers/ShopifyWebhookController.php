@@ -7,6 +7,9 @@ use App\Models\Client;
 use App\Models\Order;
 use App\Models\OrderProduct;
 use App\Models\Product;
+use App\Models\Status;
+use App\Models\User;
+use App\Notifications\OrderNoStockNotification;
 use App\Services\ShopifyService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -213,7 +216,56 @@ class ShopifyWebhookController extends Controller
             );
         }
 
-        // 4️⃣ Intento de Auto-Asignación (Round Robin)
+        // 4️⃣ Verificación de Stock ANTES de auto-asignar
+        // ⚠️ Si la orden no tiene stock, la movemos a "Sin Stock" y notificamos a los admins.
+        // NUNCA debe llegar a una vendedora una orden sin existencias.
+        $order->load('products'); // Asegurar que los productos recién guardados estén cargados
+        $stockCheck = $order->getStockDetails();
+
+        if ($stockCheck['has_warning']) {
+            // Mover a estado "Sin Stock"
+            $sinStockStatus = Status::where('description', 'Sin Stock')->first();
+            if ($sinStockStatus) {
+                $order->status_id = $sinStockStatus->id;
+                $order->save();
+            }
+
+            // Construir lista de productos sin stock para el mensaje
+            $outOfStockItems = collect($stockCheck['items'])
+                ->filter(fn($item) => !$item['has_stock'])
+                ->keys()
+                ->toArray();
+
+            $productNames = $order->products
+                ->whereIn('product_id', $outOfStockItems)
+                ->pluck('title')
+                ->join(', ');
+
+            $alertMessage = "🚨 Orden #{$order->name} recibida SIN STOCK. Productos sin existencias: {$productNames}. La orden está en espera de suministro.";
+
+            \Log::warning("Shopify webhook: Orden #{$order->name} sin stock. Productos: {$productNames}");
+
+            // Notificar a todos los Admins y Gerentes
+            try {
+                $admins = User::whereHas('role', function ($q) {
+                    $q->whereIn('description', ['Admin', 'Gerente']);
+                })->get();
+
+                foreach ($admins as $admin) {
+                    $admin->notify(new OrderNoStockNotification($order, $alertMessage));
+                }
+            } catch (\Exception $e) {
+                \Log::error("Error enviando notificación de Sin Stock para orden #{$order->name}: " . $e->getMessage());
+            }
+
+            // 📡 Broadcast para actualizar el Kanban en tiempo real
+            event(new \App\Events\OrderUpdated($order));
+
+            // ⛔ NO auto-asignar: la orden queda en "Sin Stock" hasta que haya inventario
+            return response()->json(['success' => true, 'warning' => 'no_stock'], 200);
+        }
+
+        // 5️⃣ Intento de Auto-Asignación (Round Robin) — Solo si hay stock
         try {
             $assignedAgent = $assignService->assignOne($order);
             if ($assignedAgent) {

@@ -38,6 +38,24 @@ class AssignOrderService
             return null; // fuera de jornada, no auto-asigna
         }
 
+        // 🛑 VALIDACIÓN DE STOCK: No asignar si no hay existencias.
+        // Segunda línea de defensa (la primera es el webhook).
+        // Cargamos los productos si no están cargados aún.
+        if (!$order->relationLoaded('products')) {
+            $order->load('products');
+        }
+        $stockCheck = $order->getStockDetails();
+        if ($stockCheck['has_warning']) {
+            $sinStockStatus = Status::where('description', 'Sin Stock')->first();
+            if ($sinStockStatus && $order->status_id !== $sinStockStatus->id) {
+                $order->status_id = $sinStockStatus->id;
+                $order->save();
+                event(new \App\Events\OrderUpdated($order));
+                \Illuminate\Support\Facades\Log::warning("AssignOrderService: Orden #{$order->name} sin stock. No se asigna a ninguna vendedora.");
+            }
+            return null; // ⛔ No asignar
+        }
+
         $agents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id);
         if ($agents->isEmpty()) return null;
 
@@ -75,6 +93,7 @@ class AssignOrderService
             return $ord->agent;
         });
     }
+
 
     /**
      * Asigna todas las órdenes sin agente en un rango de tiempo.
