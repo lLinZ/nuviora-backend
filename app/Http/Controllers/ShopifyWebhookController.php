@@ -151,10 +151,21 @@ class ShopifyWebhookController extends Controller
             }
 
             // Obtener imagen desde Shopify API
-            $imageUrl = $shopifyService->getProductImage(
-                $item['product_id'],
-                $item['variant_id'] ?? null
-            );
+            // ⚠️ Si falla (credenciales incorrectas, timeout, etc.), continuamos sin imagen
+            // para NO abortar el guardado del producto en la orden.
+            $imageUrl = null;
+            try {
+                $imageUrl = $shopifyService->getProductImage(
+                    $item['product_id'],
+                    $item['variant_id'] ?? null
+                );
+            } catch (\Exception $e) {
+                \Log::warning("Shopify webhook: No se pudo obtener imagen del producto. El producto se guardará sin imagen.", [
+                    'order_id'   => $orderData['id'],
+                    'product_id' => $item['product_id'],
+                    'error'      => $e->getMessage(),
+                ]);
+            }
 
             // Buscar producto por nombre (case-insensitive)
             $productTitle = trim($item['title']);
