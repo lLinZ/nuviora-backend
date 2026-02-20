@@ -21,7 +21,7 @@ class ShopifyWebhookController extends Controller
 {
     //
     //
-    public function handleOrderCreate(Request $request, ShopifyService $shopifyService, AssignOrderService $assignService, $shop_id = null)
+    public function handleOrderCreate(Request $request, AssignOrderService $assignService, $shop_id = null)
     {
         $orderData = $request->all();
         $shop = null;
@@ -154,10 +154,11 @@ class ShopifyWebhookController extends Controller
             }
 
             // Obtener imagen desde Shopify API
-            // ⚠️ Si falla (credenciales incorrectas, timeout, etc.), continuamos sin imagen
-            // para NO abortar el guardado del producto en la orden.
+            // ⚠️ Se instancia aquí manualmente para que un fallo de credenciales
+            // NUNCA mate el webhook completo. Solo se pierde la imagen.
             $imageUrl = null;
             try {
+                $shopifyService = new \App\Services\ShopifyService($shop);
                 $imageUrl = $shopifyService->getProductImage(
                     $item['product_id'],
                     $item['variant_id'] ?? null
@@ -174,16 +175,26 @@ class ShopifyWebhookController extends Controller
             $productTitle = trim($item['title']);
             $existingProduct = \App\Models\Product::whereRaw('LOWER(title) = ?', [strtolower($productTitle)])->first();
 
+            // Precio seguro: solo redondear si viene un valor positivo del webhook
+            $safePrice = (isset($item['price']) && $item['price'] > 0) ? round($item['price']) : null;
+
             if ($existingProduct) {
                 // Actualizar producto existente
-                $existingProduct->update([
+                $updateData = [
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
                     'name'       => $item['name'] ?? null,
-                    'price'      => round($item['price']),
                     'sku'        => $item['sku'] ?? null,
-                    'image'      => $imageUrl,
-                ]);
+                ];
+                // Solo actualizar precio si viene un valor válido (evita sobreescribir con 0)
+                if ($safePrice !== null) {
+                    $updateData['price'] = $safePrice;
+                }
+                // Solo actualizar imagen si se obtuvo una (evita sobreescribir con null)
+                if ($imageUrl !== null) {
+                    $updateData['image'] = $imageUrl;
+                }
+                $existingProduct->update($updateData);
                 $product = $existingProduct;
             } else {
                 // Crear nuevo producto
@@ -192,13 +203,14 @@ class ShopifyWebhookController extends Controller
                     'variant_id' => $item['variant_id'] ?? null,
                     'title'      => $productTitle,
                     'name'       => $item['name'] ?? null,
-                    'price'      => round($item['price']),
+                    'price'      => $safePrice ?? 0,
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
                 ]);
             }
 
             // Relación en OrderProducts (evita duplicados)
+            $orderProductPrice = $safePrice ?? ($existingProduct ? $existingProduct->price : 0);
             OrderProduct::updateOrCreate(
                 [
                     'order_id'   => $order->id,
@@ -208,9 +220,9 @@ class ShopifyWebhookController extends Controller
                     'product_number' => $product->product_id,
                     'title'          => $item['title'],
                     'name'           => $item['name'] ?? null,
-                    'price'          => round($item['price']),
+                    'price'          => $orderProductPrice,
                     'quantity'       => $item['quantity'],
-                    'image'          => $imageUrl,
+                    'image'          => $imageUrl ?? $product->image, // Preservar imagen existente si no se obtuvo nueva
                     'showable_name'  => $product->showable_name,
                 ]
             );
