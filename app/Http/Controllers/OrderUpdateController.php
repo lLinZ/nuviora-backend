@@ -13,7 +13,7 @@ class OrderUpdateController extends Controller
     // Obtener detalle de la orden con relaciones
     public function show(Order $order)
     {
-        $order->load(['client', 'status', 'agent', 'deliverer', 'updates.user', 'products.product']);
+        $order->load(['client', 'status', 'agent', 'deliverer', 'updates.user.role', 'products.product']);
 
         return response()->json([
             'status' => true,
@@ -49,7 +49,7 @@ class OrderUpdateController extends Controller
         return response()->json([
             'status'  => true,
             'message' => 'Actualización creada correctamente',
-            'update'  => $update->load('user'),
+            'update'  => $update->load(['user', 'user.role']),
         ]);
     }
 }

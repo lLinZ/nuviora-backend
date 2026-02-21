@@ -1,0 +1,37 @@
+﻿Total eventos de reasignaci├│n Lesdie -> Francisco: 541
+
+Distribuci├│n de las reasignaciones por fecha/hora:
+  - 2026-02-20 03:00: 169 ├│rdenes
+  - 2026-02-20 06:00: 16 ├│rdenes
+  - 2026-02-20 07:00: 42 ├│rdenes
+  - 2026-02-20 08:00: 7 ├│rdenes
+  - 2026-02-20 09:00: 22 ├│rdenes
+  - 2026-02-20 10:00: 90 ├│rdenes
+  - 2026-02-20 11:00: 88 ├│rdenes
+  - 2026-02-20 12:00: 96 ├│rdenes
+  - 2026-02-20 13:00: 11 ├│rdenes
+
+Ejemplo de flujo para la orden ID: 311
+    Log ID: 135 | User: Lesdie | At: 2026-02-12 03:30:05
+    Log ID: 431 | User: Lesdie | At: 2026-02-12 07:25:49
+    Log ID: 668 | User: Lesdie | At: 2026-02-12 10:04:05
+    Log ID: 858 | User: Lesdie | At: 2026-02-12 12:19:11
+    Log ID: 889 | User: Lesdie | At: 2026-02-12 12:37:20
+    Log ID: 937 | User: Lesdie | At: 2026-02-12 13:08:28
+    Log ID: 953 | User: Lesdie | At: 2026-02-12 13:25:41
+    Log ID: 964 | User: Lesdie | At: 2026-02-12 13:31:37
+    Log ID: 967 | User: Lesdie | At: 2026-02-12 13:35:05
+    Log ID: 1290 | User: Lesdie | At: 2026-02-13 06:42:16
+    Log ID: 1387 | User: Lesdie | At: 2026-02-13 07:39:47
+    Log ID: 1584 | User: Lesdie | At: 2026-02-13 12:31:41
+    Log ID: 1757 | User: Lesdie | At: 2026-02-14 03:23:29
+    Log ID: 1918 | User: Lesdie | At: 2026-02-14 06:16:41
+    Log ID: 2181 | User: Lesdie | At: 2026-02-14 12:13:08
+    Log ID: 3189 | User: Lesdie | At: 2026-02-18 03:30:06
+    Log ID: 4450 | User:  | At: 2026-02-18 11:19:21
+    Log ID: 5326 | User: Nohemi | At: 2026-02-19 04:36:04
+    Log ID: 5327 | User:  | At: 2026-02-19 04:36:04
+    Log ID: 6194 | User: Nohemi | At: 2026-02-19 12:29:33
+    Log ID: 6386 | User: Nohemi | At: 2026-02-19 13:28:26
+    Log ID: 6710 | User: Francisco | At: 2026-02-20 03:30:07
+    Log ID: 7829 | User: Francisco | At: 2026-02-20 11:28:27

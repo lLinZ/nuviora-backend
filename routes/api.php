@@ -322,6 +322,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('business-metrics', [\App\Http\Controllers\BusinessMetricsController::class, 'index']);
     Route::post('metrics/ad-spend', [\App\Http\Controllers\MetricsController::class, 'storeAdSpend']);
 
+
     /**---------------------
      * CITIES
      * ---------------------**/

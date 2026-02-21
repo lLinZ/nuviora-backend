@@ -1,0 +1,17 @@
+﻿Total ├║nicas que toc├│ Francisco: 82
+Propias (primero ├®l): 10
+Reasignadas (de otras): 72
+
+ESTADO ACTUAL de las 72 reasignadas:
+  - Cancelado: 15
+  - En ruta: 6
+  - Entregado: 3
+  - Novedad Solucionada: 1
+  - Nuevo: 25
+  - Programado para otro dia: 8
+  - Reprogramado para hoy: 14
+
+┬┐Qui├®n es el due├▒o ACTUAL de esas 72 reasignadas?
+  - SIN AGENTE: 48
+  - Francisco: 23
+  - Lesdie: 1

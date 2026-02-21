@@ -114,7 +114,7 @@ class OrderController extends Controller
             'status',
             'products.product',   // 👈 importante
             'products.upsellUser', // 👈 importante para mostrar quien hizo el upsell
-            'updates.user',
+            'updates.user.role',
             'cancellations.user',
             'deliveryReviews', // 👈 enviamos al front
             'locationReviews', // 👈 enviamos al front
@@ -862,7 +862,7 @@ class OrderController extends Controller
             'agent',
             'status',
             'products.product',   // 👈 importante
-            'updates.user',
+            'updates.user.role',
             'cancellations.user',
         ])->findOrFail($order->id);
         $location_url = $request->location;
