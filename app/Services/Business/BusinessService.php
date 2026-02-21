@@ -148,30 +148,47 @@ class BusinessService
                 'Programado para mas tarde',
                 // Novedades y "Programado para otro dia" se manejan por separado
             ];
-            
-            $statusIds = Status::whereIn('description', $statusesToReset)->pluck('id');
-            $nuevoId = Status::where('description', 'Nuevo')->value('id');
 
-            if ($statusIds->isNotEmpty() && $nuevoId) {
-                // 1. Resetear órdenes normales a "Nuevo"
-                Order::where('shop_id', $shopId)
+            $statusIds   = Status::whereIn('description', $statusesToReset)->pluck('id');
+            $nuevoId     = Status::where('description', 'Nuevo')->value('id');
+            $canceladoId = Status::where('description', 'Cancelado')->value('id');
+
+            if ($statusIds->isNotEmpty() && $nuevoId && $canceladoId) {
+
+                // 🔁 Separar las órdenes en dos grupos:
+                //    - reset_count > 0 → CANCELAR (ya pasaron un día completo sin ser atendidas)
+                //    - reset_count == 0 → resetear a Nuevo e incrementar contador
+                $ordersToProcess = Order::where('shop_id', $shopId)
                     ->whereIn('status_id', $statusIds)
-                    ->update([
-                        'agent_id' => null,
-                        'status_id' => $nuevoId
+                    ->get(['id', 'reset_count', 'status_id']);
+
+                $toCancel = $ordersToProcess->where('reset_count', '>', 0)->pluck('id');
+                $toReset  = $ordersToProcess->where('reset_count', 0)->pluck('id');
+
+                // ❌ CANCELAR: órdenes que ya fueron reseteadas una vez y nadie las atendió
+                if ($toCancel->isNotEmpty()) {
+                    Order::whereIn('id', $toCancel)->update([
+                        'agent_id'    => null,
+                        'status_id'   => $canceladoId,
+                        'cancelled_at'=> now(),
+                        'reset_count' => 0, // Limpiar contador al cancelar
                     ]);
+                    Log::info("Shop $shopId closed. Cancelled {$toCancel->count()} orders that were already reset once and never attended.");
+                }
+
+                // 🔄 RESETEAR A NUEVO: primera vez que se resetean, incrementar contador
+                if ($toReset->isNotEmpty()) {
+                    Order::whereIn('id', $toReset)->update([
+                        'agent_id'    => null,
+                        'status_id'   => $nuevoId,
+                        'reset_count' => 1, // Marcar que ya fueron reseteadas una vez
+                    ]);
+                    Log::info("Shop $shopId closed. Reset {$toReset->count()} orders to 'Nuevo' (first reset).");
+                }
 
                 // 2. 🔥 CLIENT REQUEST: Novedades y Novedad Solucionada NO deben desasignarse
                 // El cliente pidió explícitamente que no se quite el vendedor ni desaparezcan.
-                /*
-                $novedadStatus = Status::where('description', 'Novedades')->first();
-                if ($novedadStatus) {
-                    Order::where('shop_id', $shopId)
-                        ->where('status_id', $novedadStatus->id)
-                        ->update(['agent_id' => null]);
-                }
-                */
-                
+
                 // 3. Para "Programado para otro dia" y "Reprogramado": Solo quitar vendedor, mantener status
                 $statusesToKeep = ['Programado para otro dia', 'Reprogramado', 'Reprogramado para hoy'];
                 $keepIds = Status::whereIn('description', $statusesToKeep)->pluck('id');
@@ -181,8 +198,8 @@ class BusinessService
                         ->whereIn('status_id', $keepIds)
                         ->update(['agent_id' => null]);
                 }
-                
-                Log::info("Shop $shopId closed. Orders reset logic applied. Rescheduled orders kept their status.");
+
+                Log::info("Shop $shopId closed. Reset logic complete: {$toReset->count()} reset, {$toCancel->count()} cancelled.");
             }
         } catch (\Exception $e) {
             Log::error("Error resetting orders on shop close: " . $e->getMessage());

@@ -121,6 +121,8 @@ class Order extends Model
         'processed_at',
         'client_id',
         'status_id',
+        'previous_status_id', // 👈 Guarda el status anterior a "Sin Stock" para poder restaurarlo
+        'reset_count',         // 👈 Cuántas veces fue reseteada a Nuevo al cerrar tienda; si > 0 se cancela
         'cancelled_at',
         'scheduled_for',
         'agent_id',
@@ -245,6 +247,7 @@ class Order extends Model
     /**
      * Automatically syncs the order status based on current stock levels.
      * Moves to 'Sin Stock' and deassigns agent if stock is missing.
+     * Saves the previous status so it can be restored when stock is recovered.
      */
     public function syncStockStatus()
     {
@@ -262,28 +265,32 @@ class Order extends Model
         if ($stockDetails['has_warning']) {
             $sinStockStatus = Status::where('description', '=', 'Sin Stock')->first();
             if ($sinStockStatus && $this->status_id !== $sinStockStatus->id) {
-                $oldAgentId = $this->agent_id;
+                $oldAgentId  = $this->agent_id;
+                $oldStatusId = $this->status_id; // 💾 Guardar status anterior
+
+                $this->previous_status_id = $oldStatusId; // 💾 Persistir para restaurar después
                 $this->status_id = $sinStockStatus->id;
-                $this->agent_id = null;
+                $this->agent_id  = null;
                 $this->save();
 
                 // Log activity
                 OrderActivityLog::create([
                     'order_id' => $this->id,
-                    'user_id' => auth()->id() ?? 1,
-                    'action' => 'status_changed',
+                    'user_id'  => auth()->id() ?? 1,
+                    'action'   => 'status_changed',
                     'description' => "Orden movida automáticamente a 'Sin Stock' por falta de existencias (Detectado en sincronización).",
                     'properties' => [
-                        'old_agent_id' => $oldAgentId,
-                        'reason' => 'stock_shortage_sync'
+                        'old_status_id' => $oldStatusId,
+                        'old_agent_id'  => $oldAgentId,
+                        'reason'        => 'stock_shortage_sync'
                     ]
                 ]);
 
                 // Order Update note
                 OrderUpdate::create([
                     'order_id' => $this->id,
-                    'user_id' => auth()->id() ?? User::whereHas('role', function($q){ $q->where('description', 'Admin'); })->first()?->id ?? 1,
-                    'message' => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' debido a falta de producto en almacén."
+                    'user_id'  => auth()->id() ?? User::whereHas('role', function($q){ $q->where('description', 'Admin'); })->first()?->id ?? 1,
+                    'message'  => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' debido a falta de producto en almacén."
                 ]);
 
                 // 📡 Broadcast via WebSocket for real-time Kanban update

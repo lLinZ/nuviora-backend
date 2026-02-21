@@ -268,7 +268,7 @@ class InventoryService
         // Excluded statuses (don't de-assign if already finished)
         $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock', 'Novedades', 'Novedad Solucionada'];
 
-        // Find orders assigned to this agency
+        // Find orders assigned to this agency that are NOT in a terminal status
         $orders = \App\Models\Order::where('agency_id', '=', $warehouse->user_id)
             ->whereHas('status', function($q) use ($excludedStatuses) {
                 $q->whereNotIn('description', $excludedStatuses);
@@ -279,52 +279,44 @@ class InventoryService
             ->get();
 
         foreach ($orders as $order) {
-            // Check if THIS specific order now has insufficient stock for ANY of its products
-            // Using the helper we added to OrderController (or similar logic)
-            // But here we know at least $productId stock just changed.
-            
             $inv = Inventory::where('warehouse_id', '=', $warehouseId)
                 ->where('product_id', '=', $productId)
                 ->first();
             
             $available = $inv ? $inv->quantity : 0;
-            
-            // Required quantity for this product in this order
-            $required = $order->products()->where('product_id', $productId)->sum('quantity');
+            $required  = $order->products()->where('product_id', $productId)->sum('quantity');
 
             if ($available < $required) {
-                $oldAgentId = $order->agent_id;
-                
-                // Update order
+                $oldAgentId  = $order->agent_id;
+                $oldStatusId = $order->status_id; // 💾 Guardar status anterior
+
+                $order->previous_status_id = $oldStatusId; // 💾 Persistir para restaurar después
                 $order->status_id = $sinStockStatus->id;
-                $order->agent_id = null; // De-assign seller
+                $order->agent_id  = null;
                 $order->save();
 
-                // Log the activity
                 \App\Models\OrderActivityLog::create([
                     'order_id' => $order->id,
-                    'user_id' => auth()->id() ?? 1, // System or current user
-                    'action' => 'status_changed',
+                    'user_id'  => auth()->id() ?? 1,
+                    'action'   => 'status_changed',
                     'description' => "Orden movida a 'Sin Stock' y vendedora removida por falta de existencias en bodega.",
                     'properties' => [
-                        'old_status' => $order->getOriginal('status_id'),
-                        'new_status' => $sinStockStatus->id,
+                        'old_status'   => $oldStatusId,
+                        'new_status'   => $sinStockStatus->id,
                         'old_agent_id' => $oldAgentId,
                         'new_agent_id' => null,
-                        'reason' => 'stock_shortage',
-                        'product_id' => $productId,
+                        'reason'       => 'stock_shortage',
+                        'product_id'   => $productId,
                         'warehouse_id' => $warehouseId
                     ]
                 ]);
 
-                // Also add an update for the history timeline
                 \App\Models\OrderUpdate::create([
                     'order_id' => $order->id,
-                    'user_id' => auth()->id() ?? \App\Models\User::whereHas('role', function($q){ $q->where('description', '=', 'Admin'); })->first()?->id ?? 1,
-                    'message' => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' y se removió la vendedora asignada debido a falta de existencias de un producto en la bodega de la agencia."
+                    'user_id'  => auth()->id() ?? \App\Models\User::whereHas('role', function($q){ $q->where('description', '=', 'Admin'); })->first()?->id ?? 1,
+                    'message'  => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' y se removió la vendedora asignada debido a falta de existencias de un producto en la bodega de la agencia."
                 ]);
 
-                // 📡 Broadcast via WebSocket for real-time Kanban update
                 $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
                 event(new \App\Events\OrderUpdated($order));
             }
@@ -334,26 +326,33 @@ class InventoryService
     /**
      * Finds orders in "Sin Stock" that can now be fulfilled because stock was added
      * to a warehouse, and tries to re-assign them.
+     * 
+     * Priority for restored status:
+     *   1. previous_status_id saved when order was moved to Sin Stock  → restore it
+     *   2. If no previous_status_id, attempt auto-assign → "Asignado a Vendedor"
+     *   3. If outside business hours, fall back to "Nuevo"
      */
     private function checkAndHandleStockRecovery(int $productId, int $warehouseId)
     {
         $warehouse = Warehouse::find($warehouseId);
         if (!$warehouse) return;
 
-        // Find relevant statuses
         $sinStockStatus = \App\Models\Status::where('description', 'Sin Stock')->first();
         $assignedStatus = \App\Models\Status::where('description', 'Asignado a Vendedor')->first();
-        $nuevoStatus = \App\Models\Status::where('description', 'Nuevo')->first();
-        
+        $nuevoStatus    = \App\Models\Status::where('description', 'Nuevo')->first();
+
+        // 🛑 Terminal statuses — NEVER touch these orders automatically
+        $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado', 'En ruta', 'Asignar a agencia', 'Novedades', 'Novedad Solucionada'];
+        $terminalIds = \App\Models\Status::whereIn('description', $terminalStatuses)->pluck('id')->toArray();
+
         if (!$sinStockStatus) return;
 
-        // Find orders in "Sin Stock" that contain this product
         $query = \App\Models\Order::where('status_id', $sinStockStatus->id)
+            ->whereNotIn('status_id', $terminalIds) // 🛡️ Extra guard
             ->whereHas('products', function($q) use ($productId) {
                 $q->where('product_id', $productId);
             });
 
-        // If it's an agency warehouse, only check orders for that agency
         if ($warehouse->user_id) {
             $query->where('agency_id', $warehouse->user_id);
         }
@@ -364,46 +363,89 @@ class InventoryService
         $assignService = app(\App\Services\Assignment\AssignOrderService::class);
 
         foreach ($orders as $order) {
-            // Reload order with products to ensure fresh check
-            if ($order->hasStock()) {
-                // Try to assign it automatically
-                $agent = $assignService->assignOne($order);
-                
-                if ($agent && $assignedStatus) {
-                    // Update status to "Asignado a Vendedor" since assignOne only sets agent_id
-                    $order->status_id = $assignedStatus->id;
+            // 🛑 HARD GUARD: Refresh + verify still Sin Stock, not a terminal status
+            $order->refresh();
+            $currentStatusDesc = $order->status?->description;
+            if ($currentStatusDesc !== 'Sin Stock' || in_array($currentStatusDesc, $terminalStatuses)) {
+                \Log::info("InventoryService: Skipping order #{$order->name} — status is '{$currentStatusDesc}', not Sin Stock.");
+                continue;
+            }
+
+            if (!$order->hasStock()) continue; // Still missing stock, skip
+
+            // ⭐ CASO 1: Tiene status anterior guardado → restaurarlo directamente
+            if ($order->previous_status_id) {
+                $restoredStatus = \App\Models\Status::find($order->previous_status_id);
+
+                // Safety: don't restore to a terminal status (edge case)
+                if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
+                    $order->status_id          = $restoredStatus->id;
+                    $order->previous_status_id = null; // Limpiar después de restaurar
                     $order->save();
 
-                    // Log activity
                     \App\Models\OrderActivityLog::create([
-                        'order_id' => $order->id,
-                        'user_id' => auth()->id() ?? 1,
-                        'action' => 'status_changed',
-                        'description' => "Stock recuperado. Orden asignada automáticamente a {$agent->names}.",
-                        'properties' => [
+                        'order_id'    => $order->id,
+                        'user_id'     => auth()->id() ?? 1,
+                        'action'      => 'status_changed',
+                        'description' => "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.",
+                        'properties'  => [
                             'old_status' => $sinStockStatus->id,
-                            'new_status' => $assignedStatus->id,
-                            'agent_id' => $agent->id
+                            'new_status' => $restoredStatus->id,
+                            'restored'   => true,
                         ]
                     ]);
-                } else if ($nuevoStatus) {
-                    // Back to "Nuevo" if no agent could be assigned (outside business hours or no roster)
-                    $order->status_id = $nuevoStatus->id;
-                    $order->save();
 
-                    // Log activity
-                    \App\Models\OrderActivityLog::create([
+                    \App\Models\OrderUpdate::create([
                         'order_id' => $order->id,
-                        'user_id' => auth()->id() ?? 1,
-                        'action' => 'status_changed',
-                        'description' => "Stock recuperado. Orden movida a 'Nuevo' (Pendiente de asignación).",
-                        'properties' => [
-                            'old_status' => $sinStockStatus->id,
-                            'new_status' => $nuevoStatus->id
-                        ]
+                        'user_id'  => auth()->id() ?? 1,
+                        'message'  => "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
                     ]);
+
+                    $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+                    event(new \App\Events\OrderUpdated($order));
+                    continue;
                 }
             }
+
+            // ⭐ CASO 2: No hay status anterior guardado → intentar auto-asignar
+            $agent = $assignService->assignOne($order);
+
+            if ($agent && $assignedStatus) {
+                $order->status_id          = $assignedStatus->id;
+                $order->previous_status_id = null;
+                $order->save();
+
+                \App\Models\OrderActivityLog::create([
+                    'order_id'    => $order->id,
+                    'user_id'     => auth()->id() ?? 1,
+                    'action'      => 'status_changed',
+                    'description' => "Stock recuperado. Orden asignada automáticamente a {$agent->names}.",
+                    'properties'  => [
+                        'old_status' => $sinStockStatus->id,
+                        'new_status' => $assignedStatus->id,
+                        'agent_id'   => $agent->id,
+                    ]
+                ]);
+            } elseif ($nuevoStatus) {
+                // ⭐ CASO 3: Sin agente disponible → Nuevo
+                $order->status_id          = $nuevoStatus->id;
+                $order->previous_status_id = null;
+                $order->save();
+
+                \App\Models\OrderActivityLog::create([
+                    'order_id'    => $order->id,
+                    'user_id'     => auth()->id() ?? 1,
+                    'action'      => 'status_changed',
+                    'description' => "Stock recuperado. Orden movida a 'Nuevo' (sin agente disponible).",
+                    'properties'  => [
+                        'old_status' => $sinStockStatus->id,
+                        'new_status' => $nuevoStatus->id,
+                    ]
+                ]);
+            }
+
+            $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+            event(new \App\Events\OrderUpdated($order));
         }
     }
 }

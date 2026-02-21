@@ -1066,7 +1066,7 @@ class OrderController extends Controller
         $statusId = Status::where('description', '=', 'Asignado a vendedor')->first()?->id;
 
         $order->status_id = $statusId;
-        $order->agent_id = $agent->id;
+        $order->agent_id  = $agent->id;
         $order->save();
 
         // 📡 Broadcast for real-time updates
