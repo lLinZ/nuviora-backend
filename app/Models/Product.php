@@ -63,4 +63,23 @@ class Product extends Model
         'sku',
         'image',
     ];
+
+    protected $appends = ['stock', 'stock_available'];
+
+    /**
+     * Get stock from main warehouse (or central point) 
+     * Compatible with Inventory table structure
+     */
+    public function getStockAttribute(): int
+    {
+        return \App\Models\Inventory::where('product_id', $this->id)->sum('quantity');
+    }
+
+    /**
+     * Legacy support / alias
+     */
+    public function getStockAvailableAttribute(): int
+    {
+        return $this->stock;
+    }
 }

@@ -241,7 +241,31 @@ class Order extends Model
 
     public function hasStock()
     {
+        // Si ya se descontó el stock de esta orden, ya no necesitamos validar contra el inventario actual
+        if ($this->isStockDeducted()) {
+            return true;
+        }
+
         return !$this->getStockDetails()['has_warning'];
+    }
+
+    /**
+     * Verifica si ya se ha registrado un movimiento de salida de inventario para esta orden.
+     * Calcula la diferencia entre salidas e ingresos vinculados a la orden.
+     */
+    public function isStockDeducted()
+    {
+        $out = \App\Models\InventoryMovement::where('reference_type', 'Order')
+            ->where('reference_id', $this->id)
+            ->where('movement_type', 'out')
+            ->sum('quantity');
+
+        $in = \App\Models\InventoryMovement::where('reference_type', 'Order')
+            ->where('reference_id', $this->id)
+            ->where('movement_type', 'in')
+            ->sum('quantity');
+
+        return ($out - $in) > 0;
     }
 
     /**

@@ -267,22 +267,23 @@ class OrderController extends Controller
             $statusEntregado = Status::where('description', '=', 'Entregado')->first();
             $statusEnRuta = Status::where('description', '=', 'En ruta')->first();
             $statusCambioUbicacion = Status::where('description', '=', 'Cambio de ubicacion')->first();
+            $statusAsignarAgencia = Status::where('description', '=', 'Asignar a agencia')->first();
+            $statusCancelado = Status::where('description', '=', 'Cancelado')->first();
+            $statusRechazado = Status::where('description', '=', 'Rechazado')->first();
+            $statusNuevo = Status::where('description', '=', 'Nuevo')->first();
 
-            // 🛑 VALIDACIÓN DE STOCK ANTES DE PASAR A "Entregado" o "En ruta"
-            // Return/exchange orders also require stock validation since they deduct from inventory
-            if (($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) || 
+            // 🛑 VALIDACIÓN DE STOCK ANTES DE PASAR A "Asignar a agencia", "Entregado" o "En ruta"
+            if (($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id) ||
+                ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) || 
                 ($statusEnRuta && (int) $statusEnRuta->id === (int) $request->status_id)) {
                 
                 $isAdmin = Auth::user()->role?->description === 'Admin';
                 
-                // Si el status ya era "Entregado" o "En ruta", permitimos el cambio (ya fue validado o permitido antes)
-                $wasAlreadyTransitOrDelivered = ($statusEntregado && (int)$order->status_id === (int)$statusEntregado->id) ||
-                                               ($statusEnRuta && (int)$order->status_id === (int)$statusEnRuta->id);
-
-                if (!$isAdmin && !$wasAlreadyTransitOrDelivered && !$order->hasStock()) {
+                // hasStock() ahora devuelve true si el stock ya fue descontado previamente (isStockDeducted)
+                if (!$isAdmin && !$order->hasStock()) {
                     return response()->json([
                         'status' => false,
-                        'message' => 'No hay suficiente stock en el almacén de la agencia para procesar esta orden.',
+                        'message' => 'No hay suficiente stock en el almacén para procesar esta orden.',
                     ], 422);
                 }
             }
@@ -624,22 +625,102 @@ class OrderController extends Controller
             }
        }
 
-        // Descontar inventario solo si cambia a Entregado
+        // ----------------------------------------------------------------------
+        // 📦 GESTIÓN DE INVENTARIO (Deducción anticipada de Stock)
+        // ----------------------------------------------------------------------
+        // Según requerimiento: Descontar al pasar a "Asignar a agencia", "En ruta" o "Entregado"
+        $deductionStatuses = array_filter([
+            $statusAsignarAgencia?->id,
+            $statusEnRuta?->id,
+            $statusEntregado?->id
+        ]);
+
+        if (in_array((int)$order->status_id, $deductionStatuses)) {
+            // Solo descontamos si NO ha sido descontada antes para evitar doble descuento
+            if (!$order->isStockDeducted()) {
+                foreach ($order->products as $op) {
+                    // Descontamos de la BODEGA DE LA AGENCIA (o principal).
+                    $warehouseId = $order->agency?->warehouse?->id ?? Warehouse::where('is_main', '=', true)->first()?->id;
+                    if ($warehouseId) {
+                        $inv = \App\Models\Inventory::where('product_id', '=', $op->product_id)
+                            ->where('warehouse_id', '=', $warehouseId)
+                            ->first();
+
+                        if ($inv) {
+                            $inv->decrement('quantity', $op->quantity);
+                            
+                            $movementNote = ($order->is_return || $order->is_exchange) 
+                                ? "Devolución/Cambio - Reserva por asignación - Orden #{$order->name}" 
+                                : "Venta - Reserva por asignación - Orden #{$order->name}";
+                                
+                            InventoryMovement::create([
+                                'product_id' => $op->product_id,
+                                'from_warehouse_id' => $warehouseId,
+                                'to_warehouse_id' => null,
+                                'quantity' => $op->quantity,
+                                'movement_type' => 'out',
+                                'reference_type' => 'Order',
+                                'reference_id' => $order->id,
+                                'user_id' => Auth::id() ?? 1,
+                                'notes' => $movementNote,
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ----------------------------------------------------------------------
+        // ↩️ DEVOLUCIÓN DE STOCK (Si se quita de tránsito/entrega y ya se había descontado)
+        // ----------------------------------------------------------------------
+        $returnStatuses = array_filter([
+            $statusNuevo?->id,
+            $statusCancelado?->id,
+            $statusRechazado?->id
+        ]);
+
+        if (in_array((int)$order->status_id, $returnStatuses) && $order->isStockDeducted()) {
+            foreach ($order->products as $op) {
+                // Devolvemos a la BODEGA DE LA AGENCIA (o principal).
+                $warehouseId = $order->agency?->warehouse?->id ?? Warehouse::where('is_main', '=', true)->first()?->id;
+                if ($warehouseId) {
+                    $inv = \App\Models\Inventory::where('product_id', '=', $op->product_id)
+                        ->where('warehouse_id', '=', $warehouseId)
+                        ->first();
+
+                    if ($inv) {
+                        $inv->increment('quantity', $op->quantity);
+                        
+                        InventoryMovement::create([
+                            'product_id' => $op->product_id,
+                            'from_warehouse_id' => null,
+                            'to_warehouse_id' => $warehouseId,
+                            'quantity' => $op->quantity,
+                            'movement_type' => 'in',
+                            'reference_type' => 'Order',
+                            'reference_id' => $order->id,
+                            'user_id' => Auth::id() ?? 1,
+                            'notes' => "Devolución de stock por cambio de estado: {$order->status?->description} - Orden #{$order->name}",
+                        ]);
+                    }
+                }
+            }
+        }
+
+        // 🚛 LÓGICA FINAL DE ENTREGA (Solo para estado Entregado)
         if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
-            // Solo descontamos y generamos ganancias cuando CAMBIA a Entregado
+            // Solo generamos ganancias y procesamos tiempos cuando CAMBIA a Entregado (y no estaba entregado antes)
             if ($oldStatusId !== $order->status_id) {
                 $order->processed_at = now();
                 $order->save();
                 
-                // 🔄 Skip commissions for return/exchange orders - they don't generate revenue
+                // Comisiones
                 if (!$order->is_return && !$order->is_exchange) {
                     $commissionService->generateForDeliveredOrder($order);
                 }
 
+                // Tracking del repartidor (Esto es independiente de la deducción de bodega)
                 foreach ($order->products as $op) {
-                    $deducted = false;
-
-                    // 1. Intentar descontar del STOCK DEL REPARTIDOR (si tiene)
                     if ($order->deliverer_id) {
                         $todayStock = \App\Models\DelivererStock::where('deliverer_id', $order->deliverer_id)
                             ->where('date', now()->toDateString())
@@ -649,41 +730,6 @@ class OrderController extends Controller
                             $item = $todayStock->items()->where('product_id', $op->product_id)->first();
                             if ($item) {
                                 $item->increment('qty_delivered', $op->quantity);
-                                $deducted = true;
-                            }
-                        }
-                    }
-
-                    // 2. Si no se descontó del repartidor (porque no maneja stock diario o no tiene item),
-                    // descontamos de la BODEGA DE LA AGENCIA (o principal).
-                    if (!$deducted) {
-                        // Buscar inventario en la bodega de la agencia (si tiene) o principal
-                        $warehouseId = $order->agency?->warehouse?->id ?? Warehouse::where('is_main', '=', true)->first()?->id;
-                        if ($warehouseId) {
-                            $inv = \App\Models\Inventory::where('product_id', '=', $op->product_id)
-                                ->where('warehouse_id', '=', $warehouseId)
-                                ->first();
-
-                            if ($inv) {
-                                $inv->decrement('quantity', $op->quantity);
-                                
-                                // 📝 REGISTRAR MOVIMIENTO EN EL HISTORIAL
-                                // Use different note for return/exchange orders
-                                $movementNote = ($order->is_return || $order->is_exchange) 
-                                    ? "Devolución/Cambio entregado - Orden #{$order->name}" 
-                                    : "Venta efectuada - Orden #{$order->name}";
-                                    
-                                InventoryMovement::create([
-                                    'product_id' => $op->product_id,
-                                    'from_warehouse_id' => $warehouseId,
-                                    'to_warehouse_id' => null,
-                                    'quantity' => $op->quantity,
-                                    'movement_type' => 'out',
-                                    'reference_type' => 'Order',
-                                    'reference_id' => $order->id,
-                                    'user_id' => Auth::id() ?? 1,
-                                    'notes' => $movementNote,
-                                ]);
                             }
                         }
                     }
