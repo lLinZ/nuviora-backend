@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Models\StockMovement;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 
 class ProductController extends Controller
 {
@@ -42,6 +43,48 @@ class ProductController extends Controller
         ]);
     }
 
+    public function show($id)
+    {
+        $product = Product::with('gallery')->findOrFail($id);
+        return response()->json([
+            'status'  => true,
+            'product' => $product
+        ]);
+    }
+
+    public function uploadImage(Request $request, $id)
+    {
+        $product = Product::findOrFail($id);
+        $request->validate([
+            'image' => 'required|image|max:5120', // 5MB max
+        ]);
+
+        if ($request->hasFile('image')) {
+            $path = $request->file('image')->store('products/gallery', 'public');
+            $image = $product->gallery()->create([
+                'path' => Storage::url($path),
+            ]);
+            return response()->json(['status' => true, 'image' => $image, 'message' => 'Imagen subida']);
+        }
+
+        return response()->json(['status' => false, 'message' => 'No se subió ninguna imagen'], 400);
+    }
+
+    public function deleteImage($id, $imageId)
+    {
+        $product = Product::findOrFail($id);
+        $image = $product->gallery()->findOrFail($imageId);
+        
+        // Delete from storage if it starts with /storage/
+        if (str_starts_with($image->path, '/storage/')) {
+            $storagePath = str_replace('/storage/', '', $image->path);
+            Storage::disk('public')->delete($storagePath);
+        }
+
+        $image->delete();
+        return response()->json(['status' => true, 'message' => 'Imagen eliminada']);
+    }
+
     public function store(Request $request)
     {
         $data = $request->validate([
@@ -53,6 +96,7 @@ class ProductController extends Controller
             'cost_usd' => 'required|numeric',
             'image' => 'nullable|string',
             'stock' => 'nullable|integer',
+            'description' => 'nullable|string',
         ]);
 
         $p = Product::create($data);
@@ -67,10 +111,11 @@ class ProductController extends Controller
             'title' => 'nullable|string',
             'name' => 'nullable|string',
             'showable_name' => 'nullable|string',
-            'price' => 'required|numeric',
-            'cost_usd' => 'required|numeric',
+            'price' => 'sometimes|required|numeric',
+            'cost_usd' => 'sometimes|required|numeric',
             'image' => 'nullable|string',
             'stock' => 'nullable|integer',
+            'description' => 'nullable|string',
         ]);
         $p->fill($data);
         $p->save();

@@ -45,6 +45,7 @@ Route::post('test/register', [AuthController::class, 'testRegister']);
 
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/kanban-data', [OrderController::class, 'kanban']);
     /**---------------------
      * USERS
      * ---------------------**/
@@ -163,6 +164,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('orders/{order}/total', [OrderController::class, 'updateTotal']);
     // Productos
     Route::get('products', [ProductController::class, 'index']);
+    Route::get('products/{id}', [ProductController::class, 'show']);
+    Route::put('products/{id}', [ProductController::class, 'update']);
+    Route::post('products/{id}/gallery', [ProductController::class, 'uploadImage']);
+    Route::delete('products/{id}/gallery/{imageId}', [ProductController::class, 'deleteImage']);
 
     /**---------------------
      * CURRENCY

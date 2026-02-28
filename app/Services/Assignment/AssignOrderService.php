@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use App\Constants\OrderStatus;
 
 class AssignOrderService
 {
@@ -46,7 +47,7 @@ class AssignOrderService
         }
         $stockCheck = $order->getStockDetails();
         if ($stockCheck['has_warning']) {
-            $sinStockStatus = Status::where('description', 'Sin Stock')->first();
+            $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
             if ($sinStockStatus && $order->status_id !== $sinStockStatus->id) {
                 $order->status_id = $sinStockStatus->id;
                 $order->save();
@@ -66,7 +67,7 @@ class AssignOrderService
             $agentId = $this->strategy->pickAgentId($agents, $ord);
 
             // Buscar status "Asignado a Vendedor"
-            $statusAsignado = Status::where('description', 'Asignado a vendedor')->first();
+            $statusAsignado = Status::where('description', OrderStatus::ASIGNADO_VENDEDOR)->first();
             $statusId = $statusAsignado ? $statusAsignado->id : $ord->status_id;
 
             $ord->update(['agent_id' => $agentId, 'status_id' => $statusId]);
@@ -107,14 +108,14 @@ class AssignOrderService
         
         // Statuses que NUNCA deben ser asignados automáticamente
         $excludedStatuses = [
-            'Sin Stock',
-            'Entregado',
-            'Cancelado',
-            'Rechazado',
-            'En ruta',
-            'Asignar a agencia',
-            'Por aprobar cambio de ubicacion',
-            'Por aprobar rechazo',
+            OrderStatus::SIN_STOCK,
+            OrderStatus::ENTREGADO,
+            OrderStatus::CANCELADO,
+            OrderStatus::RECHAZADO,
+            OrderStatus::EN_RUTA,
+            OrderStatus::ASIGNAR_A_AGENCIA,
+            OrderStatus::POR_APROBAR_UBICACION,
+            OrderStatus::POR_APROBAR_RECHAZO,
         ];
         $excludedIds = Status::whereIn('description', $excludedStatuses)->pluck('id');
 
@@ -134,14 +135,15 @@ class AssignOrderService
 
         $ids = $query->get(['*']);
 
-        $assignmentStatus = Status::firstOrCreate(['description' => 'Asignado a Vendedor']);
+        $assignmentStatus = Status::firstOrCreate(['description' => OrderStatus::ASIGNADO_VENDEDOR]);
         $assignmentStatusId = (int)$assignmentStatus->id;
         
-        $novedadStatus = Status::where('description', 'Novedades')->first();
+        $novedadStatus = Status::where('description', OrderStatus::NOVEDADES)->first();
         $novedadStatusId = $novedadStatus ? (int)$novedadStatus->id : null;
 
         $count = 0;
         foreach ($ids as $ordModel) {
+            /** @var Order $ordModel */
             // 🛑 CHECK STOCK: Only assign if order HAS stock
             if (!$ordModel->hasStock()) {
                 continue;
@@ -186,7 +188,7 @@ class AssignOrderService
 
                 $currentStatusDesc = $ordModel->status ? $ordModel->status->description : '';
 
-                if ($currentStatusDesc === 'Programado para otro dia' || $currentStatusDesc === 'Reprogramado para hoy') {
+                if ($currentStatusDesc === OrderStatus::PROGRAMADO_OTRO_DIA || $currentStatusDesc === OrderStatus::REPROGRAMADO_HOY) {
                     // 🛡️ Filtro estricto: Solo asignar si es para hoy o pasado. 
                     $scheduledDate = $ordModel->scheduled_for ? $ordModel->scheduled_for->toDateString() : null;
                     $today = now()->toDateString();
@@ -195,8 +197,8 @@ class AssignOrderService
                         return; // Futuro: Permitir que permanezca en el backlog sin agente
                     }
 
-                    if ($currentStatusDesc === 'Programado para otro dia') {
-                        $reproToday = Status::where('description', 'Reprogramado para hoy')->first();
+                    if ($currentStatusDesc === OrderStatus::PROGRAMADO_OTRO_DIA) {
+                        $reproToday = Status::where('description', OrderStatus::REPROGRAMADO_HOY)->first();
                         $newStatusId = $reproToday ? $reproToday->id : $ordModel->status_id;
                     } else {
                         $newStatusId = $ordModel->status_id;

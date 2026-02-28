@@ -5,19 +5,12 @@ namespace App\Observers;
 use App\Models\Order;
 use App\Services\Assignment\AssignOrderService;
 use Illuminate\Support\Facades\Log;
+use App\Constants\OrderStatus;
 
 class OrderObserver
 {
     public function created(Order $order): void
     {
-        // Log status change (legacy)
-        \App\Models\OrderStatusLog::create([
-            'order_id' => $order->id,
-            'from_status_id' => null,
-            'to_status_id' => $order->status_id,
-            'user_id' => auth()->id(),
-        ]);
-
         // Log creation
         \App\Models\OrderActivityLog::create([
             'order_id' => $order->id,
@@ -67,14 +60,9 @@ class OrderObserver
             $fieldName = $fieldNames[$key] ?? $key;
 
             if ($key === 'status_id') {
-                // Log status change (legacy)
-                \App\Models\OrderStatusLog::create([
-                    'order_id' => $order->id,
-                    'from_status_id' => $oldValue,
-                    'to_status_id' => $newValue,
-                    'user_id' => auth()->id(),
-                ]);
-                // We don't add to $descriptions here because OrderStatusLogObserver will handle the activity log entry
+                $oldStatusDesc = \App\Models\Status::find($oldValue)?->description ?? 'N/A';
+                $newStatusDesc = \App\Models\Status::find($newValue)?->description ?? 'N/A';
+                $descriptions[] = "Estado cambió de '{$oldStatusDesc}' a '{$newStatusDesc}'";
             } elseif ($key === 'agent_id') {
                 $oldVal = \App\Models\User::find($oldValue)?->names ?? 'Nadie';
                 $newVal = \App\Models\User::find($newValue)?->names ?? 'Nadie';

@@ -21,6 +21,7 @@ use App\Notifications\OrderAssignedNotification;
 use App\Notifications\OrderNoveltyNotification;
 use App\Notifications\OrderNoveltyResolvedNotification;
 use App\Notifications\OrderScheduledNotification;
+use App\Constants\OrderStatus;
 
 class OrderController extends Controller
 {
@@ -157,6 +158,7 @@ class OrderController extends Controller
                 'upsell_user_name' => $op->upsellUser?->names ?? null,
                 'stock_available' => $productStock['available'],
                 'has_stock' => $productStock['has_stock'],
+                'description'   => $op->description ?? ($op->product->description ?? null),
             ];
         });
 
@@ -226,7 +228,7 @@ class OrderController extends Controller
                  return response()->json(['status' => false, 'message' => 'La orden ya fue entregada. Solo un Admin puede modificarla.'], 403);
             }
 
-            // Resolver el objeto Status
+            // 2. Resolver el objeto Status
             if ($request->has('status')) {
                 $targetStatus = Status::where('description', $request->status)->firstOrFail();
             } else {
@@ -245,7 +247,7 @@ class OrderController extends Controller
                 $transitions = config("order_flow.{$userRole}.transitions");
 
                 if ($transitions) {
-                    $currentStatusRaw = $order->status?->description ?? 'Nuevo';
+                    $currentStatusRaw = $order->status?->description ?? OrderStatus::NUEVO;
                     
                     if ($currentStatusRaw && $newStatusRaw) {
                         $allowedNext = $transitions[$currentStatusRaw] ?? [];
@@ -263,14 +265,14 @@ class OrderController extends Controller
             // Actualizar request con el ID resuelto para compatibilidad con código legacy abajo
             $request->merge(['status_id' => $newStatusId]);
 
-            // Buscamos status "Entregado" y "En ruta" para validación de stock
-            $statusEntregado = Status::where('description', '=', 'Entregado')->first();
-            $statusEnRuta = Status::where('description', '=', 'En ruta')->first();
-            $statusCambioUbicacion = Status::where('description', '=', 'Cambio de ubicacion')->first();
-            $statusAsignarAgencia = Status::where('description', '=', 'Asignar a agencia')->first();
-            $statusCancelado = Status::where('description', '=', 'Cancelado')->first();
-            $statusRechazado = Status::where('description', '=', 'Rechazado')->first();
-            $statusNuevo = Status::where('description', '=', 'Nuevo')->first();
+            // Cargar statuses críticos desde constantes
+            $statusEntregado = Status::where('description', '=', OrderStatus::ENTREGADO)->first();
+            $statusEnRuta = Status::where('description', '=', OrderStatus::EN_RUTA)->first();
+            $statusCambioUbicacion = Status::where('description', '=', OrderStatus::CAMBIO_UBICACION)->first();
+            $statusAsignarAgencia = Status::where('description', '=', OrderStatus::ASIGNAR_A_AGENCIA)->first();
+            $statusCancelado = Status::where('description', '=', OrderStatus::CANCELADO)->first();
+            $statusRechazado = Status::where('description', '=', OrderStatus::RECHAZADO)->first();
+            $statusNuevo = Status::where('description', '=', OrderStatus::NUEVO)->first();
 
             // 🛑 VALIDACIÓN DE STOCK ANTES DE PASAR A "Asignar a agencia", "Entregado" o "En ruta"
             if (($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id) ||
@@ -298,9 +300,8 @@ class OrderController extends Controller
                 ], 422);
             }
 
-            // Validar efectivo/vueltos solo si el método de pago es EFECTIVO
             $cashMethods = ['DOLARES_EFECTIVO', 'BOLIVARES_EFECTIVO', 'EUROS_EFECTIVO'];
-            if ($order->payment_method === 'EFECTIVO' || $order->payments()->whereIn('method', $cashMethods)->exists()) {
+            if (in_array($order->payment_method, ['EFECTIVO', 'Dolares']) || $order->payments()->whereIn('method', $cashMethods)->exists()) {
                 $request->validate([
                     'cash_received' => 'required|numeric|min:0',
                     'change_covered_by' => 'required|in:agency,company,partial',
@@ -325,12 +326,11 @@ class OrderController extends Controller
                     $order->change_amount_agency = $request->change_amount_agency;
                 }
             }
-        // ... (existing logic for Delivered)
         }
 
         // 1.5. 🛑 VALIDACIÓN PARA NOVEDAD SOLUCIONADA 🛑
         // Debe tener ubicación y pagos completos antes de marcarse como solucionada
-        $statusNovedadSolucionada = Status::where('description', '=', 'Novedad Solucionada')->first();
+        $statusNovedadSolucionada = Status::where('description', '=', OrderStatus::NOVEDAD_SOLUCIONADA)->first();
         if ($statusNovedadSolucionada && (int) $statusNovedadSolucionada->id === (int) $request->status_id) {
             
             // a) Validar Ubicación
@@ -387,7 +387,7 @@ class OrderController extends Controller
                     ], 422);
                 }
 
-                $statusPorAprobar = Status::where('description', '=', 'Por aprobar cambio de ubicacion')->first();
+                $statusPorAprobar = Status::where('description', '=', OrderStatus::POR_APROBAR_UBICACION)->first();
                 if (!$statusPorAprobar) {
                     // Fallback si por alguna razón no existe el status
                     return response()->json(['status' => false, 'message' => 'Error: Status de aprobación no encontrado'], 500);
@@ -427,7 +427,7 @@ class OrderController extends Controller
                     ], 422);
                 }
 
-                $statusPorAprobar = Status::where('description', '=', 'Por aprobar rechazo')->first();
+                $statusPorAprobar = Status::where('description', '=', OrderStatus::POR_APROBAR_RECHAZO)->first();
                 if (!$statusPorAprobar) {
                     return response()->json(['status' => false, 'message' => 'Error: Status de aprobación no encontrado'], 500);
                 }
@@ -452,7 +452,6 @@ class OrderController extends Controller
         }
 
         // 4. 🛑 INTERCEPCIÓN PARA ASIGNAR A AGENCIA (AUTO) 🛑
-        $statusAsignarAgencia = Status::where('description', '=', 'Asignar a agencia')->first();
         if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id) {
             // Si ya tiene agencia, no hacemos nada extra, solo seguimos
             if (!$order->agency_id) {
@@ -491,16 +490,16 @@ class OrderController extends Controller
         // La desasignación ocurre en el comando de cierre de tienda
 
         // 🔔 NOTIFICACIONES Y TIMER
-        $statusNovedad = Status::where('description', '=', 'Novedades')->first();
-        $statusNovedadSoluciodada = Status::where('description', '=', 'Novedad Solucionada')->first();
-        $statusProgramadoMasTarde = Status::where('description', '=', 'Programado para mas tarde')->first();
-        $statusAsignarAgencia = Status::where('description', '=', 'Asignar a agencia')->first();
+        $statusNovedad = Status::where('description', '=', OrderStatus::NOVEDADES)->first();
+        $statusNovedadSoluciodada = Status::where('description', '=', OrderStatus::NOVEDAD_SOLUCIONADA)->first();
+        $statusProgramadoMasTarde = Status::where('description', '=', OrderStatus::PROGRAMADO_MAS_TARDE)->first();
 
         // Si cambia a Novedades
         if ($statusNovedad && (int)$statusNovedad->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusNovedad->id) {
             // Notificar a Admins/Gerentes
             $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
             foreach ($admins as $admin) {
+                /** @var \App\Models\User $admin */
                 $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden #{$order->name}"));
             }
             
@@ -531,6 +530,7 @@ class OrderController extends Controller
             // Notificar a Admins/Gerentes
             $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
             foreach ($admins as $admin) {
+                /** @var \App\Models\User $admin */
                 $admin->notify(new OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
             }
         }
@@ -628,12 +628,8 @@ class OrderController extends Controller
         // ----------------------------------------------------------------------
         // 📦 GESTIÓN DE INVENTARIO (Deducción anticipada de Stock)
         // ----------------------------------------------------------------------
-        // Según requerimiento: Descontar al pasar a "Asignar a agencia", "En ruta" o "Entregado"
-        $deductionStatuses = array_filter([
-            $statusAsignarAgencia?->id,
-            $statusEnRuta?->id,
-            $statusEntregado?->id
-        ]);
+        // Según requerimiento: Descontar al pasar a los estados definidos en OrderStatus
+        $deductionStatuses = Status::whereIn('description', OrderStatus::DEDUCTION_STATUSES)->pluck('id')->toArray();
 
         if (in_array((int)$order->status_id, $deductionStatuses)) {
             // Solo descontamos si NO ha sido descontada antes para evitar doble descuento
@@ -673,11 +669,7 @@ class OrderController extends Controller
         // ----------------------------------------------------------------------
         // ↩️ DEVOLUCIÓN DE STOCK (Si se quita de tránsito/entrega y ya se había descontado)
         // ----------------------------------------------------------------------
-        $returnStatuses = array_filter([
-            $statusNuevo?->id,
-            $statusCancelado?->id,
-            $statusRechazado?->id
-        ]);
+        $returnStatuses = Status::whereIn('description', OrderStatus::RETURN_STATUSES)->pluck('id')->toArray();
 
         if (in_array((int)$order->status_id, $returnStatuses) && $order->isStockDeducted()) {
             foreach ($order->products as $op) {
@@ -770,6 +762,7 @@ class OrderController extends Controller
                     'price'        => $op->price,
                     'quantity'     => $op->quantity,
                     'image'        => $op->image,
+                    'description'  => $op->description ?? ($op->product->description ?? null),
                 ];
             }),
         ]);
@@ -834,11 +827,27 @@ class OrderController extends Controller
 
         // 3️⃣ Procesar productos de la orden
         foreach ($orderData['line_items'] as $item) {
-            // Obtener imagen desde Shopify API
-            $imageUrl = $shopifyService->getProductImage(
-                $item['product_id'],
-                $item['variant_id'] ?? null
-            );
+            // Obtener datos del producto desde Shopify para imagen y descripción
+            $shopifyProduct = $shopifyService->getProductById($item['product_id']);
+            $imageUrl = null;
+            $description = null;
+
+            if ($shopifyProduct) {
+                // Limpiar HTML de la descripción para visualización limpia
+                $description = $shopifyProduct['body_html'] ? trim(strip_tags($shopifyProduct['body_html'])) : null;
+                
+                // Obtener imagen (preferencia por variante)
+                if (!empty($item['variant_id'])) {
+                    $variant = collect($shopifyProduct['variants'])->firstWhere('id', $item['variant_id']);
+                    if ($variant && !empty($variant['image_id'])) {
+                        $image = collect($shopifyProduct['images'])->firstWhere('id', $variant['image_id']);
+                        $imageUrl = $image['src'] ?? null;
+                    }
+                }
+                if (!$imageUrl) {
+                    $imageUrl = $shopifyProduct['images'][0]['src'] ?? ($shopifyProduct['image']['src'] ?? null);
+                }
+            }
 
             // Buscar producto por nombre (case-insensitive)
             $productTitle = trim($item['title']);
@@ -847,24 +856,26 @@ class OrderController extends Controller
             if ($existingProduct) {
                 // Actualizar producto existente
                 $existingProduct->update([
-                    'product_id' => $item['product_id'],
-                    'variant_id' => $item['variant_id'] ?? null,
-                    'name'       => $item['name'] ?? null,
-                    'price'      => round($item['price']),
-                    'sku'        => $item['sku'] ?? null,
-                    'image'      => $imageUrl,
+                    'product_id'  => $item['product_id'],
+                    'variant_id'  => $item['variant_id'] ?? null,
+                    'name'        => $item['name'] ?? null,
+                    'price'       => round($item['price']),
+                    'sku'         => $item['sku'] ?? null,
+                    'image'       => $imageUrl,
+                    'description' => $description,
                 ]);
                 $product = $existingProduct;
             } else {
                 // Crear nuevo producto
                 $product = \App\Models\Product::create([
-                    'product_id' => $item['product_id'],
-                    'variant_id' => $item['variant_id'] ?? null,
-                    'title'      => $productTitle,
-                    'name'       => $item['name'] ?? null,
-                    'price'      => round($item['price']),
-                    'sku'        => $item['sku'] ?? null,
-                    'image'      => $imageUrl,
+                    'product_id'  => $item['product_id'],
+                    'variant_id'  => $item['variant_id'] ?? null,
+                    'title'       => $productTitle,
+                    'name'        => $item['name'] ?? null,
+                    'price'       => round($item['price']),
+                    'sku'         => $item['sku'] ?? null,
+                    'image'       => $imageUrl,
+                    'description' => $description,
                 ]);
             }
 
@@ -880,6 +891,7 @@ class OrderController extends Controller
                     'title'          => $item['title'],
                     'name'           => $item['name'] ?? null,
                     'price'          => round($item['price']),
+                    'description'    => $description,
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl,
                 ]
@@ -1088,6 +1100,65 @@ class OrderController extends Controller
             ],
         ]);
     }
+
+    /**
+     * Grouped Index for Kanban view (API STORM REDUCTION)
+     */
+    public function kanban(Request $request)
+    {
+        $user = Auth::user();
+        
+        // Base query with same filters as index
+        $baseQuery = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])
+            ->withCount('updates')
+            ->orderBy('updated_at', 'desc')
+            ->orderBy('id', 'desc');
+
+        // Apply same restrictions and filters as index...
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        if ($roleName === 'vendedor') {
+            $baseQuery->where('agent_id', $user->id);
+        } elseif ($roleName === 'repartidor') {
+            $baseQuery->where('deliverer_id', $user->id)->whereDate('updated_at', now());
+        } elseif ($roleName === 'agencia') {
+            $baseQuery->where('agency_id', $user->id)
+                      ->whereDoesntHave('status', function($sq) { $sq->where('description', 'Cancelado'); });
+        }
+
+        if ($request->filled('agent_id')) $baseQuery->where('agent_id', $request->agent_id);
+        if ($request->filled('agency_id')) $baseQuery->where('agency_id', $request->agency_id);
+        if ($request->filled('city_id')) $baseQuery->where('city_id', $request->city_id);
+        if ($request->filled('date_from')) $baseQuery->whereDate('updated_at', '>=', $request->date_from);
+        if ($request->filled('date_to')) $baseQuery->whereDate('updated_at', '<=', $request->date_to);
+        if ($request->filled('search')) {
+            $term = $request->search;
+            $baseQuery->where(function($q) use ($term) {
+                $q->where('id', 'like', "%{$term}%")
+                  ->orWhere('name', 'like', "%{$term}%")
+                  ->orWhereHas('client', function($cq) use ($term) { $cq->where('phone', 'like', "%{$term}%"); });
+            });
+        }
+
+        $allOrders = $baseQuery->take(500)->get();
+        $binanceRate = \App\Models\Setting::where('key', '=', 'rate_binance_usd')->first()?->value ?? 0;
+        $bcvRate = \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0;
+
+        $grouped = [];
+        foreach ($allOrders as $order) {
+            /** @var Order $order */
+            $statusName = $order->status->description;
+            if (!isset($grouped[$statusName])) { $grouped[$statusName] = ['items' => [], 'total' => 0]; }
+            if (count($grouped[$statusName]['items']) < 15) {
+                $order->syncStockStatus(); $check = $order->getStockDetails(); $orderArray = $order->toArray();
+                if ($user->role?->description === 'Agencia') { $orderArray['agent'] = null; $orderArray['agent_id'] = null; }
+                $orderArray['has_stock_warning'] = $check['has_warning'];
+                $orderArray['binance_rate'] = $binanceRate; $orderArray['bcv_rate'] = $bcvRate;
+                $grouped[$statusName]['items'][] = $orderArray;
+            }
+            $grouped[$statusName]['total']++;
+        }
+        return response()->json(['status' => true, 'data' => $grouped]);
+    }
     public function assignAgent(Request $request, Order $order)
     {
         $request->validate([
@@ -1240,6 +1311,7 @@ class OrderController extends Controller
             'product_number' => $product->product_id,
             'title' => $product->title,
             'name' => $product->name,
+            'description' => $product->description,
             'showable_name' => $product->showable_name,
             'price' => round($productPrice),
             'quantity' => $request->quantity,
@@ -1606,6 +1678,7 @@ class OrderController extends Controller
                 })->get();
                 
                 foreach ($admins as $admin) {
+                    /** @var \App\Models\User $admin */
                      // Don't notify if the admin created it themselves (optional preference, but usually good to notify other admins)
                      if ($admin->id !== $currentUser->id) { 
                         $admin->notify(new OrderAssignedNotification($order, "Nueva orden manual creada: #{$order->name} por {$currentUser->names}"));

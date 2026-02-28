@@ -26,6 +26,11 @@ class Product extends Model
         return $this->hasMany(OrderProduct::class);
     }
 
+    public function gallery()
+    {
+        return $this->hasMany(ProductImage::class);
+    }
+
     public function stockMovements()
     {
         return $this->hasMany(StockMovement::class);
@@ -62,6 +67,7 @@ class Product extends Model
         'cost_usd',
         'sku',
         'image',
+        'description',
     ];
 
     protected $appends = ['stock', 'stock_available'];
