@@ -1126,16 +1126,22 @@ class OrderController extends Controller
         }
 
         if ($request->filled('agent_id')) $baseQuery->where('agent_id', $request->agent_id);
+        if ($request->filled('seller_id')) $baseQuery->where('agent_id', $request->seller_id);
         if ($request->filled('agency_id')) $baseQuery->where('agency_id', $request->agency_id);
         if ($request->filled('city_id')) $baseQuery->where('city_id', $request->city_id);
         if ($request->filled('date_from')) $baseQuery->whereDate('updated_at', '>=', $request->date_from);
         if ($request->filled('date_to')) $baseQuery->whereDate('updated_at', '<=', $request->date_to);
+        
         if ($request->filled('search')) {
             $term = $request->search;
             $baseQuery->where(function($q) use ($term) {
                 $q->where('id', 'like', "%{$term}%")
                   ->orWhere('name', 'like', "%{$term}%")
-                  ->orWhereHas('client', function($cq) use ($term) { $cq->where('phone', 'like', "%{$term}%"); });
+                  ->orWhereHas('client', function($cq) use ($term) { 
+                      $cq->where('first_name', 'like', "%{$term}%")
+                         ->orWhere('last_name', 'like', "%{$term}%")
+                         ->orWhere('phone', 'like', "%{$term}%"); 
+                  });
             });
         }
 
