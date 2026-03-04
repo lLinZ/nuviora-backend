@@ -145,13 +145,13 @@ class Order extends Model
         'change_amount_agency',
         'change_method_company',
         'change_method_agency',
+        'novedad_type',
+        'novedad_description',
         'novedad_resolution',
         'change_rate',
         'is_return',
         'is_exchange',
         'parent_order_id',
-        // 'change_payment_details', // Moved to extra table
-        // 'change_receipt', // Moved to extra table
     ];
 
     /**

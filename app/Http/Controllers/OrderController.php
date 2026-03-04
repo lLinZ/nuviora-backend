@@ -1687,10 +1687,13 @@ class OrderController extends Controller
             } catch (\Exception $e) {}
 
             \DB::commit();
+            
+            // 📡 BROADCAST EVENT: New Order created
+            event(new \App\Events\OrderUpdated($order));
 
             return response()->json([
                 'status' => true, 
-                'order' => $order->fresh(['client', 'status', 'products', 'agent']),
+                'order' => $order->fresh(['client', 'status', 'products', 'agent', 'agency', 'deliverer', 'shop']),
                 'message' => 'Orden creada exitosamente'
             ]);
 
