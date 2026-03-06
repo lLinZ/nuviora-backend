@@ -59,5 +59,16 @@ class OrderStatus
         self::NUEVO,
         self::CANCELADO,
         self::RECHAZADO,
+        self::ASIGNADO_VENDEDOR,
+        self::LLAMADO_1,
+        self::LLAMADO_2,
+        self::LLAMADO_3,
+        self::ESPERANDO_UBICACION,
+        self::PROGRAMADO_MAS_TARDE,
+        self::PROGRAMADO_OTRO_DIA,
+        self::REPROGRAMADO_HOY,
+        self::CAMBIO_UBICACION,
+        self::POR_APROBAR_UBICACION,
+        self::POR_APROBAR_RECHAZO,
     ];
 }

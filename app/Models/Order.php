@@ -62,6 +62,11 @@ class Order extends Model
     {
         return $this->hasMany(OrderCancellation::class);
     }
+
+    public function whatsappMessages()
+    {
+        return $this->hasMany(WhatsappMessage::class);
+    }
     public function deliverer()
     {
         return $this->belongsTo(\App\Models\User::class, 'deliverer_id');
@@ -275,7 +280,16 @@ class Order extends Model
      */
     public function syncStockStatus()
     {
-        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock', 'Novedades', 'Novedad Solucionada'];
+        $excludedStatuses = [
+            'Entregado', 
+            'En ruta', 
+            'Cancelado', 
+            'Rechazado', 
+            'Sin Stock', 
+            'Novedades', 
+            'Novedad Solucionada',
+            'Asignar a agencia'
+        ];
         
         // Use relation if loaded, otherwise fresh query
         $statusDesc = $this->status ? $this->status->description : Status::find($this->status_id)?->description;
@@ -284,9 +298,10 @@ class Order extends Model
             return false;
         }
 
-        $stockDetails = $this->getStockDetails();
-        
-        if ($stockDetails['has_warning']) {
+        // Ya NO usamos getStockDetails() directamente.
+        // hasStock() incluye la validación de isStockDeducted() para no quitarle
+        // el estatus a las órdenes que ya hicieron su reserva de bodega.
+        if (!$this->hasStock()) {
             $sinStockStatus = Status::where('description', '=', 'Sin Stock')->first();
             if ($sinStockStatus && $this->status_id !== $sinStockStatus->id) {
                 $oldAgentId  = $this->agent_id;

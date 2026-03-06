@@ -1010,13 +1010,26 @@ class OrderController extends Controller
             $query->where('agency_id', '=', $request->agency_id);
         }
         if ($request->filled('city_id')) {
-            $query->where('city_id', '=', $request->city_id);
+            $cityId = $request->city_id;
+            $cityName = \App\Models\City::find($cityId)?->name;
+            
+            $query->where(function($q) use ($cityId, $cityName) {
+                $q->where('city_id', $cityId);
+                if ($cityName) {
+                    $q->orWhereHas('client', function($cq) use ($cityName) {
+                        $cq->where('city', 'like', "%{$cityName}%");
+                    });
+                }
+            });
         }
+        
+        // 🔥 FIX: Use created_at or processed_at for date range instead of updated_at
+        // updated_at changes on status change, breaking filters based on "acquisition date"
         if ($request->filled('date_from')) {
-            $query->whereDate('updated_at', '>=', $request->date_from);
+            $query->whereDate('processed_at', '>=', $request->date_from);
         }
         if ($request->filled('date_to')) {
-            $query->whereDate('updated_at', '<=', $request->date_to);
+            $query->whereDate('processed_at', '<=', $request->date_to);
         }
         if ($request->filled('status')) {
              $statusDesc = $request->status;
@@ -1050,11 +1063,15 @@ class OrderController extends Controller
             $term = $request->search;
             $query->where(function($q) use ($term) {
                 $q->where('id', 'like', "%{$term}%")
-                  ->orWhere('name', 'like', "%{$term}%") // Shopify order name
+                  ->orWhere('name', 'like', "%{$term}%") // Shopify order name (e.g. #1001)
+                  ->orWhere('order_number', 'like', "%{$term}%") // Numeric only
                   ->orWhereHas('client', function($cq) use ($term) {
                       $cq->where('first_name', 'like', "%{$term}%")
                          ->orWhere('last_name', 'like', "%{$term}%")
-                         ->orWhere('phone', 'like', "%{$term}%");
+                         ->orWhere('phone', 'like', "%{$term}%")
+                         ->orWhere('city', 'like', "%{$term}%")
+                         // Full name search
+                         ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", ["%{$term}%"]);
                   });
             });
         }
@@ -1128,41 +1145,82 @@ class OrderController extends Controller
         if ($request->filled('agent_id')) $baseQuery->where('agent_id', $request->agent_id);
         if ($request->filled('seller_id')) $baseQuery->where('agent_id', $request->seller_id);
         if ($request->filled('agency_id')) $baseQuery->where('agency_id', $request->agency_id);
-        if ($request->filled('city_id')) $baseQuery->where('city_id', $request->city_id);
-        if ($request->filled('date_from')) $baseQuery->whereDate('updated_at', '>=', $request->date_from);
-        if ($request->filled('date_to')) $baseQuery->whereDate('updated_at', '<=', $request->date_to);
+        
+        if ($request->filled('city_id')) {
+            $cityId = $request->city_id;
+            $cityName = \App\Models\City::find($cityId)?->name;
+            $baseQuery->where(function($q) use ($cityId, $cityName) {
+                $q->where('city_id', $cityId);
+                if ($cityName) $q->orWhereHas('client', function($cq) use ($cityName) { $cq->where('city', 'like', "%{$cityName}%"); });
+            });
+        }
+
+        if ($request->filled('date_from')) $baseQuery->whereDate('processed_at', '>=', $request->date_from);
+        if ($request->filled('date_to')) $baseQuery->whereDate('processed_at', '<=', $request->date_to);
         
         if ($request->filled('search')) {
             $term = $request->search;
             $baseQuery->where(function($q) use ($term) {
                 $q->where('id', 'like', "%{$term}%")
                   ->orWhere('name', 'like', "%{$term}%")
+                  ->orWhere('order_number', 'like', "%{$term}%")
                   ->orWhereHas('client', function($cq) use ($term) { 
                       $cq->where('first_name', 'like', "%{$term}%")
                          ->orWhere('last_name', 'like', "%{$term}%")
-                         ->orWhere('phone', 'like', "%{$term}%"); 
+                         ->orWhere('phone', 'like', "%{$term}%")
+                         ->orWhere('city', 'like', "%{$term}%")
+                         ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", ["%{$term}%"]);
                   });
             });
         }
 
-        $allOrders = $baseQuery->take(500)->get();
         $binanceRate = \App\Models\Setting::where('key', '=', 'rate_binance_usd')->first()?->value ?? 0;
         $bcvRate = \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0;
 
+        // Group counts efficiently (no N+1 issues)
+        // Need to deep clone the query builder to avoid shallow clone issues
+        $totalsQuery = $baseQuery->clone();
+        
+        $statusCounts = $totalsQuery->getQuery()->groups ? $totalsQuery->select('status_id', \DB::raw('count(*) as total_count'))->pluck('total_count', 'status_id') : 
+            $totalsQuery->select('status_id', \DB::raw('count(*) as total_count'))->groupBy('status_id')->pluck('total_count', 'status_id');
+
         $grouped = [];
-        foreach ($allOrders as $order) {
-            /** @var Order $order */
-            $statusName = $order->status->description;
-            if (!isset($grouped[$statusName])) { $grouped[$statusName] = ['items' => [], 'total' => 0]; }
-            if (count($grouped[$statusName]['items']) < 15) {
-                $order->syncStockStatus(); $check = $order->getStockDetails(); $orderArray = $order->toArray();
-                if ($user->role?->description === 'Agencia') { $orderArray['agent'] = null; $orderArray['agent_id'] = null; }
-                $orderArray['has_stock_warning'] = $check['has_warning'];
-                $orderArray['binance_rate'] = $binanceRate; $orderArray['bcv_rate'] = $bcvRate;
-                $grouped[$statusName]['items'][] = $orderArray;
+        $statusMap = \App\Models\Status::all()->keyBy('id');
+
+        foreach ($statusCounts as $statusId => $total) {
+            $statusName = $statusMap->get($statusId)?->description;
+            if (!$statusName) continue;
+
+            $grouped[$statusName] = [
+                'items' => [],
+                'total' => $total
+            ];
+
+            if ($total > 0) {
+                // Must deep clone to prevent previous selects/groupBys from bleeding over
+                $statusQuery = $baseQuery->clone();
+                // Since this clone preserves order_by, we just limit 15 for each exact status.
+                $orders = $statusQuery->where('status_id', $statusId)->take(15)->get();
+                
+                foreach ($orders as $order) {
+                    $order->syncStockStatus();
+                    $check = $order->getStockDetails();
+                    $orderArray = $order->toArray();
+                    
+                    if ($user->role?->description === 'Agencia') {
+                        $orderArray['agent'] = null;
+                        $orderArray['agent_id'] = null;
+                    }
+                    
+                    $orderArray['has_stock_warning'] = $check['has_warning'];
+                    $orderArray['binance_rate'] = $binanceRate;
+                    $orderArray['bcv_rate'] = $bcvRate;
+                    
+                    $grouped[$statusName]['items'][] = $orderArray;
+                }
             }
-            $grouped[$statusName]['total']++;
         }
+
         return response()->json(['status' => true, 'data' => $grouped]);
     }
     public function assignAgent(Request $request, Order $order)

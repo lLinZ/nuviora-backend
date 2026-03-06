@@ -265,8 +265,8 @@ class InventoryService
         $sinStockStatus = \App\Models\Status::where('description', '=', 'Sin Stock')->first();
         if (!$sinStockStatus) return;
 
-        // Excluded statuses (don't de-assign if already finished)
-        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock', 'Novedades', 'Novedad Solucionada'];
+        // Excluded statuses (don't de-assign if already finished or if they hold reserved stock)
+        $excludedStatuses = ['Entregado', 'En ruta', 'Cancelado', 'Rechazado', 'Sin Stock', 'Novedades', 'Novedad Solucionada', 'Asignar a agencia'];
 
         // Find orders assigned to this agency that are NOT in a terminal status
         $orders = \App\Models\Order::where('agency_id', '=', $warehouse->user_id)
@@ -279,14 +279,10 @@ class InventoryService
             ->get();
 
         foreach ($orders as $order) {
-            $inv = Inventory::where('warehouse_id', '=', $warehouseId)
-                ->where('product_id', '=', $productId)
-                ->first();
-            
-            $available = $inv ? $inv->quantity : 0;
-            $required  = $order->products()->where('product_id', $productId)->sum('quantity');
-
-            if ($available < $required) {
+            /** @var \App\Models\Order $order */
+            // Utilizamos hasStock() que internamente ya sabe si la orden
+            // tiene su stock reservado y descontado previamente.
+            if (!$order->hasStock()) {
                 $oldAgentId  = $order->agent_id;
                 $oldStatusId = $order->status_id; // 💾 Guardar status anterior
 
@@ -363,6 +359,7 @@ class InventoryService
         $assignService = app(\App\Services\Assignment\AssignOrderService::class);
 
         foreach ($orders as $order) {
+            /** @var \App\Models\Order $order */
             // 🛑 HARD GUARD: Refresh + verify still Sin Stock, not a terminal status
             $order->refresh();
             $currentStatusDesc = $order->status?->description;

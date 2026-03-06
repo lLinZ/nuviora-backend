@@ -4,11 +4,20 @@ namespace App\Observers;
 
 use App\Models\Order;
 use App\Services\Assignment\AssignOrderService;
+use App\Services\WhatsAppService;
 use Illuminate\Support\Facades\Log;
 use App\Constants\OrderStatus;
+use App\Models\WhatsappMessage;
 
 class OrderObserver
 {
+    protected $whatsappService;
+
+    public function __construct(WhatsAppService $whatsappService)
+    {
+        $this->whatsappService = $whatsappService;
+    }
+
     public function created(Order $order): void
     {
         // Log creation
@@ -63,6 +72,9 @@ class OrderObserver
                 $oldStatusDesc = \App\Models\Status::find($oldValue)?->description ?? 'N/A';
                 $newStatusDesc = \App\Models\Status::find($newValue)?->description ?? 'N/A';
                 $descriptions[] = "Estado cambió de '{$oldStatusDesc}' a '{$newStatusDesc}'";
+
+                // --- Automated WhatsApp Notifications ---
+                $this->handleStatusWhatsApp($order, $newStatusDesc);
             } elseif ($key === 'agent_id') {
                 $oldVal = \App\Models\User::find($oldValue)?->names ?? 'Nadie';
                 $newVal = \App\Models\User::find($newValue)?->names ?? 'Nadie';
@@ -99,4 +111,56 @@ class OrderObserver
             ]);
         }
     }
+
+    /**
+     * Send automated messages to the client based on status
+     */
+    protected function handleStatusWhatsApp(Order $order, string $status)
+    {
+        $message = null;
+        $orderNum = $order->name ?? $order->order_number;
+        $shopName = $order->shop?->name ?? 'tu tienda de confianza';
+
+        switch ($status) {
+            case OrderStatus::ASIGNADO_VENDEDOR:
+                $message = "¡Hola {$order->client->first_name}! 👋 Gracias por elegir a {$shopName}. Te confirmamos que hemos recibido tu orden {$orderNum} y ya está siendo procesada por nuestro equipo. ¡Muy pronto estaremos en contacto contigo! 🛒✨";
+                break;
+            case OrderStatus::EN_RUTA:
+                $message = "¡Buenas noticias! Tu pedido {$orderNum} en {$shopName} ya está en ruta con nuestro repartidor 🏍️. Favor estar atento!";
+                break;
+            case OrderStatus::ENTREGADO:
+                $message = "¡Tu pedido {$orderNum} ha sido entregado con éxito! 🎉 Muchas gracias por confiar en {$shopName}. ¡Que lo disfrutes!";
+                break;
+            case OrderStatus::PROGRAMADO_OTRO_DIA:
+            case OrderStatus::REPROGRAMADO_HOY:
+                $date = $order->scheduled_for ? $order->scheduled_for->format('d/m/Y') : 'pronto';
+                $message = "¡Hola! Hemos agendado la entrega de tu orden {$orderNum} en {$shopName} para la fecha: {$date}. ¡Nos vemos luego!";
+                break;
+        }
+
+        if ($message && $order->client && $order->client->phone) {
+            $msgRecord = \App\Models\WhatsappMessage::create([
+                'order_id' => $order->id,
+                'body' => $message,
+                'is_from_client' => false,
+                'status' => 'sending',
+                'sent_at' => now(),
+            ]);
+
+            $result = $this->whatsappService->sendMessage($order->client->phone, $message);
+            
+            if ($result && isset($result['messages'][0]['id'])) {
+                $msgRecord->update([
+                    'message_id' => $result['messages'][0]['id'],
+                    'status' => 'sent'
+                ]);
+            } else {
+                $msgRecord->update(['status' => 'failed']);
+            }
+
+            // Sync Frontend UI
+            event(new \App\Events\WhatsappMessageReceived($msgRecord));
+        }
+    }
 }
+

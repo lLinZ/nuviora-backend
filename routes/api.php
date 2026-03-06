@@ -27,6 +27,7 @@ use App\Http\Controllers\StatusController;
 use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\WarehouseController;
 use App\Http\Controllers\OrderTrackingComprehensiveController;
+use App\Http\Controllers\WhatsAppWebhookController;
 use Illuminate\Support\Facades\Route;
 
 
@@ -42,6 +43,10 @@ Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPayme
 Route::get('/orders/receipt/{receipt}', [OrderController::class, 'getReceipt']);
 Route::get('/orders/{order}/change-receipt', [OrderController::class, 'getChangeReceipt']);
 Route::post('test/register', [AuthController::class, 'testRegister']);
+
+// --- WhatsApp Webhook (Meta) ---
+Route::get('whatsapp/webhook', [WhatsAppWebhookController::class, 'verify']);
+Route::post('whatsapp/webhook', [WhatsAppWebhookController::class, 'handle']);
 
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
@@ -264,6 +269,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/change-receipt', [OrderController::class, 'uploadChangeReceipt']);
     Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder']);
     Route::put('/orders/{order}/toggle-notification', [OrderController::class, 'toggleChangeNotification']);
+
+    /**---------------------
+     * WHATSAPP MESSAGES
+     * ---------------------**/
+    Route::get('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'index']);
+    Route::post('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'store']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);
