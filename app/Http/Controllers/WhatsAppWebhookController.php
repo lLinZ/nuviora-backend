@@ -40,12 +40,12 @@ class WhatsAppWebhookController extends Controller
             $messageId = $messageData['id'];
 
             // Find the most recent active order for this phone number
-            // We search for clients with this phone (might need cleaner phone search)
+            // We search for clients using the last 10 digits to be safer
             $cleanPhone = preg_replace('/[^0-9]/', '', $from);
+            $last10 = substr($cleanPhone, -10);
             
-            $order = \App\Models\Order::whereHas('client', function($q) use ($cleanPhone) {
-                // Approximate search (Meta sends with country code, DB might have it or not)
-                $q->where('phone', 'like', "%{$cleanPhone}%");
+            $order = \App\Models\Order::whereHas('client', function($q) use ($last10) {
+                $q->where('phone', 'like', "%{$last10}");
             })->orderBy('created_at', 'desc')->first();
 
             if ($order) {

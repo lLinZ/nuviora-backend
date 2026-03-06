@@ -275,6 +275,8 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     Route::get('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'index']);
     Route::post('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'store']);
+    Route::put('/orders/{order}/read-whatsapp', [\App\Http\Controllers\WhatsappMessageController::class, 'markAsRead']);
+
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);

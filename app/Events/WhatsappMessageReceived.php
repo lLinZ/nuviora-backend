@@ -20,6 +20,18 @@ class WhatsappMessageReceived implements ShouldBroadcast
     public function __construct($message)
     {
         $this->message = $message;
+        if (!$this->message->relationLoaded('order')) {
+            $this->message->load('order');
+        }
+    }
+
+    public function broadcastWith(): array
+    {
+        return [
+            'message' => array_merge($this->message->toArray(), [
+                'client_id' => $this->message->order?->client_id
+            ])
+        ];
     }
 
     /**
@@ -32,13 +44,13 @@ class WhatsappMessageReceived implements ShouldBroadcast
         $order = $this->message->order;
         $channels = [new PrivateChannel('orders')];
 
-        if ($order->agency_id) {
+        if ($order && $order->agency_id) {
             $channels[] = new PrivateChannel('orders.agency.' . $order->agency_id);
         }
-        if ($order->agent_id) {
+        if ($order && $order->agent_id) {
             $channels[] = new PrivateChannel('orders.agent.' . $order->agent_id);
         }
-        if ($order->deliverer_id) {
+        if ($order && $order->deliverer_id) {
             $channels[] = new PrivateChannel('orders.deliverer.' . $order->deliverer_id);
         }
 

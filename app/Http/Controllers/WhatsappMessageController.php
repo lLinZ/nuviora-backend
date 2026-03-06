@@ -11,9 +11,16 @@ class WhatsappMessageController extends Controller
     {
         $perPage = $request->query('per_page', 20);
 
-        $messages = \App\Models\WhatsappMessage::where('order_id', $orderId)
-            ->orderBy('created_at', 'desc')
-            ->paginate($perPage);
+        // Fetch the current order to get its client_id
+        $order = \App\Models\Order::findOrFail($orderId);
+        $clientId = $order->client_id;
+
+        // Fetch messages for ALL orders belonging to this client
+        $messages = \App\Models\WhatsappMessage::whereHas('order', function($q) use ($clientId) {
+            $q->where('client_id', $clientId);
+        })
+        ->orderBy('created_at', 'desc')
+        ->paginate($perPage);
 
         return response()->json($messages);
     }
@@ -56,4 +63,23 @@ class WhatsappMessageController extends Controller
 
         return response()->json($message, 201);
     }
+
+    public function markAsRead($orderId)
+
+    {
+        \App\Models\WhatsappMessage::where('order_id', $orderId)
+            ->where('is_from_client', true)
+            ->where('status', '!=', 'read')
+            ->update(['status' => 'read']);
+
+        // Refresh order to broadcast new unread count if needed
+        $order = \App\Models\Order::find($orderId);
+        if ($order) {
+            $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+            event(new \App\Events\OrderUpdated($order));
+        }
+
+        return response()->json(['status' => 'success']);
+    }
 }
+

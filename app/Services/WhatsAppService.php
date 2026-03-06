@@ -26,8 +26,18 @@ class WhatsAppService
      */
     public function sendMessage($to, $message)
     {
-        // Limpiar el número (quitar +, espacios, etc)
+        // 1. Limpiar el número (quitar +, espacios, etc)
         $cleanTo = preg_replace('/[^0-9]/', '', $to);
+
+        // 2. Normalizar número para Venezuela (58)
+        // Si empieza con 04..., convertir a 584...
+        if (strpos($cleanTo, '04') === 0) {
+            $cleanTo = '58' . substr($cleanTo, 1);
+        } 
+        // Si tiene 10 dígitos y empieza con 4... (ej: 4121234567), añadir 58
+        elseif (strlen($cleanTo) === 10 && strpos($cleanTo, '4') === 0) {
+            $cleanTo = '58' . $cleanTo;
+        }
 
         $url = "{$this->baseUrl}/{$this->phoneNumberId}/messages";
 

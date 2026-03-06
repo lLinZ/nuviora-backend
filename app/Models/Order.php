@@ -184,7 +184,8 @@ class Order extends Model
     }
     
     // Virtual attributes
-    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt'];
+    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt', 'whatsapp_unread_count'];
+
 
     public function getChangePaymentDetailsAttribute()
     {
@@ -195,6 +196,15 @@ class Order extends Model
     {
         return $this->changeExtra ? $this->changeExtra->change_receipt : null;
     }
+
+    public function getWhatsappUnreadCountAttribute()
+    {
+        return $this->whatsappMessages()
+            ->where('is_from_client', true)
+            ->where('status', '!=', 'read')
+            ->count();
+    }
+
     /**
      * Helper to check stock availability for an order
      */

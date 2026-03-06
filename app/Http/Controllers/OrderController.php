@@ -1127,36 +1127,54 @@ class OrderController extends Controller
         
         // Base query with same filters as index
         $baseQuery = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])
-            ->withCount('updates')
-            ->orderBy('updated_at', 'desc')
-            ->orderBy('id', 'desc');
+            ->withCount('updates');
 
-        // Apply same restrictions and filters as index...
+        // 🔒 Reglas por rol (Case insensitive & trimmed)
         $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+
         if ($roleName === 'vendedor') {
             $baseQuery->where('agent_id', $user->id);
+            // Mostrar todos (sin restricción de fecha para vendedores en Kanban)
         } elseif ($roleName === 'repartidor') {
-            $baseQuery->where('deliverer_id', $user->id)->whereDate('updated_at', now());
+            $baseQuery->where('deliverer_id', $user->id)
+                      ->whereDate('updated_at', now());
         } elseif ($roleName === 'agencia') {
             $baseQuery->where('agency_id', $user->id)
-                      ->whereDoesntHave('status', function($sq) { $sq->where('description', 'Cancelado'); });
+                      ->whereDoesntHave('status', function($sq) {
+                          $sq->where('description', 'Cancelado');
+                      });
         }
 
-        if ($request->filled('agent_id')) $baseQuery->where('agent_id', $request->agent_id);
-        if ($request->filled('seller_id')) $baseQuery->where('agent_id', $request->seller_id);
-        if ($request->filled('agency_id')) $baseQuery->where('agency_id', $request->agency_id);
+        // Apply filters
+        if ($request->filled('agent_id')) {
+            $baseQuery->where('agent_id', $request->agent_id);
+        }
+        if ($request->filled('seller_id')) {
+            $baseQuery->where('agent_id', $request->seller_id);
+        }
+        if ($request->filled('agency_id')) {
+            $baseQuery->where('agency_id', $request->agency_id);
+        }
         
         if ($request->filled('city_id')) {
             $cityId = $request->city_id;
             $cityName = \App\Models\City::find($cityId)?->name;
             $baseQuery->where(function($q) use ($cityId, $cityName) {
                 $q->where('city_id', $cityId);
-                if ($cityName) $q->orWhereHas('client', function($cq) use ($cityName) { $cq->where('city', 'like', "%{$cityName}%"); });
+                if ($cityName) {
+                    $q->orWhereHas('client', function($cq) use ($cityName) {
+                        $cq->where('city', 'like', "%{$cityName}%");
+                    });
+                }
             });
         }
 
-        if ($request->filled('date_from')) $baseQuery->whereDate('processed_at', '>=', $request->date_from);
-        if ($request->filled('date_to')) $baseQuery->whereDate('processed_at', '<=', $request->date_to);
+        if ($request->filled('date_from')) {
+            $baseQuery->whereDate('processed_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $baseQuery->whereDate('processed_at', '<=', $request->date_to);
+        }
         
         if ($request->filled('search')) {
             $term = $request->search;
@@ -1178,18 +1196,31 @@ class OrderController extends Controller
         $bcvRate = \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0;
 
         // Group counts efficiently (no N+1 issues)
-        // Need to deep clone the query builder to avoid shallow clone issues
+        // Clean query for grouping to avoid SQL errors with orderBy
         $totalsQuery = $baseQuery->clone();
         
-        $statusCounts = $totalsQuery->getQuery()->groups ? $totalsQuery->select('status_id', \DB::raw('count(*) as total_count'))->pluck('total_count', 'status_id') : 
-            $totalsQuery->select('status_id', \DB::raw('count(*) as total_count'))->groupBy('status_id')->pluck('total_count', 'status_id');
+        $statusCounts = $totalsQuery->select('status_id', \DB::raw('count(*) as total_count'))
+            ->groupBy('status_id')
+            ->pluck('total_count', 'status_id');
 
         $grouped = [];
         $statusMap = \App\Models\Status::all()->keyBy('id');
 
-        foreach ($statusCounts as $statusId => $total) {
-            $statusName = $statusMap->get($statusId)?->description;
-            if (!$statusName) continue;
+        foreach ($statusMap as $statusId => $status) {
+            $statusName = $status->description;
+            $total = $statusCounts->get($statusId, 0);
+
+            // Special logic for specific tabs if needed (mirroring index method)
+            $statusQuery = $baseQuery->clone();
+            
+            if ($statusName === 'Programado para otro dia') {
+                $statusQuery->whereDate('scheduled_for', '>', now()->toDateString())
+                            ->whereDate('updated_at', now()->toDateString());
+                // Recalculate count for this special case
+                $total = $statusQuery->count();
+            } else {
+                $statusQuery->where('status_id', $statusId);
+            }
 
             $grouped[$statusName] = [
                 'items' => [],
@@ -1197,10 +1228,11 @@ class OrderController extends Controller
             ];
 
             if ($total > 0) {
-                // Must deep clone to prevent previous selects/groupBys from bleeding over
-                $statusQuery = $baseQuery->clone();
-                // Since this clone preserves order_by, we just limit 15 for each exact status.
-                $orders = $statusQuery->where('status_id', $statusId)->take(15)->get();
+                // Fetch first 15 items with actual orderings
+                $orders = $statusQuery->orderBy('updated_at', 'desc')
+                    ->orderBy('id', 'desc')
+                    ->take(15)
+                    ->get();
                 
                 foreach ($orders as $order) {
                     $order->syncStockStatus();
