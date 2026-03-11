@@ -30,6 +30,8 @@ class WhatsappMessageController extends Controller
         $request->validate([
             'body' => 'required|string',
             'is_from_client' => 'boolean',
+            'template_name' => 'nullable|string',
+            'vars' => 'nullable|array',
         ]);
 
         $order = \App\Models\Order::with('client')->findOrFail($orderId);
@@ -46,7 +48,25 @@ class WhatsappMessageController extends Controller
         // 2. If it's from us (shop), send via Meta API
         if (!$message->is_from_client) {
             $service = new \App\Services\WhatsAppService();
-            $result = $service->sendMessage($order->client->phone, $message->body);
+            
+            if ($request->filled('template_name')) {
+                // Send as official Template
+                $components = [];
+                if ($request->has('vars')) {
+                    $parameters = [];
+                    foreach ($request->vars as $v) {
+                        $parameters[] = ['type' => 'text', 'text' => $v];
+                    }
+                    $components[] = [
+                        'type' => 'body',
+                        'parameters' => $parameters
+                    ];
+                }
+                $result = $service->sendTemplate($order->client->phone, $request->template_name, 'es', $components);
+            } else {
+                // Send as regular Text
+                $result = $service->sendMessage($order->client->phone, $message->body);
+            }
 
             if ($result && isset($result['messages'][0]['id'])) {
                 $message->update([

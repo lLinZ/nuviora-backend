@@ -283,24 +283,24 @@ class InventoryService
             // Utilizamos hasStock() que internamente ya sabe si la orden
             // tiene su stock reservado y descontado previamente.
             if (!$order->hasStock()) {
-                $oldAgentId  = $order->agent_id;
                 $oldStatusId = $order->status_id; // 💾 Guardar status anterior
 
                 $order->previous_status_id = $oldStatusId; // 💾 Persistir para restaurar después
                 $order->status_id = $sinStockStatus->id;
-                $order->agent_id  = null;
+                // ✅ NO se desasigna agent_id: la vendedora permanece asignada
+                // para que cuando el stock se recupere, la orden vuelva a su
+                // estado anterior con la misma vendedora sin necesidad de re-asignar.
                 $order->save();
 
                 \App\Models\OrderActivityLog::create([
                     'order_id' => $order->id,
                     'user_id'  => auth()->id() ?? 1,
                     'action'   => 'status_changed',
-                    'description' => "Orden movida a 'Sin Stock' y vendedora removida por falta de existencias en bodega.",
+                    'description' => "Orden movida a 'Sin Stock' por falta de existencias en bodega. Vendedora mantiene la asignación.",
                     'properties' => [
                         'old_status'   => $oldStatusId,
                         'new_status'   => $sinStockStatus->id,
-                        'old_agent_id' => $oldAgentId,
-                        'new_agent_id' => null,
+                        'agent_id'     => $order->agent_id,
                         'reason'       => 'stock_shortage',
                         'product_id'   => $productId,
                         'warehouse_id' => $warehouseId
@@ -310,7 +310,7 @@ class InventoryService
                 \App\Models\OrderUpdate::create([
                     'order_id' => $order->id,
                     'user_id'  => auth()->id() ?? \App\Models\User::whereHas('role', function($q){ $q->where('description', '=', 'Admin'); })->first()?->id ?? 1,
-                    'message'  => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' y se removió la vendedora asignada debido a falta de existencias de un producto en la bodega de la agencia."
+                    'message'  => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' por falta de existencias en bodega. La vendedora asignada se mantiene."
                 ]);
 
                 $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);

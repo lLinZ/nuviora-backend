@@ -40,9 +40,9 @@ class CheckWaitingLocationOrders extends Command
             return;
         }
 
-        $admins = \App\Models\User::whereHas('role', function($q) {
-            $q->whereIn('description', ['Admin', 'Gerente']);
-        })->get();
+        // $admins = \App\Models\User::whereHas('role', function($q) {
+        //     $q->whereIn('description', ['Admin', 'Gerente']);
+        // })->get();
 
         foreach ($orders as $order) {
             $this->info("Notificando orden #{$order->name}");
@@ -52,9 +52,9 @@ class CheckWaitingLocationOrders extends Command
                 $order->agent->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "La orden #{$order->name} lleva más de 30 min esperando ubicación. Por favor, contacta al cliente."));
             } else {
                 // Si no tiene vendedor (caso raro), notificar a admins
-                foreach ($admins as $admin) {
-                    $admin->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "Orden #{$order->name} (sin vendedor) lleva más de 30 min esperando ubicación."));
-                }
+                // foreach ($admins as $admin) {
+                //     $admin->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "Orden #{$order->name} (sin vendedor) lleva más de 30 min esperando ubicación."));
+                // }
             }
         }
     }

@@ -259,13 +259,13 @@ class ShopifyWebhookController extends Controller
 
             // Notificar a todos los Admins y Gerentes
             try {
-                $admins = User::whereHas('role', function ($q) {
-                    $q->whereIn('description', ['Admin', 'Gerente']);
-                })->get();
+                // $admins = User::whereHas('role', function ($q) {
+                //     $q->whereIn('description', ['Admin', 'Gerente']);
+                // })->get();
 
-                foreach ($admins as $admin) {
-                    $admin->notify(new OrderNoStockNotification($order, $alertMessage));
-                }
+                // foreach ($admins as $admin) {
+                //     $admin->notify(new OrderNoStockNotification($order, $alertMessage));
+                // }
             } catch (\Exception $e) {
                 \Log::error("Error enviando notificación de Sin Stock para orden #{$order->name}: " . $e->getMessage());
             }

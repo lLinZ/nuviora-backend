@@ -26,24 +26,12 @@ class WhatsAppService
      */
     public function sendMessage($to, $message)
     {
-        // 1. Limpiar el número (quitar +, espacios, etc)
-        $cleanTo = preg_replace('/[^0-9]/', '', $to);
-
-        // 2. Normalizar número para Venezuela (58)
-        // Si empieza con 04..., convertir a 584...
-        if (strpos($cleanTo, '04') === 0) {
-            $cleanTo = '58' . substr($cleanTo, 1);
-        } 
-        // Si tiene 10 dígitos y empieza con 4... (ej: 4121234567), añadir 58
-        elseif (strlen($cleanTo) === 10 && strpos($cleanTo, '4') === 0) {
-            $cleanTo = '58' . $cleanTo;
-        }
-
+        $cleanTo = $this->cleanNumber($to);
         $url = "{$this->baseUrl}/{$this->phoneNumberId}/messages";
 
         try {
             $response = Http::withToken($this->accessToken)
-                ->withoutVerifying() // 🛡️ Fix for local SSL certificate issues
+                ->withoutVerifying()
                 ->post($url, [
                     'messaging_product' => 'whatsapp',
                     'recipient_type' => 'individual',
@@ -73,5 +61,60 @@ class WhatsAppService
             ]);
             return false;
         }
+    }
+
+    public function sendTemplate($to, $templateName, $language = 'es', $components = [])
+    {
+        $cleanTo = $this->cleanNumber($to);
+        $url = "{$this->baseUrl}/{$this->phoneNumberId}/messages";
+
+        try {
+            $response = Http::withToken($this->accessToken)
+                ->withoutVerifying()
+                ->post($url, [
+                    'messaging_product' => 'whatsapp',
+                    'to' => $cleanTo,
+                    'type' => 'template',
+                    'template' => [
+                        'name' => $templateName,
+                        'language' => [
+                            'code' => $language
+                        ],
+                        'components' => $components
+                    ]
+                ]);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+
+            Log::error('WhatsApp Template Error', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'to' => $cleanTo,
+                'template' => $templateName
+            ]);
+
+            return false;
+        } catch (\Exception $e) {
+            Log::error('WhatsApp Template Exception', [
+                'message' => $e->getMessage(),
+                'to' => $cleanTo
+            ]);
+            return false;
+        }
+    }
+
+    private function cleanNumber($to)
+    {
+        $cleanTo = preg_replace('/[^0-9]/', '', $to);
+
+        if (strpos($cleanTo, '04') === 0) {
+            $cleanTo = '58' . substr($cleanTo, 1);
+        } elseif (strlen($cleanTo) === 10 && strpos($cleanTo, '4') === 0) {
+            $cleanTo = '58' . $cleanTo;
+        }
+
+        return $cleanTo;
     }
 }

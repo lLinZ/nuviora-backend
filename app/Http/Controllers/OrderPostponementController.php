@@ -65,10 +65,10 @@ class OrderPostponementController extends Controller
         // 🔔 Notificar si es "Programado para mas tarde"
         if ($statusDesc === 'Programado para mas tarde') {
              // Notificar a Admins/Gerentes
-             $admins = \App\Models\User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
-             foreach ($admins as $admin) {
-                 $admin->notify(new \App\Notifications\OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
-             }
+             // $admins = \App\Models\User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+             // foreach ($admins as $admin) {
+             //     $admin->notify(new \App\Notifications\OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
+             // }
         }
 
         return response()->json([

@@ -496,12 +496,12 @@ class OrderController extends Controller
 
         // Si cambia a Novedades
         if ($statusNovedad && (int)$statusNovedad->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusNovedad->id) {
-            // Notificar a Admins/Gerentes
-            $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
-            foreach ($admins as $admin) {
-                /** @var \App\Models\User $admin */
-                $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden #{$order->name}"));
-            }
+            // // Notificar a Admins/Gerentes
+            // $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+            // foreach ($admins as $admin) {
+            //     /** @var \App\Models\User $admin */
+            //     $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden #{$order->name}"));
+            // }
             
             // 🔔 NEW: Notificar también a la vendedora asignada
             if ($order->agent) {
@@ -527,12 +527,12 @@ class OrderController extends Controller
 
         // Si cambia a Programado para más tarde
         if ($statusProgramadoMasTarde && (int)$statusProgramadoMasTarde->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusProgramadoMasTarde->id) {
-            // Notificar a Admins/Gerentes
-            $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
-            foreach ($admins as $admin) {
-                /** @var \App\Models\User $admin */
-                $admin->notify(new OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
-            }
+            // // Notificar a Admins/Gerentes
+            // $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+            // foreach ($admins as $admin) {
+            //     /** @var \App\Models\User $admin */
+            //     $admin->notify(new OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
+            // }
         }
 
         // ⏱️ TIMER: Si entra en "Asignar a agencia" o "En ruta", marcamos el inicio del cronómetro de 45 min
@@ -725,6 +725,12 @@ class OrderController extends Controller
                             }
                         }
                     }
+                }
+
+                // 🔔 NOTIFICAR A ADMINS/GERENTES DE ORDEN ENTREGADA
+                $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
+                foreach ($admins as $admin) {
+                    $admin->notify(new \App\Notifications\OrderDeliveredNotification($order, "Orden entregada: #{$order->name}"));
                 }
             }
         }
@@ -1275,11 +1281,12 @@ class OrderController extends Controller
             ], 422);
         }
 
-        // Buscar el status "Asignado a vendedor"
-        $statusId = Status::where('description', '=', 'Asignado a vendedor')->first()?->id;
-
-        $order->status_id = $statusId;
-        $order->agent_id  = $agent->id;
+        // [CAMBIO POR SOLICITUD DEL CLIENTE - 2026-03-11]
+        // Al reasignar manualmente un vendedor, el status de la orden debe
+        // permanecer igual al que tenía antes de la reasignación.
+        // Anteriormente, siempre se forzaba el status a "Asignado a vendedor",
+        // lo que hacía perder el rastro del estado real (ej: "Reprogramada").
+        $order->agent_id = $agent->id;
         $order->save();
 
         // 📡 Broadcast for real-time updates
@@ -1769,17 +1776,17 @@ class OrderController extends Controller
 
             // 🔔 NOTIFY ADMINS 🔔
             try {
-                $admins = User::whereHas('role', function($q) {
-                    $q->where('description', 'Admin');
-                })->get();
+                // $admins = User::whereHas('role', function($q) {
+                //     $q->where('description', 'Admin');
+                // })->get();
                 
-                foreach ($admins as $admin) {
-                    /** @var \App\Models\User $admin */
-                     // Don't notify if the admin created it themselves (optional preference, but usually good to notify other admins)
-                     if ($admin->id !== $currentUser->id) { 
-                        $admin->notify(new OrderAssignedNotification($order, "Nueva orden manual creada: #{$order->name} por {$currentUser->names}"));
-                     }
-                }
+                // foreach ($admins as $admin) {
+                //     /** @var \App\Models\User $admin */
+                //      // Don't notify if the admin created it themselves (optional preference, but usually good to notify other admins)
+                //      if ($admin->id !== $currentUser->id) { 
+                //         $admin->notify(new OrderAssignedNotification($order, "Nueva orden manual creada: #{$order->name} por {$currentUser->names}"));
+                //      }
+                // }
             } catch (\Exception $e) {}
 
             \DB::commit();

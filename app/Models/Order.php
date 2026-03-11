@@ -314,12 +314,11 @@ class Order extends Model
         if (!$this->hasStock()) {
             $sinStockStatus = Status::where('description', '=', 'Sin Stock')->first();
             if ($sinStockStatus && $this->status_id !== $sinStockStatus->id) {
-                $oldAgentId  = $this->agent_id;
                 $oldStatusId = $this->status_id; // 💾 Guardar status anterior
 
                 $this->previous_status_id = $oldStatusId; // 💾 Persistir para restaurar después
                 $this->status_id = $sinStockStatus->id;
-                $this->agent_id  = null;
+                // ✅ NO se desasigna agent_id: la vendedora permanece asignada
                 $this->save();
 
                 // Log activity
@@ -327,10 +326,10 @@ class Order extends Model
                     'order_id' => $this->id,
                     'user_id'  => auth()->id() ?? 1,
                     'action'   => 'status_changed',
-                    'description' => "Orden movida automáticamente a 'Sin Stock' por falta de existencias (Detectado en sincronización).",
+                    'description' => "Orden movida automáticamente a 'Sin Stock' por falta de existencias (Detectado en sincronización). Vendedora mantiene la asignación.",
                     'properties' => [
                         'old_status_id' => $oldStatusId,
-                        'old_agent_id'  => $oldAgentId,
+                        'agent_id'      => $this->agent_id,
                         'reason'        => 'stock_shortage_sync'
                     ]
                 ]);
@@ -339,7 +338,7 @@ class Order extends Model
                 OrderUpdate::create([
                     'order_id' => $this->id,
                     'user_id'  => auth()->id() ?? User::whereHas('role', function($q){ $q->where('description', 'Admin'); })->first()?->id ?? 1,
-                    'message'  => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' debido a falta de producto en almacén."
+                    'message'  => "🚨 AUTOMÁTICO: La orden pasó a 'Sin Stock' por falta de producto en almacén. La vendedora asignada se mantiene."
                 ]);
 
                 // 📡 Broadcast via WebSocket for real-time Kanban update
