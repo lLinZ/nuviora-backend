@@ -73,8 +73,8 @@ class OrderObserver
                 $newStatusDesc = \App\Models\Status::find($newValue)?->description ?? 'N/A';
                 $descriptions[] = "Estado cambió de '{$oldStatusDesc}' a '{$newStatusDesc}'";
 
-                // --- Automated WhatsApp Notifications ---
-                $this->handleStatusWhatsApp($order, $newStatusDesc);
+                // --- Automated WhatsApp Notifications (DESACTIVADO temporalmente por solicitud del cliente) ---
+                // $this->handleStatusWhatsApp($order, $newStatusDesc);
             } elseif ($key === 'agent_id') {
                 $oldVal = \App\Models\User::find($oldValue)?->names ?? 'Nadie';
                 $newVal = \App\Models\User::find($newValue)?->names ?? 'Nadie';
