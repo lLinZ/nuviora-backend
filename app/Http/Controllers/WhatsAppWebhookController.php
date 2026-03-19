@@ -55,14 +55,19 @@ class WhatsAppWebhookController extends Controller
                 $receivedAt = now();
                 $order->client()->update(['last_whatsapp_received_at' => $receivedAt]);
 
-                $msg = \App\Models\WhatsappMessage::create([
-                    'order_id'      => $order->id,
-                    'message_id'    => $messageId,
-                    'body'          => $body,
-                    'is_from_client'=> true,
-                    'status'        => 'delivered',
-                    'sent_at'       => $receivedAt,
-                ]);
+                $msg = \App\Models\WhatsappMessage::updateOrCreate(
+                    [
+                        'message_id' => $messageId,
+                    ],
+                    [
+                        'order_id'      => $order->id,
+                        'body'          => $body,
+                        'is_from_client'=> true,
+                        'status'        => 'delivered',
+                        'sent_at'       => $receivedAt,
+                    ]
+                );
+
 
                 // 📡 Broadcast to frontend via WebSocket so the chat and the
                 // 24-h window indicator update in real time
