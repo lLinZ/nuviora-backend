@@ -6,6 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 
 class WhatsappMessage extends Model
 {
+    protected $appends = ['client_id'];
+
+    public function getClientIdAttribute()
+    {
+        return $this->order ? $this->order->client_id : null;
+    }
+
     protected $fillable = [
         'order_id',
         'message_id',
