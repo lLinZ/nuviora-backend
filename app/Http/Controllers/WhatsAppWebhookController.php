@@ -85,6 +85,25 @@ class WhatsAppWebhookController extends Controller
                         $body = "⚠️ Error pidiendo URL a Meta: Status " . $response->status() . " | " . $response->body();
                     }
                 }
+            } elseif ($type === 'video' || isset($messageData['video'])) {
+                $videoId = $messageData['video']['id'];
+                $caption = $messageData['video']['caption'] ?? '';
+                $token = env('WHATSAPP_ACCESS_TOKEN');
+                
+                if ($token) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$videoId}");
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->timeout(60)->get($response['url']);
+                        if ($mediaResponse->successful()) {
+                            $filename = 'whatsapp_media/' . uniqid('wa_vid_') . '.mp4';
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            $mediaPath = url('storage/' . $filename);
+                            $body = $caption;
+                        } else {
+                            $body = "⚠️ Error descargando video de Meta: Status " . $mediaResponse->status();
+                        }
+                    }
+                }
             }
 
             // Normalize phone: strip non-digits, search by last 10 digits
