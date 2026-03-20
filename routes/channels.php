@@ -23,6 +23,5 @@ Broadcast::channel('orders.deliverer.{id}', function ($user, $id) {
 });
 
 Broadcast::channel('orders.{id}', function ($user, $id) {
-    // Allows listeners specifically targeted at a single order chat thread
-    return $user !== null;
+    return true;
 });
