@@ -53,6 +53,9 @@ class WhatsappMessageReceived implements ShouldBroadcast
         if ($order && $order->deliverer_id) {
             $channels[] = new PrivateChannel('orders.deliverer.' . $order->deliverer_id);
         }
+        if ($order) {
+            $channels[] = new PrivateChannel('orders.' . $order->id);
+        }
 
         return $channels;
     }
