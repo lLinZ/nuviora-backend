@@ -71,6 +71,7 @@ class WhatsAppWebhookController extends Controller
 
                 // 📡 Broadcast to frontend via WebSocket so the chat and the
                 // 24-h window indicator update in real time
+                $msg->refresh();
                 event(new \App\Events\WhatsappMessageReceived($msg));
             }
         }

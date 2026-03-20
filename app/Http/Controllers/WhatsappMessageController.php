@@ -78,7 +78,8 @@ class WhatsappMessageController extends Controller
             }
         }
 
-        // 3. Broadcast real-time
+        // 3. Broadcast real-time (force db refresh to get real ID and confirmed message_id)
+        $message->refresh();
         event(new \App\Events\WhatsappMessageReceived($message));
 
         return response()->json($message, 201);
