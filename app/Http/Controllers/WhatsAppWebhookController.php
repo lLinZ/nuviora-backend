@@ -48,32 +48,42 @@ class WhatsAppWebhookController extends Controller
                 $lat = $messageData['location']['latitude'] ?? '';
                 $lng = $messageData['location']['longitude'] ?? '';
                 $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
-            } elseif (isset($messageData['image'])) {
+            } elseif ($type === 'image' || isset($messageData['image'])) {
                 $imageId = $messageData['image']['id'];
                 $caption = $messageData['image']['caption'] ?? '';
+                $token = env('WHATSAPP_TOKEN');
                 
-                // 1. Request Media URL from Meta API
-                $response = \Illuminate\Support\Facades\Http::withToken(env('WHATSAPP_TOKEN'))->get("https://graph.facebook.com/v17.0/{$imageId}");
-                
-                if ($response->successful() && isset($response['url'])) {
-                    $mediaUrl = $response['url'];
-                    
-                    // 2. Download the actual binary file from Meta
-                    $mediaResponse = \Illuminate\Support\Facades\Http::withToken(env('WHATSAPP_TOKEN'))->get($mediaUrl);
-                    
-                    if ($mediaResponse->successful()) {
-                        // Save to public storage
-                        $filename = 'whatsapp_media/' . uniqid('wa_') . '.jpg';
-                        \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
-                        
-                        // 3. Assign to variables BEFORE saving the message to DB
-                        $mediaPath = url('storage/' . $filename); 
-                        $body = $caption;
-                    } else {
-                        \Illuminate\Support\Facades\Log::error('Meta Media Download Failed', ['body' => $mediaResponse->body()]);
-                    }
+                if (!$token) {
+                    $body = "⚠️ Error interno: WHATSAPP_TOKEN no existe o la caché de Laravel está bloqueando el env().";
                 } else {
-                    \Illuminate\Support\Facades\Log::error('Meta Media URL Request Failed', ['body' => $response->body()]);
+                    // 1. Request Media URL from Meta API
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)
+                        ->get("https://graph.facebook.com/v17.0/{$imageId}");
+                    
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaUrl = $response['url'];
+                        
+                        // 2. Download the actual binary file from Meta (Añadimos User-Agent para evitar bloqueos)
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
+                            ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
+                            ->get($mediaUrl);
+                        
+                        if ($mediaResponse->successful()) {
+                            // Save to public storage
+                            $filename = 'whatsapp_media/' . uniqid('wa_') . '.jpg';
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            
+                            // 3. Assign to variables BEFORE saving the message to DB
+                            $mediaPath = url('storage/' . $filename); 
+                            $body = $caption;
+                        } else {
+                            // SI FALLA, ESCUPIMOS EL ERROR EN EL CHAT DE REACT
+                            $body = "⚠️ Error descargando archivo de Meta: Status " . $mediaResponse->status() . " | " . $mediaResponse->body();
+                        }
+                    } else {
+                        // SI FALLA LA URL, ESCUPIMOS EL ERROR EN EL CHAT DE REACT
+                        $body = "⚠️ Error pidiendo URL a Meta: Status " . $response->status() . " | " . $response->body();
+                    }
                 }
             }
 
@@ -86,10 +96,6 @@ class WhatsAppWebhookController extends Controller
             })->orderBy('created_at', 'desc')->first();
 
             if ($order) {
-                // ⏱️ Stamp the exact UTC time of this inbound message on the client.
-                // This is the anchor that resets the Meta 24-hour free-text window.
-                // We use now() (server UTC) — never the timestamp from the payload,
-                // which can be delayed by Meta's infrastructure.
                 $receivedAt = now();
                 $order->client()->update(['last_whatsapp_received_at' => $receivedAt]);
 
@@ -107,9 +113,6 @@ class WhatsAppWebhookController extends Controller
                     ]
                 );
 
-
-                // 📡 Broadcast to frontend via WebSocket so the chat and the
-                // 24-h window indicator update in real time
                 $msg->refresh();
                 event(new \App\Events\WhatsappMessageReceived($msg));
             }
