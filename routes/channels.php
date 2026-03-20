@@ -23,5 +23,18 @@ Broadcast::channel('orders.deliverer.{id}', function ($user, $id) {
 });
 
 Broadcast::channel('orders.{id}', function ($user, $id) {
-    return true;
+    if (!$user) return false;
+    
+    // Admins always get access
+    if (in_array($user->role?->description, ['Admin', 'Gerente', 'Master'])) {
+        return true;
+    }
+    
+    // Verify Order ownership
+    $order = \App\Models\Order::find($id);
+    if (!$order) return false;
+
+    return (int) $order->agent_id === (int) $user->id || 
+           (int) $order->agency_id === (int) $user->id || 
+           (int) $order->deliverer_id === (int) $user->id;
 });
