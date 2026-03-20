@@ -51,10 +51,10 @@ class WhatsAppWebhookController extends Controller
             } elseif ($type === 'image' || isset($messageData['image'])) {
                 $imageId = $messageData['image']['id'];
                 $caption = $messageData['image']['caption'] ?? '';
-                $token = env('WHATSAPP_TOKEN');
+                $token = env('WHATSAPP_ACCESS_TOKEN');
                 
                 if (!$token) {
-                    $body = "⚠️ Error interno: WHATSAPP_TOKEN no existe o la caché de Laravel está bloqueando el env().";
+                    $body = "⚠️ Error interno: WHATSAPP_ACCESS_TOKEN no existe o la caché de Laravel está bloqueando el env().";
                 } else {
                     // 1. Request Media URL from Meta API
                     $response = \Illuminate\Support\Facades\Http::withToken($token)
