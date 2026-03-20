@@ -36,8 +36,47 @@ class WhatsAppWebhookController extends Controller
         if (isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
             $messageData = $payload['entry'][0]['changes'][0]['value']['messages'][0];
             $from        = $messageData['from']; // e.g. 584121234567
-            $body        = $messageData['text']['body'] ?? '';
+            $type        = $messageData['type'] ?? 'text';
             $messageId   = $messageData['id'];
+            
+            $body        = '';
+            $mediaPath   = null;
+
+            if ($type === 'text') {
+                $body = $messageData['text']['body'] ?? '';
+            } elseif ($type === 'location') {
+                $lat = $messageData['location']['latitude'] ?? '';
+                $lng = $messageData['location']['longitude'] ?? '';
+                $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
+            } elseif ($type === 'image') {
+                $body = $messageData['image']['caption'] ?? '';
+                $mediaId = $messageData['image']['id'] ?? '';
+                
+                if ($mediaId) {
+                    $token = env('WHATSAPP_TOKEN');
+                    // 1) Fetch media URL from Meta
+                    $metaMedia = \Illuminate\Support\Facades\Http::withToken($token)
+                         ->get("https://graph.facebook.com/v17.0/{$mediaId}");
+                         
+                    if ($metaMedia->successful() && isset($metaMedia['url'])) {
+                        $metaUrl = $metaMedia['url'];
+                        // 2) Download the actual binary using the token
+                        $mediaBinary = \Illuminate\Support\Facades\Http::withToken($token)->get($metaUrl);
+                        
+                        if ($mediaBinary->successful()) {
+                            $mime = $metaMedia['mime_type'] ?? 'image/jpeg';
+                            $ext = explode('/', $mime)[1] ?? 'jpg';
+                            // Clean extension if it contains parameters
+                            $ext = explode(';', $ext)[0];
+                            
+                            $filename = "whatsapp/{$mediaId}_{$messageId}.{$ext}";
+                            
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaBinary->body());
+                            $mediaPath = env('APP_URL') . "/storage/" . $filename;
+                        }
+                    }
+                }
+            }
 
             // Normalize phone: strip non-digits, search by last 10 digits
             $cleanPhone = preg_replace('/[^0-9]/', '', $from);
@@ -62,6 +101,7 @@ class WhatsAppWebhookController extends Controller
                     [
                         'order_id'      => $order->id,
                         'body'          => $body,
+                        'media'         => $mediaPath,
                         'is_from_client'=> true,
                         'status'        => 'delivered',
                         'sent_at'       => $receivedAt,
