@@ -48,48 +48,32 @@ class WhatsAppWebhookController extends Controller
                 $lat = $messageData['location']['latitude'] ?? '';
                 $lng = $messageData['location']['longitude'] ?? '';
                 $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
-            } elseif (isset($messageData['image']) || $type === 'image') {
-                $body = $messageData['image']['caption'] ?? '';
-                $mediaId = $messageData['image']['id'] ?? '';
+            } elseif (isset($messageData['image'])) {
+                $imageId = $messageData['image']['id'];
+                $caption = $messageData['image']['caption'] ?? '';
                 
-                if ($mediaId) {
-                    $token = env('WHATSAPP_TOKEN');
-                    // 1) Fetch media URL from Meta
-                    $metaMedia = \Illuminate\Support\Facades\Http::withToken($token)
-                         ->get("https://graph.facebook.com/v17.0/{$mediaId}");
-                         
-                    if ($metaMedia->successful() && isset($metaMedia['url'])) {
-                        $metaUrl = $metaMedia['url'];
-                        // 2) Download the actual binary using EXPLICIT token headers
-                        $mediaBinary = \Illuminate\Support\Facades\Http::withHeaders([
-                            'Authorization' => 'Bearer ' . $token
-                        ])->get($metaUrl);
+                // 1. Request Media URL from Meta API
+                $response = \Illuminate\Support\Facades\Http::withToken(env('WHATSAPP_TOKEN'))->get("https://graph.facebook.com/v17.0/{$imageId}");
+                
+                if ($response->successful() && isset($response['url'])) {
+                    $mediaUrl = $response['url'];
+                    
+                    // 2. Download the actual binary file from Meta
+                    $mediaResponse = \Illuminate\Support\Facades\Http::withToken(env('WHATSAPP_TOKEN'))->get($mediaUrl);
+                    
+                    if ($mediaResponse->successful()) {
+                        // Save to public storage
+                        $filename = 'whatsapp_media/' . uniqid('wa_') . '.jpg';
+                        \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                         
-                        if ($mediaBinary->successful()) {
-                            $mime = $metaMedia['mime_type'] ?? 'image/jpeg';
-                            $ext = explode('/', $mime)[1] ?? 'jpg';
-                            // Clean extension if it contains parameters
-                            $ext = explode(';', $ext)[0];
-                            
-                            $filename = "whatsapp/{$mediaId}_{$messageId}.{$ext}";
-                            
-                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaBinary->body());
-                            $mediaPath = env('APP_URL') . "/storage/" . $filename;
-                            \Illuminate\Support\Facades\Log::info("WhatsApp Image Downloaded Successfully", ['path' => $mediaPath]);
-                        } else {
-                            \Illuminate\Support\Facades\Log::error("WhatsApp Media Binary Download Failed", [
-                                'status' => $mediaBinary->status(),
-                                'response' => $mediaBinary->body(),
-                                'url' => $metaUrl
-                            ]);
-                        }
+                        // 3. Assign to variables BEFORE saving the message to DB
+                        $mediaPath = url('storage/' . $filename); 
+                        $body = $caption;
                     } else {
-                        \Illuminate\Support\Facades\Log::error("WhatsApp Media ID Fetch Failed", [
-                            'status' => $metaMedia->status(),
-                            'response' => $metaMedia->body(),
-                            'media_id' => $mediaId
-                        ]);
+                        \Illuminate\Support\Facades\Log::error('Meta Media Download Failed', ['body' => $mediaResponse->body()]);
                     }
+                } else {
+                    \Illuminate\Support\Facades\Log::error('Meta Media URL Request Failed', ['body' => $response->body()]);
                 }
             }
 
