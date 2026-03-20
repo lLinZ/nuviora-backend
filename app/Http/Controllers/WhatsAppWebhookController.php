@@ -48,7 +48,7 @@ class WhatsAppWebhookController extends Controller
                 $lat = $messageData['location']['latitude'] ?? '';
                 $lng = $messageData['location']['longitude'] ?? '';
                 $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
-            } elseif ($type === 'image') {
+            } elseif (isset($messageData['image']) || $type === 'image') {
                 $body = $messageData['image']['caption'] ?? '';
                 $mediaId = $messageData['image']['id'] ?? '';
                 
@@ -60,8 +60,10 @@ class WhatsAppWebhookController extends Controller
                          
                     if ($metaMedia->successful() && isset($metaMedia['url'])) {
                         $metaUrl = $metaMedia['url'];
-                        // 2) Download the actual binary using the token
-                        $mediaBinary = \Illuminate\Support\Facades\Http::withToken($token)->get($metaUrl);
+                        // 2) Download the actual binary using EXPLICIT token headers
+                        $mediaBinary = \Illuminate\Support\Facades\Http::withHeaders([
+                            'Authorization' => 'Bearer ' . $token
+                        ])->get($metaUrl);
                         
                         if ($mediaBinary->successful()) {
                             $mime = $metaMedia['mime_type'] ?? 'image/jpeg';
@@ -73,7 +75,20 @@ class WhatsAppWebhookController extends Controller
                             
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaBinary->body());
                             $mediaPath = env('APP_URL') . "/storage/" . $filename;
+                            \Illuminate\Support\Facades\Log::info("WhatsApp Image Downloaded Successfully", ['path' => $mediaPath]);
+                        } else {
+                            \Illuminate\Support\Facades\Log::error("WhatsApp Media Binary Download Failed", [
+                                'status' => $mediaBinary->status(),
+                                'response' => $mediaBinary->body(),
+                                'url' => $metaUrl
+                            ]);
                         }
+                    } else {
+                        \Illuminate\Support\Facades\Log::error("WhatsApp Media ID Fetch Failed", [
+                            'status' => $metaMedia->status(),
+                            'response' => $metaMedia->body(),
+                            'media_id' => $mediaId
+                        ]);
                     }
                 }
             }
