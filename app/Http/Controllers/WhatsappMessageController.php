@@ -87,63 +87,84 @@ class WhatsappMessageController extends Controller
 
     public function sendMedia(Request $request, $orderId)
     {
-        $request->validate([
-            'file' => 'required|file|mimes:jpeg,png,jpg,mp4|max:15000',
-        ]);
-
-        $order = \App\Models\Order::with('client')->findOrFail($orderId);
-        $phone = $order->client->phone;
-
-        $file = $request->file('file');
-        $extension = $file->getClientOriginalExtension();
-        $mime = $file->getMimeType();
-        $type = str_contains($mime, 'video') ? 'video' : 'image';
-        
-        $filename = 'whatsapp_media/' . uniqid('wa_out_') . '.' . $extension;
-        \Illuminate\Support\Facades\Storage::disk('public')->put($filename, file_get_contents($file->getRealPath()));
-        $publicMediaUrl = url('storage/' . $filename);
-
-        $phoneId = env('WHATSAPP_PHONE_NUMBER_ID');
-        $token = env('WHATSAPP_ACCESS_TOKEN');
-
-        $response = \Illuminate\Support\Facades\Http::withToken($token)
-            ->post("https://graph.facebook.com/v17.0/{$phoneId}/messages", [
-                'messaging_product' => 'whatsapp',
-                'recipient_type' => 'individual',
-                'to' => $phone,
-                'type' => $type,
-                $type => [
-                    'link' => $publicMediaUrl,
-                ]
+        try {
+            $request->validate([
+                'file' => 'required|file|mimes:jpeg,png,jpg,mp4|max:15000',
             ]);
 
-        $status = 'failed';
-        $messageId = null;
+            $order = \App\Models\Order::with('client')->findOrFail($orderId);
+            $rawPhone = $order->client->phone;
 
-        if ($response->successful()) {
-            $metaData = $response->json();
-            if (isset($metaData['messages'][0]['id'])) {
-                $status = 'sent';
-                $messageId = $metaData['messages'][0]['id'];
+            // Limpiador básico de teléfono igual a WhatsAppService
+            $phone = preg_replace('/[^0-9]/', '', $rawPhone);
+            if (strpos($phone, '04') === 0) {
+                $phone = '58' . substr($phone, 1);
+            } elseif (strlen($phone) === 10 && strpos($phone, '4') === 0) {
+                $phone = '58' . $phone;
             }
-        } else {
-            \Illuminate\Support\Facades\Log::error('Meta Media Send Failed', ['response' => $response->body()]);
+
+            $file = $request->file('file');
+            $extension = $file->getClientOriginalExtension();
+            $mime = $file->getMimeType();
+            $type = str_contains($mime, 'video') ? 'video' : 'image';
+            
+            $filename = 'whatsapp_media/' . uniqid('wa_out_') . '.' . $extension;
+            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, file_get_contents($file->getRealPath()));
+            $publicMediaUrl = url('storage/' . $filename);
+
+            $phoneId = env('WHATSAPP_PHONE_NUMBER_ID');
+            $token = env('WHATSAPP_ACCESS_TOKEN');
+
+            $status = 'failed';
+            $messageId = null;
+
+            if ($phoneId && $token) {
+                $response = \Illuminate\Support\Facades\Http::withToken($token)
+                    ->withoutVerifying()
+                    ->post("https://graph.facebook.com/v17.0/{$phoneId}/messages", [
+                        'messaging_product' => 'whatsapp',
+                        'recipient_type' => 'individual',
+                        'to' => $phone,
+                        'type' => $type,
+                        $type => [
+                            'link' => $publicMediaUrl,
+                        ]
+                    ]);
+
+                if ($response->successful()) {
+                    $metaData = $response->json();
+                    if (isset($metaData['messages'][0]['id'])) {
+                        $status = 'sent';
+                        $messageId = $metaData['messages'][0]['id'];
+                    }
+                } else {
+                    \Illuminate\Support\Facades\Log::error('Meta Media Send Failed', ['response' => $response->body()]);
+                }
+            }
+
+            $message = \App\Models\WhatsappMessage::create([
+                'order_id' => $order->id,
+                'body' => $type === 'video' ? '📽️ Video enviado' : '📷 Imagen enviada',
+                'media' => $publicMediaUrl,
+                'is_from_client' => false,
+                'status' => $status,
+                'message_id' => $messageId,
+                'sent_at' => now(),
+            ]);
+
+            $message->refresh();
+            event(new \App\Events\WhatsappMessageReceived($message));
+
+            return response()->json($message, 201);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("SendMedia Fatal Error: " . $e->getMessage());
+            return response()->json([
+                'error' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
+                'class' => get_class($e)
+            ], 500);
         }
-
-        $message = \App\Models\WhatsappMessage::create([
-            'order_id' => $order->id,
-            'body' => $type === 'video' ? '📽️ Video enviado' : '📷 Imagen enviada',
-            'media' => $publicMediaUrl,
-            'is_from_client' => false,
-            'status' => $status,
-            'message_id' => $messageId,
-            'sent_at' => now(),
-        ]);
-
-        $message->refresh();
-        event(new \App\Events\WhatsappMessageReceived($message));
-
-        return response()->json($message, 201);
     }
 
     public function markAsRead($orderId)
