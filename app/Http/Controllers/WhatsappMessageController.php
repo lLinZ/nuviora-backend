@@ -100,7 +100,7 @@ class WhatsappMessageController extends Controller
         $type = str_contains($mime, 'video') ? 'video' : 'image';
         
         $filename = 'whatsapp_media/' . uniqid('wa_out_') . '.' . $extension;
-        \Illuminate\Support\Facades\Storage::disk('public')->put($filename, file_get_contents($file));
+        \Illuminate\Support\Facades\Storage::disk('public')->put($filename, file_get_contents($file->getRealPath()));
         $publicMediaUrl = url('storage/' . $filename);
 
         $phoneId = env('WHATSAPP_PHONE_NUMBER_ID');
