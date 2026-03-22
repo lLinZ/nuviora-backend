@@ -104,11 +104,12 @@ class WhatsAppWebhookController extends Controller
                         }
                     }
                 }
-            } elseif ($type === 'audio' || isset($messageData['audio'])) {
-                $audioId = $messageData['audio']['id'];
-                $token = env('WHATSAPP_ACCESS_TOKEN');
+            } elseif ($type === 'audio' || $type === 'voice' || isset($messageData['audio']) || isset($messageData['voice'])) {
+                $audioData = $messageData['audio'] ?? ($messageData['voice'] ?? []);
+                $audioId   = $audioData['id'] ?? null;
+                $token     = env('WHATSAPP_ACCESS_TOKEN');
                 
-                if ($token) {
+                if ($token && $audioId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$audioId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
@@ -120,7 +121,11 @@ class WhatsAppWebhookController extends Controller
                         } else {
                             $body = "⚠️ Error descargando audio de Meta: Status " . $mediaResponse->status();
                         }
+                    } else {
+                        $body = "⚠️ Error obteniendo URL de audio de Meta: Status " . $response->status();
                     }
+                } else {
+                    $body = "🎵 Nota de voz recibida (sin archivo disponible)";
                 }
             }
 
