@@ -89,7 +89,7 @@ class WhatsappMessageController extends Controller
     {
         try {
             $request->validate([
-                'file' => 'required|file|mimes:jpeg,png,jpg,mp4|max:15000',
+                'file' => 'required|file|mimes:jpeg,png,jpg,mp4,ogg,mp3,wav|max:15000',
             ]);
 
             $order = \App\Models\Order::with('client')->findOrFail($orderId);
@@ -106,7 +106,14 @@ class WhatsappMessageController extends Controller
             $file = $request->file('file');
             $extension = $file->getClientOriginalExtension();
             $mime = $file->getMimeType();
-            $type = str_contains($mime, 'video') ? 'video' : 'image';
+            
+            if (str_contains($mime, 'video')) {
+                $type = 'video';
+            } elseif (str_contains($mime, 'audio')) {
+                $type = 'audio';
+            } else {
+                $type = 'image';
+            }
             
             $filename = 'whatsapp_media/' . uniqid('wa_out_') . '.' . $extension;
             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, file_get_contents($file->getRealPath()));
@@ -144,7 +151,7 @@ class WhatsappMessageController extends Controller
 
             $message = \App\Models\WhatsappMessage::create([
                 'order_id' => $order->id,
-                'body' => $type === 'video' ? '📽️ Video enviado' : '📷 Imagen enviada',
+                'body' => $type === 'video' ? '📽️ Video enviado' : ($type === 'audio' ? '🎵 Audio enviado' : '📷 Imagen enviada'),
                 'media' => $publicMediaUrl,
                 'is_from_client' => false,
                 'status' => $status,

@@ -104,6 +104,24 @@ class WhatsAppWebhookController extends Controller
                         }
                     }
                 }
+            } elseif ($type === 'audio' || isset($messageData['audio'])) {
+                $audioId = $messageData['audio']['id'];
+                $token = env('WHATSAPP_ACCESS_TOKEN');
+                
+                if ($token) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$audioId}");
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
+                        if ($mediaResponse->successful()) {
+                            $filename = 'whatsapp_media/' . uniqid('wa_audio_') . '.ogg';
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            $mediaPath = url('storage/' . $filename);
+                            $body = '🎵 Nota de voz';
+                        } else {
+                            $body = "⚠️ Error descargando audio de Meta: Status " . $mediaResponse->status();
+                        }
+                    }
+                }
             }
 
             // Normalize phone: strip non-digits, search by last 10 digits
