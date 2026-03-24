@@ -31,6 +31,7 @@ class WhatsAppWebhookController extends Controller
     public function handle(Request $request)
     {
         $payload = $request->all();
+        \Illuminate\Support\Facades\Log::info('WhatsApp Webhook Payload Received:', $payload);
 
         // Check if it's a message event
         if (isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
