@@ -38,3 +38,6 @@ Broadcast::channel('orders.{id}', function ($user, $id) {
            (int) $order->agency_id === (int) $user->id || 
            (int) $order->deliverer_id === (int) $user->id;
 });
+Broadcast::channel('whatsapp', function ($user) {
+    return in_array($user->role?->description, ['Admin', 'Gerente', 'Master', 'SuperAdmin']);
+});

@@ -44,7 +44,10 @@ class WhatsappMessageReceived implements ShouldBroadcast
     public function broadcastOn(): array
     {
         $order = $this->message->order;
-        $channels = [new PrivateChannel('orders')];
+        $channels = [
+            new PrivateChannel('orders'),
+            new PrivateChannel('whatsapp')
+        ];
 
         if ($order && $order->agency_id) {
             $channels[] = new PrivateChannel('orders.agency.' . $order->agency_id);
