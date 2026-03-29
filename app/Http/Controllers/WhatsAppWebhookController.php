@@ -147,9 +147,12 @@ class WhatsAppWebhookController extends Controller
                 ]);
             }
 
-            // 2. Update the "last received" vital for Meta's 24H window
+            // 2. Update the "last received" vital for Meta's 24H window + sorting
             $receivedAt = now();
-            $client->update(['last_whatsapp_received_at' => $receivedAt]);
+            $client->update([
+                'last_whatsapp_received_at' => $receivedAt,
+                'last_interaction_at' => $receivedAt
+            ]);
 
             // 3. Determine if there is an active Order to attach the thread
             $order = \App\Models\Order::where('client_id', $client->id)

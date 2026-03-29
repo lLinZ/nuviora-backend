@@ -62,7 +62,7 @@ class WhatsappConversationController extends Controller
             ->with(['orders' => function ($q) {
                 $q->with('status', 'shop', 'agent')->orderBy('created_at', 'desc')->limit(1);
             }])
-            ->orderByRaw('COALESCE(last_whatsapp_received_at, created_at) DESC')
+            ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
             ->paginate(50);
 
         // 4. Formatear la colección interna del paginador
@@ -75,6 +75,7 @@ class WhatsappConversationController extends Controller
                 'name' => $client->first_name . ' ' . $client->last_name,
                 'phone' => $client->phone,
                 'unread_count' => $client->unread_count,
+                'is_window_open' => $client->isWhatsappWindowOpen(),
                 'last_message' => $latestMessage ? $latestMessage->body : 'Sin mensajes',
                 'last_message_date' => $latestMessage ? $latestMessage->sent_at : $client->created_at,
                 'type' => $isOrphan ? 'lead' : 'order',
@@ -182,8 +183,8 @@ class WhatsappConversationController extends Controller
             }
         }
 
-        // 3. Update last_whatsapp_received_at to keep sorted in index
-        $client->update(['last_whatsapp_received_at' => now()]);
+        // 3. Update last_interaction_at to keep sorted in index (WITHOUT opening Meta window)
+        $client->update(['last_interaction_at' => now()]);
 
         $message->refresh();
         $message->load('client', 'order');

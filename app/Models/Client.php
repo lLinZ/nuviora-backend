@@ -23,10 +23,12 @@ class Client extends Model
         'address1',
         'address2',
         'last_whatsapp_received_at', // 👈 Anchor for Meta's 24-h messaging window
+        'last_interaction_at',
     ];
 
     protected $casts = [
         'last_whatsapp_received_at' => 'datetime',
+        'last_interaction_at' => 'datetime',
     ];
 
     /**
