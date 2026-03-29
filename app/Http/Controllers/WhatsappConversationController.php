@@ -138,6 +138,15 @@ class WhatsappConversationController extends Controller
         ]);
 
         $client = Client::findOrFail($clientId);
+        
+        // Validar ventana de 24 horas de Meta si no es un mensaje de plantilla
+        if (!$request->input('is_from_client', false) && !$request->filled('template_name')) {
+            if (!$client->isWhatsappWindowOpen()) {
+                return response()->json([
+                    'message' => 'La ventana de 24 horas de WhatsApp está cerrada para este cliente. Debe enviar una plantilla o esperar a que el cliente escriba.'
+                ], 403);
+            }
+        }
 
         // Fetch order context if applies (para retrocompatibilidad si es necesario)
         $latestOrder = \App\Models\Order::where('client_id', $client->id)->orderBy('created_at', 'desc')->first();
