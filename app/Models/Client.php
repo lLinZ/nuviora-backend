@@ -48,9 +48,19 @@ class Client extends Model
         return $this->hasMany(WhatsappMessage::class);
     }
 
+    public function latestWhatsappMessage()
+    {
+        return $this->hasOne(WhatsappMessage::class)->ofMany('sent_at', 'max');
+    }
+
     public function orders()
     {
         return $this->hasMany(Order::class);
+    }
+
+    public function latestOrder()
+    {
+        return $this->hasOne(Order::class)->latestOfMany();
     }
 
     public function whatsappConversations()

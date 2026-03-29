@@ -16,11 +16,21 @@ class WhatsappConversationController extends Controller
     public function index(Request $request)
     {
         $user = Auth::user();
-        $isAdmin = $user->role && in_array($user->role->description, ['Admin', 'Gerente', 'Master']);
+        $isAdmin = $user->role && in_array($user->role->description, ['Admin', 'Gerente', 'Master', 'SuperAdmin']);
+        $search = $request->query('search');
 
         $query = Client::query();
 
-        // 1. Filtrar visibilidad según el rol
+        // 1. Filtrar por búsqueda si se proporciona
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('phone', 'like', "%{$search}%")
+                  ->orWhere('first_name', 'like', "%{$search}%")
+                  ->orWhere('last_name', 'like', "%{$search}%");
+            });
+        }
+
+        // 2. Filtrar visibilidad según el rol
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
                 // Tienen una orden activa asignada a este vendedor
@@ -38,8 +48,8 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 2. Traer relaciones necesarias y contar mensajes no leídos
-        $clients = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
+        // 3. Traer relaciones necesarias y paginar
+        $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
             ->with(['whatsappConversations' => function ($q) use ($isAdmin, $user) {
@@ -48,20 +58,17 @@ class WhatsappConversationController extends Controller
                     $q->where('agent_id', $user->id);
                 }
             }])
+            ->with('latestWhatsappMessage')
             ->with(['orders' => function ($q) {
-                // Traer la orden más reciente para dar contexto en la UI
                 $q->with('status', 'shop', 'agent')->orderBy('created_at', 'desc')->limit(1);
             }])
-            ->get();
+            ->orderByRaw('COALESCE(last_whatsapp_received_at, created_at) DESC')
+            ->paginate(50);
 
-        // 3. Formatear y ordenar
-        $formatted = $clients->map(function ($client) {
-            $latestMessage = WhatsappMessage::where('client_id', $client->id)
-                                ->orderBy('sent_at', 'desc')
-                                ->first();
-
-            $isOrphan = $client->orders->isEmpty() || 
-                        ($client->whatsappConversations->isNotEmpty());
+        // 4. Formatear la colección interna del paginador
+        $paginator->getCollection()->transform(function ($client) {
+            $latestMessage = $client->latestWhatsappMessage;
+            $isOrphan = $client->orders->isEmpty() || ($client->whatsappConversations->isNotEmpty());
 
             return [
                 'id' => $client->id,
@@ -78,10 +85,7 @@ class WhatsappConversationController extends Controller
             ];
         });
 
-        // Ordenar por mensajes más recientes
-        $sorted = $formatted->sortByDesc('last_message_date')->values();
-
-        return response()->json($sorted);
+        return response()->json($paginator);
     }
 
     /**
@@ -177,6 +181,9 @@ class WhatsappConversationController extends Controller
                 $message->update(['status' => 'failed']);
             }
         }
+
+        // 3. Update last_whatsapp_received_at to keep sorted in index
+        $client->update(['last_whatsapp_received_at' => now()]);
 
         $message->refresh();
         $message->load('client', 'order');
