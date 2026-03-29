@@ -42,4 +42,14 @@ class Client extends Model
 
         return $this->last_whatsapp_received_at->diffInSeconds(now()) < 86400; // 24 * 60 * 60
     }
+
+    public function whatsappMessages()
+    {
+        return $this->hasMany(WhatsappMessage::class);
+    }
+
+    public function whatsappConversations()
+    {
+        return $this->hasMany(WhatsappConversation::class);
+    }
 }

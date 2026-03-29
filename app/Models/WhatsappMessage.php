@@ -6,15 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class WhatsappMessage extends Model
 {
-    protected $appends = ['client_id'];
-
-    public function getClientIdAttribute()
-    {
-        return $this->order ? $this->order->client_id : null;
-    }
-
     protected $fillable = [
         'order_id',
+        'client_id',
         'message_id',
         'body',
         'is_from_client',
@@ -32,5 +26,10 @@ class WhatsappMessage extends Model
     public function order()
     {
         return $this->belongsTo(Order::class);
+    }
+
+    public function client()
+    {
+        return $this->belongsTo(Client::class);
     }
 }

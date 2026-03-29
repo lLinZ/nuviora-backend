@@ -9,7 +9,7 @@ class DailyAgentRoster extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['date', 'agent_id', 'shop_id', 'is_active'];
+    protected $fillable = ['date', 'agent_id', 'shop_id', 'is_active', 'is_whatsapp_active'];
 
     public function shop()
     {

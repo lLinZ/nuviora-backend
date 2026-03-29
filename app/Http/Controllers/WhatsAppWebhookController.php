@@ -134,31 +134,87 @@ class WhatsAppWebhookController extends Controller
             $cleanPhone = preg_replace('/[^0-9]/', '', $from);
             $last10     = substr($cleanPhone, -10);
 
-            $order = \App\Models\Order::whereHas('client', function ($q) use ($last10) {
-                $q->where('phone', 'like', "%{$last10}");
-            })->orderBy('created_at', 'desc')->first();
+            // 1. Find or Create Client (Lead)
+            $client = \App\Models\Client::where('phone', 'like', "%{$last10}")->first();
+            if (!$client) {
+                // Mocking Shopify ID as we do in manual orders
+                $tempId = (int) (microtime(true) * 1000); 
+                $client = \App\Models\Client::create([
+                    'phone'           => '+' . $cleanPhone,
+                    'customer_id'     => $tempId,
+                    'customer_number' => $tempId,
+                    'first_name'      => '📱 Lead ' . $last10,
+                ]);
+            }
+
+            // 2. Update the "last received" vital for Meta's 24H window
+            $receivedAt = now();
+            $client->update(['last_whatsapp_received_at' => $receivedAt]);
+
+            // 3. Determine if there is an active Order to attach the thread
+            $order = \App\Models\Order::where('client_id', $client->id)
+                ->whereHas('status', function($q) {
+                    $q->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                })
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $orderId = null;
 
             if ($order) {
-                $receivedAt = now();
-                $order->client()->update(['last_whatsapp_received_at' => $receivedAt]);
+                $orderId = $order->id;
+                // Agent is automatically the one assigned to the order
+            } else {
+                // No active order -> Check for open Orphan Conversation
+                $conversation = \App\Models\WhatsappConversation::where('client_id', $client->id)
+                    ->where('status', 'open')
+                    ->first();
 
-                $msg = \App\Models\WhatsappMessage::updateOrCreate(
-                    [
-                        'message_id' => $messageId,
-                    ],
-                    [
-                        'order_id'      => $order->id,
-                        'body'          => $body,
-                        'media'         => $mediaPath,
-                        'is_from_client'=> true,
-                        'status'        => 'delivered',
-                        'sent_at'       => $receivedAt,
-                    ]
-                );
+                if (!$conversation) {
+                    // No conversation -> ROUND ROBIN Allocation
+                    // Find least busy agent active for whatsapp today
+                    $availableRoster = \App\Models\DailyAgentRoster::where('is_whatsapp_active', true)
+                        ->inRandomOrder()->first(); // Simple random allocation for now
+                    
+                    $agentId = null;
+                    $shopId = null;
+                    if ($availableRoster) {
+                        $agentId = $availableRoster->agent_id;
+                        $shopId = $availableRoster->shop_id;
+                    } else {
+                        // Fallback: Assign to Admin
+                        $admin = \App\Models\User::whereHas('role', function($q){ $q->where('description', 'Admin'); })->first();
+                        $agentId = $admin ? $admin->id : 1;
+                    }
 
-                $msg->refresh();
-                event(new \App\Events\WhatsappMessageReceived($msg));
+                    \App\Models\WhatsappConversation::create([
+                        'client_id' => $client->id,
+                        'agent_id' => $agentId,
+                        'shop_id' => $shopId,
+                        'status' => 'open'
+                    ]);
+                }
             }
+
+            // 4. Create the message
+            $msg = \App\Models\WhatsappMessage::updateOrCreate(
+                ['message_id' => $messageId],
+                [
+                    'order_id'      => $orderId,
+                    'client_id'     => $client->id,
+                    'body'          => $body,
+                    'media'         => $mediaPath,
+                    'is_from_client'=> true,
+                    'status'        => 'delivered',
+                    'sent_at'       => $receivedAt,
+                ]
+            );
+
+            $msg->refresh();
+            // Load relationships for real-time frontend mapping
+            $msg->load('client', 'order');
+            
+            event(new \App\Events\WhatsappMessageReceived($msg));
         }
 
         return response()->json(['status' => 'success']);

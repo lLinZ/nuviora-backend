@@ -279,6 +279,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/whatsapp-media', [\App\Http\Controllers\WhatsappMessageController::class, 'sendMedia']);
     Route::put('/orders/{order}/read-whatsapp', [\App\Http\Controllers\WhatsappMessageController::class, 'markAsRead']);
 
+    // --- CENTRALIZED WHATSAPP VIEW (NEW) ---
+    Route::get('/whatsapp-conversations', [\App\Http\Controllers\WhatsappConversationController::class, 'index']);
+    Route::get('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'show']);
+    Route::post('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'store']);
+    Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
+
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);
