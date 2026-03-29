@@ -48,6 +48,11 @@ class Client extends Model
         return $this->hasMany(WhatsappMessage::class);
     }
 
+    public function orders()
+    {
+        return $this->hasMany(Order::class);
+    }
+
     public function whatsappConversations()
     {
         return $this->hasMany(WhatsappConversation::class);
