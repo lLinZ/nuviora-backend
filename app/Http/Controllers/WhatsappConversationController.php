@@ -220,7 +220,10 @@ class WhatsappConversationController extends Controller
 
         $file = $request->file('file');
         $mime = $file->getMimeType();
-        $type = $this->getWhatsAppMediaType($mime);
+        $filename = $file->getClientOriginalName();
+        
+        // Detección robusta de tipo para WhatsApp
+        $type = $this->getWhatsAppMediaType($mime, $filename);
 
         // 1. Guardar localmente para persistencia en el CRM
         $path = $file->store('whatsapp_media', 'public');
@@ -249,7 +252,7 @@ class WhatsappConversationController extends Controller
             'order_id' => $latestOrder ? $latestOrder->id : null,
             'client_id' => $client->id,
             'message_id' => $sendResult['messages'][0]['id'],
-            'body' => $request->caption ?? ($type === 'audio' ? 'Nota de voz' : "Archivo {$type}"),
+            'body' => $request->caption ?? ($type === 'audio' ? 'Mensaje de voz' : "Archivo {$type}"),
             'is_from_client' => false,
             'status' => 'sent',
             'sent_at' => now(),
@@ -270,13 +273,22 @@ class WhatsappConversationController extends Controller
         return response()->json($message, 201);
     }
 
-    private function getWhatsAppMediaType($mime)
+    private function getWhatsAppMediaType($mime, $filename = '')
     {
         if (str_starts_with($mime, 'image/')) return 'image';
-        if ($mime === 'audio/ogg' || $mime === 'audio/webm' || str_contains($mime, 'opus')) return 'audio';
+        
+        // Si el nombre del archivo sugiere nota de voz o el mime es webm/ogg/opus, es AUDIO
+        if (str_contains(strtolower($filename), 'voice-note') || 
+            str_contains($mime, 'audio/') || 
+            str_contains($mime, 'webm') || 
+            str_contains($mime, 'ogg') || 
+            str_contains($mime, 'opus')) {
+            return 'audio';
+        }
+
         if (str_starts_with($mime, 'video/mp4')) return 'video';
-        if (str_starts_with($mime, 'audio/')) return 'audio';
         if (str_starts_with($mime, 'video/')) return 'video';
+        
         return 'document';
     }
 }
