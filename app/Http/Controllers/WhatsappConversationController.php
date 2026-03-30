@@ -198,4 +198,83 @@ class WhatsappConversationController extends Controller
 
         return response()->json($message, 201);
     }
+
+    /**
+     * Enviar multimedia (foto, video, audio) desde el CRM.
+     */
+    public function sendMedia(Request $request, $clientId)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:jpg,jpeg,png,mp4,ogg,webm,mp3,wav|max:16384', // 16MB max
+            'caption' => 'nullable|string'
+        ]);
+
+        $client = Client::findOrFail($clientId);
+        
+        // Validar ventana de 24 horas
+        if (!$client->isWhatsappWindowOpen()) {
+            return response()->json([
+                'message' => 'La ventana de 24 horas de WhatsApp está cerrada para este cliente. No se puede enviar multimedia libre.'
+            ], 403);
+        }
+
+        $file = $request->file('file');
+        $mime = $file->getMimeType();
+        $type = $this->getWhatsAppMediaType($mime);
+
+        // 1. Guardar localmente para persistencia en el CRM
+        $path = $file->store('whatsapp_media', 'public');
+        $fullLocalPath = storage_path('app/public/' . $path);
+        $publicUrl = asset('storage/' . $path);
+
+        // 2. Subir a Meta y Enviar
+        $service = new \App\Services\WhatsAppService();
+        $uploadResult = $service->uploadMedia($fullLocalPath, $type);
+
+        if (!$uploadResult || !isset($uploadResult['id'])) {
+            return response()->json(['message' => 'Error al subir archivo a WhatsApp'], 500);
+        }
+
+        $mediaId = $uploadResult['id'];
+        $sendResult = $service->sendMedia($client->phone, $mediaId, $type, $request->caption);
+
+        if (!$sendResult || !isset($sendResult['messages'][0]['id'])) {
+            return response()->json(['message' => 'Error al enviar multimedia por WhatsApp'], 500);
+        }
+
+        // 3. Persistir en DB
+        $latestOrder = \App\Models\Order::where('client_id', $client->id)->orderBy('created_at', 'desc')->first();
+        
+        $message = WhatsappMessage::create([
+            'order_id' => $latestOrder ? $latestOrder->id : null,
+            'client_id' => $client->id,
+            'message_id' => $sendResult['messages'][0]['id'],
+            'body' => $request->caption ?? ($type === 'audio' ? 'Nota de voz' : "Archivo {$type}"),
+            'is_from_client' => false,
+            'status' => 'sent',
+            'sent_at' => now(),
+            'media' => [
+                'id' => $mediaId,
+                'link' => $publicUrl,
+                'mime_type' => $mime,
+                'type' => $type
+            ]
+        ]);
+
+        // Actualizar última interacción
+        $client->update(['last_interaction_at' => now()]);
+
+        $message->load('client', 'order');
+        event(new \App\Events\WhatsappMessageReceived($message));
+
+        return response()->json($message, 201);
+    }
+
+    private function getWhatsAppMediaType($mime)
+    {
+        if (str_starts_with($mime, 'image/')) return 'image';
+        if (str_starts_with($mime, 'video/')) return 'video';
+        if (str_starts_with($mime, 'audio/')) return 'audio';
+        return 'document';
+    }
 }

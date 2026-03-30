@@ -281,8 +281,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // --- CENTRALIZED WHATSAPP VIEW (NEW) ---
     Route::get('/whatsapp-conversations', [\App\Http\Controllers\WhatsappConversationController::class, 'index']);
-    Route::get('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'show']);
+    Route::get('/whatsapp-conversations/{client}', [\App\Http\Controllers\WhatsappConversationController::class, 'show']);
     Route::post('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'store']);
+    Route::post('/whatsapp-conversations/{client}/media', [\App\Http\Controllers\WhatsappConversationController::class, 'sendMedia']);
     Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
 
     // --- CRM Assignment & Shift Management (Automated Roster) ---

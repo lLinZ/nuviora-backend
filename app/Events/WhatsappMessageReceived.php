@@ -29,8 +29,8 @@ class WhatsappMessageReceived implements ShouldBroadcast
     {
         return [
             'message' => array_merge($this->message->toArray(), [
-                'client_id' => $this->message->order?->client_id,
-                'agent_id'  => $this->message->order?->agent_id,
+                'client_id' => $this->message->client_id ?? $this->message->order?->client_id,
+                'agent_id'  => $this->message->client?->agent_id ?? $this->message->order?->agent_id,
                 'agency_id' => $this->message->order?->agency_id,
             ])
         ];

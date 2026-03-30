@@ -105,6 +105,88 @@ class WhatsAppService
         }
     }
 
+    /**
+     * Upload media to Meta WhatsApp servers.
+     */
+    public function uploadMedia($filePath, $type)
+    {
+        $url = "{$this->baseUrl}/{$this->phoneNumberId}/media";
+
+        try {
+            $response = Http::withToken($this->accessToken)
+                ->withoutVerifying()
+                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->post($url, [
+                    'messaging_product' => 'whatsapp',
+                    'type' => $type
+                ]);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+
+            Log::error('WhatsApp Media Upload Error', [
+                'status' => $response->status(),
+                'body' => $response->body()
+            ]);
+
+            return false;
+        } catch (\Exception $e) {
+            Log::error('WhatsApp Media Upload Exception', [
+                'message' => $e->getMessage()
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Send a media message (image, video, audio) using a media ID.
+     */
+    public function sendMedia($to, $mediaId, $type, $caption = null)
+    {
+        $cleanTo = $this->cleanNumber($to);
+        $url = "{$this->baseUrl}/{$this->phoneNumberId}/messages";
+
+        $data = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $cleanTo,
+            'type' => $type,
+            $type => [
+                'id' => $mediaId
+            ]
+        ];
+
+        if ($caption && in_array($type, ['image', 'video', 'document'])) {
+            $data[$type]['caption'] = $caption;
+        }
+
+        try {
+            $response = Http::withToken($this->accessToken)
+                ->withoutVerifying()
+                ->post($url, $data);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+
+            Log::error('WhatsApp Media Send Error', [
+                'type' => $type,
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'to' => $cleanTo
+            ]);
+
+            return false;
+        } catch (\Exception $e) {
+            Log::error('WhatsApp Media Send Exception', [
+                'message' => $e->getMessage(),
+                'to' => $cleanTo
+            ]);
+            return false;
+        }
+    }
+
     private function cleanNumber($to)
     {
         $cleanTo = preg_replace('/[^0-9]/', '', $to);
