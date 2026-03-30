@@ -273,8 +273,10 @@ class WhatsappConversationController extends Controller
     private function getWhatsAppMediaType($mime)
     {
         if (str_starts_with($mime, 'image/')) return 'image';
-        if (str_starts_with($mime, 'video/')) return 'video';
+        if ($mime === 'audio/ogg' || $mime === 'audio/webm' || str_contains($mime, 'opus')) return 'audio';
+        if (str_starts_with($mime, 'video/mp4')) return 'video';
         if (str_starts_with($mime, 'audio/')) return 'audio';
+        if (str_starts_with($mime, 'video/')) return 'video';
         return 'document';
     }
 }
