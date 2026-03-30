@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\WhatsappConversation;
 use App\Models\WhatsappMessage;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class WhatsappConversationController extends Controller
 {
@@ -222,20 +223,45 @@ class WhatsappConversationController extends Controller
         $mime = $file->getMimeType();
         $filename = $file->getClientOriginalName();
         
-        // Detección robusta de tipo para WhatsApp
-        $type = $this->getWhatsAppMediaType($mime, $filename);
-
         // 1. Guardar localmente para persistencia en el CRM
         $path = $file->store('whatsapp_media', 'public');
         $fullLocalPath = storage_path('app/public/' . $path);
+        
+        // --- TRANSCODING LOGIC PARA BURBUJA NATIVA ---
+        // Si es webm (lo que envía Chrome), intentamos convertir a ogg/opus para WhatsApp
+        if (str_contains($mime, 'webm') || str_ends_with($filename, '.webm')) {
+            $oggPath = str_replace(['.webm', '.webm'], '.ogg', $fullLocalPath);
+            
+            // Ejecutar ffmpeg para convertir a ogg opus (formato nativo de notas de voz)
+            // -c:a libopus es el codec que WhatsApp requiere para la burbuja
+            $cmd = "ffmpeg -i \"$fullLocalPath\" -c:a libopus \"$oggPath\" 2>&1";
+            exec($cmd, $output, $returnVar);
+
+            if ($returnVar === 0 && file_exists($oggPath)) {
+                // Si la conversión fue exitosa, usamos el nuevo archivo para Meta
+                $fullLocalPath = $oggPath;
+                $path = str_replace(['.webm', '.webm'], '.ogg', $path);
+                $mime = 'audio/ogg';
+            } else {
+                Log::warning('FFMPEG Transcoding failed for Voice Note', [
+                    'cmd' => $cmd,
+                    'output' => $output,
+                    'returnVar' => $returnVar
+                ]);
+                // Si falla, seguimos con el original (llegará como archivo/video según el mime)
+            }
+        }
+        // ---------------------------------------------
+
         $publicUrl = asset('storage/' . $path);
+        $type = $this->getWhatsAppMediaType($mime, $filename);
 
         // 2. Subir a Meta y Enviar
         $service = new \App\Services\WhatsAppService();
         $uploadResult = $service->uploadMedia($fullLocalPath, $type);
 
         if (!$uploadResult || !isset($uploadResult['id'])) {
-            return response()->json(['message' => 'Error al subir archivo a WhatsApp'], 500);
+            return response()->json(['message' => 'Error al subir archivo a WhatsApp. ¿Está instalado FFMPEG?'], 500);
         }
 
         $mediaId = $uploadResult['id'];
@@ -277,15 +303,14 @@ class WhatsappConversationController extends Controller
     {
         if (str_starts_with($mime, 'image/')) return 'image';
         
-        // Si el nombre del archivo sugiere nota de voz o el mime es webm/ogg/opus, es AUDIO
+        // Si el nombre del archivo sugiere nota de voz o el mime es ogg/opus, es AUDIO
         if (str_contains(strtolower($filename), 'voice-note') || 
-            str_contains($mime, 'audio/') || 
-            str_contains($mime, 'webm') || 
-            str_contains($mime, 'ogg') || 
+            $mime === 'audio/ogg' || 
             str_contains($mime, 'opus')) {
             return 'audio';
         }
 
+        if (str_starts_with($mime, 'audio/')) return 'audio';
         if (str_starts_with($mime, 'video/mp4')) return 'video';
         if (str_starts_with($mime, 'video/')) return 'video';
         
