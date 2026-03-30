@@ -33,17 +33,14 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar visibilidad según el rol
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                // Tienen una orden activa asignada a este vendedor
-                $q->whereHas('orders', function ($oq) use ($user) {
+                // Asignado directamente al cliente (Lead o Re-asignación)
+                $q->where('agent_id', $user->id)
+                // O Tienen una orden activa asignada a este vendedor
+                ->orWhereHas('orders', function ($oq) use ($user) {
                     $oq->where('agent_id', $user->id)
                        ->whereHas('status', function($sq) {
                            $sq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
                        });
-                })
-                // O tienen una conversación huérfana asignada a este vendedor
-                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)
-                       ->where('status', 'open');
                 });
             });
         }
@@ -52,7 +49,7 @@ class WhatsappConversationController extends Controller
         $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
-            ->with(['whatsappConversations' => function ($q) use ($isAdmin, $user) {
+            ->with(['agent', 'whatsappConversations' => function ($q) use ($isAdmin, $user) {
                 $q->where('status', 'open');
                 if (!$isAdmin) {
                     $q->where('agent_id', $user->id);
@@ -78,9 +75,9 @@ class WhatsappConversationController extends Controller
                 'is_window_open' => $client->isWhatsappWindowOpen(),
                 'last_message' => $latestMessage ? $latestMessage->body : 'Sin mensajes',
                 'last_message_date' => $latestMessage ? $latestMessage->sent_at : $client->created_at,
-                'type' => $isOrphan ? 'lead' : 'order',
                 'context' => [
                     'order' => $client->orders->first(),
+                    'agent' => $client->agent,
                     'conversation' => $client->whatsappConversations->first(),
                 ]
             ];

@@ -24,12 +24,19 @@ class Client extends Model
         'address2',
         'last_whatsapp_received_at', // 👈 Anchor for Meta's 24-h messaging window
         'last_interaction_at',
+        'agent_id',
     ];
 
     protected $casts = [
         'last_whatsapp_received_at' => 'datetime',
         'last_interaction_at' => 'datetime',
+        'agent_id' => 'integer',
     ];
+
+    public function agent()
+    {
+        return $this->belongsTo(User::class, 'agent_id');
+    }
 
     /**
      * Returns true if the Meta 24-hour free-text window is currently open.

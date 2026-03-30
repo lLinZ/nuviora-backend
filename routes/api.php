@@ -285,6 +285,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'store']);
     Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
 
+    // --- CRM Assignment & Shift Management (Automated Roster) ---
+    Route::get('/crm/agents', [\App\Http\Controllers\CrmAssignmentController::class, 'index']);
+    Route::post('/crm/agents/{id}/toggle', [\App\Http\Controllers\CrmAssignmentController::class, 'toggleStatus']);
+    Route::post('/crm/clients/{clientId}/assign', [\App\Http\Controllers\CrmAssignmentController::class, 'assign']);
 
     Route::get('/currency', [CurrencyController::class, 'show']);
     Route::post('/currency', [CurrencyController::class, 'create']);

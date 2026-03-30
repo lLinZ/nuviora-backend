@@ -109,6 +109,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_lite_view' => 'boolean',
+            'is_active_crm' => 'boolean',
         ];
     }
 }

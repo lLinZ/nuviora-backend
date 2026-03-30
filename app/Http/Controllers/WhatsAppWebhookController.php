@@ -147,6 +147,11 @@ class WhatsAppWebhookController extends Controller
                 ]);
             }
 
+            // [NEW] Lead Assignment
+            if (!$client->agent_id) {
+                \App\Services\CrmAssignmentService::assignNextAgent($client);
+            }
+
             // 2. Update the "last received" vital for Meta's 24H window + sorting
             $receivedAt = now();
             $client->update([
