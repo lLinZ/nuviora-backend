@@ -229,26 +229,34 @@ class WhatsappConversationController extends Controller
         
         // --- TRANSCODING LOGIC PARA BURBUJA NATIVA ---
         // Si es webm (lo que envía Chrome), intentamos convertir a ogg/opus para WhatsApp
-        if (str_contains($mime, 'webm') || str_ends_with($filename, '.webm')) {
-            $oggPath = str_replace(['.webm', '.webm'], '.ogg', $fullLocalPath);
+        if (str_contains($mime, 'webm') || str_ends_with($filename, '.webm') || str_contains($path, '.webm')) {
+            $oggPath = str_replace('.webm', '.ogg', $fullLocalPath);
+            $ffmpegPath = env('FFMPEG_PATH', 'ffmpeg');
             
             // Ejecutar ffmpeg para convertir a ogg opus (formato nativo de notas de voz)
-            // -c:a libopus es el codec que WhatsApp requiere para la burbuja
-            $cmd = "ffmpeg -i \"$fullLocalPath\" -c:a libopus \"$oggPath\" 2>&1";
+            // -y: Sobrescribir si existe
+            // -c:a libopus: Codec de voz nativa de WhatsApp
+            $cmd = "{$ffmpegPath} -y -i \"$fullLocalPath\" -c:a libopus \"$oggPath\" 2>&1";
             exec($cmd, $output, $returnVar);
+
+            Log::info('FFMPEG Transcoding Log', [
+                'cmd' => $cmd,
+                'path_exists' => file_exists($fullLocalPath),
+                'returnVar' => $returnVar,
+                'output' => $output
+            ]);
 
             if ($returnVar === 0 && file_exists($oggPath)) {
                 // Si la conversión fue exitosa, usamos el nuevo archivo para Meta
                 $fullLocalPath = $oggPath;
-                $path = str_replace(['.webm', '.webm'], '.ogg', $path);
+                $path = str_replace('.webm', '.ogg', $path);
                 $mime = 'audio/ogg';
+                $filename = str_replace('.webm', '.ogg', $filename);
             } else {
-                Log::warning('FFMPEG Transcoding failed for Voice Note', [
-                    'cmd' => $cmd,
-                    'output' => $output,
-                    'returnVar' => $returnVar
+                Log::warning('FFMPEG Transcoding failed for Voice Note. Falling back to original.', [
+                    'returnVar' => $returnVar,
+                    'output' => $output
                 ]);
-                // Si falla, seguimos con el original (llegará como archivo/video según el mime)
             }
         }
         // ---------------------------------------------
