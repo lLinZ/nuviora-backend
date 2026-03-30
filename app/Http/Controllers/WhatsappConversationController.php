@@ -228,35 +228,43 @@ class WhatsappConversationController extends Controller
         $fullLocalPath = storage_path('app/public/' . $path);
         
         // --- TRANSCODING LOGIC PARA BURBUJA NATIVA ---
-        // Si es webm (lo que envía Chrome), intentamos convertir a ogg/opus para WhatsApp
-        if (str_contains($mime, 'webm') || str_ends_with($filename, '.webm') || str_contains($path, '.webm')) {
-            $oggPath = str_replace('.webm', '.ogg', $fullLocalPath);
-            $ffmpegPath = env('FFMPEG_PATH', 'ffmpeg');
+        // Forzamos conversión si el nombre contiene "voice-note" (independientemente del mime detectado)
+        $isVoiceRecording = str_contains(strtolower($filename), 'voice-note');
+        
+        if ($isVoiceRecording || str_contains($mime, 'webm') || str_ends_with($filename, '.webm')) {
+            $oggPath = str_replace(['.webm', '.mp4'], '.ogg', $fullLocalPath);
+            if (!str_ends_with($oggPath, '.ogg')) $oggPath .= '.ogg';
             
+            // Buscar FFmpeg en rutas comunes si no está en el PATH
+            $ffmpegPath = env('FFMPEG_PATH', 'ffmpeg');
+            if ($ffmpegPath === 'ffmpeg') {
+                if (file_exists('/usr/bin/ffmpeg')) $ffmpegPath = '/usr/bin/ffmpeg';
+                elseif (file_exists('/usr/local/bin/ffmpeg')) $ffmpegPath = '/usr/local/bin/ffmpeg';
+            }
+
             // Ejecutar ffmpeg para convertir a ogg opus (formato nativo de notas de voz)
-            // -y: Sobrescribir si existe
-            // -c:a libopus: Codec de voz nativa de WhatsApp
-            $cmd = "{$ffmpegPath} -y -i \"$fullLocalPath\" -c:a libopus \"$oggPath\" 2>&1";
+            // -ac 1 -ar 16000: Parámetros específicos para máxima compatibilidad con Meta
+            $cmd = "{$ffmpegPath} -y -i \"$fullLocalPath\" -c:a libopus -ac 1 -ar 16000 \"$oggPath\" 2>&1";
             exec($cmd, $output, $returnVar);
 
-            Log::info('FFMPEG Transcoding Log', [
-                'cmd' => $cmd,
-                'path_exists' => file_exists($fullLocalPath),
+            Log::info('FFMPEG Transcoding Attempt', [
+                'command' => $cmd,
+                'found_at' => $ffmpegPath,
                 'returnVar' => $returnVar,
                 'output' => $output
             ]);
 
             if ($returnVar === 0 && file_exists($oggPath)) {
-                // Si la conversión fue exitosa, usamos el nuevo archivo para Meta
+                // Éxito: Usamos el nuevo archivo OGG
                 $fullLocalPath = $oggPath;
-                $path = str_replace('.webm', '.ogg', $path);
-                $mime = 'audio/ogg';
-                $filename = str_replace('.webm', '.ogg', $filename);
+                $path = str_replace(['.webm', '.mp4'], '.ogg', $path);
+                if (!str_ends_with($path, '.ogg')) $path .= '.ogg';
+                
+                $mime = 'audio/ogg'; // Forzar mime correcto para Meta
+                $filename = str_replace(['.webm', '.mp4'], '.ogg', $filename);
+                if (!str_ends_with($filename, '.ogg')) $filename .= '.ogg';
             } else {
-                Log::warning('FFMPEG Transcoding failed for Voice Note. Falling back to original.', [
-                    'returnVar' => $returnVar,
-                    'output' => $output
-                ]);
+                Log::warning('FFMPEG Transcoding FAILED. falling back to original file.');
             }
         }
         // ---------------------------------------------
