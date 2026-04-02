@@ -27,7 +27,7 @@ class WebhookService
                 Http::post($webhook->url, [
                     'event' => $eventType,
                     'timestamp' => now()->toIso8601String(),
-                    'data' => $order->load(['status', 'client', 'agent', 'shop']),
+                    'data' => $order->load(['status', 'client', 'agent', 'shop', 'products', 'city', 'province', 'payments']),
                 ]);
                 
                 Log::info("Webhook sent successfully", ['url' => $webhook->url, 'order_id' => $order->id]);
