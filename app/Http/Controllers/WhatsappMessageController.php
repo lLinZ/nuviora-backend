@@ -15,12 +15,10 @@ class WhatsappMessageController extends Controller
         $order = \App\Models\Order::findOrFail($orderId);
         $clientId = $order->client_id;
 
-        // Fetch messages for ALL orders belonging to this client
-        $messages = \App\Models\WhatsappMessage::whereHas('order', function($q) use ($clientId) {
-            $q->where('client_id', $clientId);
-        })
-        ->orderBy('created_at', 'desc')
-        ->paginate($perPage);
+        // Fetch messages for this client (all conversations)
+        $messages = \App\Models\WhatsappMessage::where('client_id', $clientId)
+            ->orderBy('created_at', 'desc')
+            ->paginate($perPage);
 
         return response()->json($messages);
     }
@@ -39,6 +37,7 @@ class WhatsappMessageController extends Controller
         // 1. Persist to DB
         $message = \App\Models\WhatsappMessage::create([
             'order_id' => $order->id,
+            'client_id' => $order->client_id,
             'body' => $request->body,
             'is_from_client' => $request->input('is_from_client', false),
             'status' => 'sending',
@@ -151,6 +150,7 @@ class WhatsappMessageController extends Controller
 
             $message = \App\Models\WhatsappMessage::create([
                 'order_id' => $order->id,
+                'client_id' => $order->client_id,
                 'body' => $type === 'video' ? '📽️ Video enviado' : ($type === 'audio' ? '🎵 Audio enviado' : '📷 Imagen enviada'),
                 'media' => $publicMediaUrl,
                 'is_from_client' => false,

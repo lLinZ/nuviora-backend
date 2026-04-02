@@ -372,3 +372,4 @@ Route::middleware('auth:sanctum')->group(function () {
     // TEST NOTIFICATIONS
     Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);
 });
+

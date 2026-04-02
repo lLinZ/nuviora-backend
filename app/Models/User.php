@@ -75,7 +75,8 @@ class User extends Authenticatable
         'status_id',
         'agency_id',
         'delivery_cost',
-        'is_lite_view'
+        'is_lite_view',
+        'is_active_crm'
     ];
 
     public function deliverers()
