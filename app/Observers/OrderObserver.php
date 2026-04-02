@@ -12,10 +12,12 @@ use App\Models\WhatsappMessage;
 class OrderObserver
 {
     protected $whatsappService;
+    protected $webhookService;
 
-    public function __construct(WhatsAppService $whatsappService)
+    public function __construct(WhatsAppService $whatsappService, \App\Services\WebhookService $webhookService)
     {
         $this->whatsappService = $whatsappService;
+        $this->webhookService = $webhookService;
     }
 
     public function created(Order $order): void
@@ -109,6 +111,11 @@ class OrderObserver
                 'description' => implode(' | ', $descriptions),
                 'properties'  => $properties,
             ]);
+        }
+
+        // Trigger Outgoing Webhooks if status changed
+        if ($order->wasChanged('status_id')) {
+            $this->webhookService->trigger('order.status_changed', $order);
         }
     }
 

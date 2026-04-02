@@ -371,5 +371,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // TEST NOTIFICATIONS
     Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);
+
+    /**---------------------
+     * WEBHOOKS (OUTGOING)
+     * ---------------------**/
+    Route::apiResource('webhooks', \App\Http\Controllers\WebhookController::class);
 });
 
