@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Webhook;
+use Illuminate\Support\Facades\Log;
 
 class WebhookController extends Controller
 {
@@ -21,7 +22,33 @@ class WebhookController extends Controller
      */
     public function store(Request $request)
     {
-        //
+        $request->validate([
+            'name' => 'required|string',
+            'url' => 'required|url',
+            'status_id' => 'nullable|integer',
+        ]);
+
+        try {
+            $webhook = new Webhook();
+            $webhook->name = $request->name;
+            $webhook->url = $request->url;
+            $webhook->status_id = $request->status_id === 'all' ? null : $request->status_id;
+            $webhook->event_type = $request->event_type ?? 'order.status_changed';
+            $webhook->is_active = true;
+            $webhook->save();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Webhook creado exitosamente',
+                'data' => $webhook->load('status')
+            ], 201);
+        } catch (\Exception $e) {
+            \Log::error('Error creating webhook: ' . $e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Error al crear: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
