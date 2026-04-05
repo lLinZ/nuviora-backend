@@ -126,7 +126,7 @@ class WhatsappConversationController extends Controller
 
                 if ($tpl && !empty($tpl->meta_components)) {
                     $vars = $request->vars ?? [];
-                    Log::critical("DEBUG_WA: Enviando plantilla " . $request->template_name);
+                    Log::critical("DEBUG_WA: Enviando plantilla estructurada " . $request->template_name);
 
                     foreach ($tpl->meta_components as $component) {
                         $rawType = strtoupper($component['type'] ?? '');
@@ -152,6 +152,13 @@ class WhatsappConversationController extends Controller
                                 'parameters' => $parameters
                             ];
                         }
+                    }
+                } else {
+                    // Fallback for simple/old templates or missing metadata
+                    if ($request->has('vars')) {
+                        Log::critical("DEBUG_WA: Fallback Body parameters for " . $request->template_name);
+                        $parameters = array_map(fn($v) => ['type' => 'text', 'text' => (string)$v], $request->vars);
+                        $components[] = ['type' => 'body', 'parameters' => $parameters];
                     }
                 }
 

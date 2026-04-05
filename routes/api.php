@@ -275,7 +275,9 @@ Route::middleware('auth:sanctum')->group(function () {
      * ---------------------**/
     Route::get('/whatsapp-templates/meta', [\App\Http\Controllers\WhatsappTemplateController::class, 'metaTemplates']);
     Route::post('/whatsapp-templates/import-meta', [\App\Http\Controllers\WhatsappTemplateController::class, 'importFromMeta']);
-    Route::apiResource('whatsapp-templates', \App\Http\Controllers\WhatsappTemplateController::class);
+    Route::put('/whatsapp-templates/{id}', [\App\Http\Controllers\WhatsappTemplateController::class, 'update']);
+    Route::delete('/whatsapp-templates/{id}', [\App\Http\Controllers\WhatsappTemplateController::class, 'destroy']);
+    Route::apiResource('whatsapp-templates', \App\Http\Controllers\WhatsappTemplateController::class)->except(['update', 'destroy']);
     Route::get('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'index']);
     Route::post('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'store']);
     Route::post('/orders/{order}/whatsapp-media', [\App\Http\Controllers\WhatsappMessageController::class, 'sendMedia']);

@@ -23,10 +23,11 @@ class WhatsappTemplateController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'name'        => 'required|string|unique:whatsapp_templates,name',
-            'label'       => 'required|string',
-            'body'        => 'required|string',
-            'is_official' => 'boolean',
+            'name'            => 'required|string|unique:whatsapp_templates,name',
+            'label'           => 'required|string',
+            'body'            => 'required|string',
+            'is_official'     => 'boolean',
+            'meta_components' => 'nullable|array',
         ]);
 
         $template = WhatsappTemplate::create($data);
@@ -45,18 +46,21 @@ class WhatsappTemplateController extends Controller
     /**
      * Update the specified resource in storage.
      */
-    public function update(Request $request, WhatsappTemplate $whatsappTemplate)
+    public function update(Request $request, $id)
     {
+        $template = WhatsappTemplate::findOrFail($id);
+
         $data = $request->validate([
-            'name'        => 'string|unique:whatsapp_templates,name,' . $whatsappTemplate->id,
-            'label'       => 'string',
-            'body'        => 'string',
-            'is_official' => 'boolean',
+            'name'            => 'string|unique:whatsapp_templates,name,' . $template->id,
+            'label'           => 'string',
+            'body'            => 'string',
+            'is_official'     => 'boolean',
+            'meta_components' => 'nullable|array',
         ]);
 
-        $whatsappTemplate->update($data);
+        $template->update($data);
 
-        return response()->json($whatsappTemplate);
+        return response()->json($template);
     }
 
     /**
