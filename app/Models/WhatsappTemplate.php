@@ -11,5 +11,11 @@ class WhatsappTemplate extends Model
         'label',
         'body',
         'is_official',
+        'meta_components',
+    ];
+
+    protected $casts = [
+        'is_official'     => 'boolean',
+        'meta_components' => 'array',
     ];
 }

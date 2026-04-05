@@ -111,17 +111,19 @@ class WhatsappTemplateController extends Controller
     public function importFromMeta(Request $request)
     {
         $data = $request->validate([
-            'name'  => 'required|string',
-            'label' => 'required|string',
-            'body'  => 'required|string',
+            'name'            => 'required|string',
+            'label'           => 'required|string',
+            'body'            => 'required|string',
+            'meta_components' => 'nullable|array',
         ]);
 
         $template = WhatsappTemplate::updateOrCreate(
             ['name' => $data['name']],
             [
-                'label'       => $data['label'],
-                'body'        => $data['body'],
-                'is_official' => true,
+                'label'           => $data['label'],
+                'body'            => $data['body'],
+                'is_official'     => true,
+                'meta_components' => $data['meta_components'] ?? null,
             ]
         );
 

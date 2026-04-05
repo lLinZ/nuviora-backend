@@ -165,16 +165,47 @@ class WhatsappConversationController extends Controller
             
             if ($request->filled('template_name')) {
                 $components = [];
-                if ($request->has('vars')) {
+
+                // Load the template from DB to get stored meta_components
+                $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
+
+                if ($tpl && !empty($tpl->meta_components)) {
+                    // Build components dynamically based on what Meta says the template has
+                    $vars = $request->vars ?? [];
+                    foreach ($tpl->meta_components as $component) {
+                        $type = strtolower($component['type'] ?? '');
+
+                        // Only HEADER and BODY can have text parameters
+                        if (!in_array($type, ['header', 'body'])) continue;
+
+                        // Count how many {{N}} placeholders this component has
+                        $text = $component['text'] ?? '';
+                        preg_match_all('/\{\{\d+\}\}/', $text, $matches);
+                        $paramCount = count(array_unique($matches[0]));
+
+                        if ($paramCount === 0) continue;
+
+                        // Map positional vars to parameters
+                        $parameters = [];
+                        for ($i = 0; $i < $paramCount; $i++) {
+                            $value = $vars[$i] ?? '';
+                            $parameters[] = ['type' => 'text', 'text' => $value];
+                        }
+
+                        $components[] = [
+                            'type'       => $type,
+                            'parameters' => $parameters,
+                        ];
+                    }
+                } elseif ($request->has('vars')) {
+                    // Fallback: old behavior — only send body params
                     $parameters = [];
                     foreach ($request->vars as $v) {
                         $parameters[] = ['type' => 'text', 'text' => $v];
                     }
-                    $components[] = [
-                        'type' => 'body',
-                        'parameters' => $parameters
-                    ];
+                    $components[] = ['type' => 'body', 'parameters' => $parameters];
                 }
+
                 $result = $service->sendTemplate($client->phone, $request->template_name, 'es', $components);
             } else {
                 $result = $service->sendMessage($client->phone, $message->body);
