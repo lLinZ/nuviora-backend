@@ -4,19 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use App\Models\WhatsappMessage;
+use App\Models\Order;
+use App\Services\WhatsAppService;
+use Illuminate\Support\Facades\Log;
 
 class WhatsappMessageController extends Controller
 {
     public function index(Request $request, $orderId)
     {
         $perPage = $request->query('per_page', 20);
-
-        // Fetch the current order to get its client_id
-        $order = \App\Models\Order::findOrFail($orderId);
-        $clientId = $order->client_id;
-
-        // Fetch messages for this client (all conversations)
-        $messages = \App\Models\WhatsappMessage::where('client_id', $clientId)
+        $order = Order::findOrFail($orderId);
+        $messages = WhatsappMessage::where('client_id', $order->client_id)
             ->orderBy('created_at', 'desc')
             ->paginate($perPage);
 
@@ -32,10 +31,9 @@ class WhatsappMessageController extends Controller
             'vars' => 'nullable|array',
         ]);
 
-        $order = \App\Models\Order::with('client')->findOrFail($orderId);
+        $order = Order::with('client')->findOrFail($orderId);
 
-        // 1. Persist to DB
-        $message = \App\Models\WhatsappMessage::create([
+        $message = WhatsappMessage::create([
             'order_id' => $order->id,
             'client_id' => $order->client_id,
             'body' => $request->body,
@@ -44,40 +42,60 @@ class WhatsappMessageController extends Controller
             'sent_at' => now(),
         ]);
 
-        // 2. If it's from us (shop), send via Meta API
         if (!$message->is_from_client) {
-            $service = new \App\Services\WhatsAppService();
+            $service = new WhatsAppService();
             
             if ($request->filled('template_name')) {
-                // Send as official Template
                 $components = [];
-                if ($request->has('vars')) {
-                    $parameters = [];
-                    foreach ($request->vars as $v) {
-                        $parameters[] = ['type' => 'text', 'text' => $v];
+                $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
+
+                if ($tpl && !empty($tpl->meta_components)) {
+                    $vars = $request->vars ?? [];
+                    Log::critical("DEBUG_MSG_CTRL: Enviando {$request->template_name}", ['vars' => $vars]);
+
+                    foreach ($tpl->meta_components as $component) {
+                        $rawType = strtoupper($component['type'] ?? '');
+                        if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+
+                        $text = $component['text'] ?? '';
+                        preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
+                        
+                        $parameters = [];
+                        if (!empty($matches[1])) {
+                            foreach ($matches[1] as $placeholderNum) {
+                                $idx = (int)$placeholderNum - 1;
+                                $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
+                            }
+                        } else if ($rawType === 'HEADER' && count($vars) > 0) {
+                            Log::critical("DEBUG_MSG_CTRL: Fallback Header para {$request->template_name}");
+                            $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
+                        }
+
+                        if (!empty($parameters)) {
+                            $components[] = [
+                                'type' => strtolower($rawType),
+                                'parameters' => $parameters
+                            ];
+                        }
                     }
-                    $components[] = [
-                        'type' => 'body',
-                        'parameters' => $parameters
-                    ];
+                } else {
+                    if ($request->has('vars')) {
+                        $parameters = array_map(fn($v) => ['type' => 'text', 'text' => $v], $request->vars);
+                        $components[] = ['type' => 'body', 'parameters' => $parameters];
+                    }
                 }
                 $result = $service->sendTemplate($order->client->phone, $request->template_name, 'es', $components);
             } else {
-                // Send as regular Text
                 $result = $service->sendMessage($order->client->phone, $message->body);
             }
 
             if ($result && isset($result['messages'][0]['id'])) {
-                $message->update([
-                    'message_id' => $result['messages'][0]['id'],
-                    'status' => 'sent'
-                ]);
+                $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
             } else {
                 $message->update(['status' => 'failed']);
             }
         }
 
-        // 3. Broadcast real-time (force db refresh to get real ID and confirmed message_id)
         $message->refresh();
         event(new \App\Events\WhatsappMessageReceived($message));
 
@@ -86,110 +104,40 @@ class WhatsappMessageController extends Controller
 
     public function sendMedia(Request $request, $orderId)
     {
-        try {
-            $request->validate([
-                'file' => 'required|file|mimes:jpeg,png,jpg,mp4,ogg,mp3,wav|max:15000',
-            ]);
-
-            $order = \App\Models\Order::with('client')->findOrFail($orderId);
-            $rawPhone = $order->client->phone;
-
-            // Limpiador básico de teléfono igual a WhatsAppService
-            $phone = preg_replace('/[^0-9]/', '', $rawPhone);
-            if (strpos($phone, '04') === 0) {
-                $phone = '58' . substr($phone, 1);
-            } elseif (strlen($phone) === 10 && strpos($phone, '4') === 0) {
-                $phone = '58' . $phone;
+        $request->validate(['file' => 'required|file|max:15000']);
+        $order = Order::with('client')->findOrFail($orderId);
+        $file = $request->file('file');
+        $path = $file->store('whatsapp_media', 'public');
+        
+        $service = new WhatsAppService();
+        $mime = $file->getMimeType();
+        $type = str_contains($mime, 'video') ? 'video' : (str_contains($mime, 'audio') ? 'audio' : 'image');
+        
+        $upload = $service->uploadMedia(storage_path('app/public/' . $path), $type);
+        if ($upload && isset($upload['id'])) {
+            $result = $service->sendMedia($order->client->phone, $upload['id'], $type, $request->caption);
+            if ($result && isset($result['messages'][0]['id'])) {
+                $msg = WhatsappMessage::create([
+                    'order_id' => $order->id,
+                    'client_id' => $order->client_id,
+                    'body' => $request->caption ?? "Archivo {$type}",
+                    'media' => asset('storage/' . $path),
+                    'status' => 'sent',
+                    'message_id' => $result['messages'][0]['id'],
+                    'sent_at' => now(),
+                ]);
+                event(new \App\Events\WhatsappMessageReceived($msg));
+                return response()->json($msg, 201);
             }
-
-            $file = $request->file('file');
-            $extension = $file->getClientOriginalExtension();
-            $mime = $file->getMimeType();
-            
-            if (str_contains($mime, 'video')) {
-                $type = 'video';
-            } elseif (str_contains($mime, 'audio')) {
-                $type = 'audio';
-            } else {
-                $type = 'image';
-            }
-            
-            $filename = 'whatsapp_media/' . uniqid('wa_out_') . '.' . $extension;
-            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, file_get_contents($file->getRealPath()));
-            $publicMediaUrl = url('storage/' . $filename);
-
-            $phoneId = env('WHATSAPP_PHONE_NUMBER_ID');
-            $token = env('WHATSAPP_ACCESS_TOKEN');
-
-            $status = 'failed';
-            $messageId = null;
-
-            if ($phoneId && $token) {
-                $response = \Illuminate\Support\Facades\Http::withToken($token)
-                    ->withoutVerifying()
-                    ->post("https://graph.facebook.com/v17.0/{$phoneId}/messages", [
-                        'messaging_product' => 'whatsapp',
-                        'recipient_type' => 'individual',
-                        'to' => $phone,
-                        'type' => $type,
-                        $type => [
-                            'link' => $publicMediaUrl,
-                        ]
-                    ]);
-
-                if ($response->successful()) {
-                    $metaData = $response->json();
-                    if (isset($metaData['messages'][0]['id'])) {
-                        $status = 'sent';
-                        $messageId = $metaData['messages'][0]['id'];
-                    }
-                } else {
-                    \Illuminate\Support\Facades\Log::error('Meta Media Send Failed', ['response' => $response->body()]);
-                }
-            }
-
-            $message = \App\Models\WhatsappMessage::create([
-                'order_id' => $order->id,
-                'client_id' => $order->client_id,
-                'body' => $type === 'video' ? '📽️ Video enviado' : ($type === 'audio' ? '🎵 Audio enviado' : '📷 Imagen enviada'),
-                'media' => $publicMediaUrl,
-                'is_from_client' => false,
-                'status' => $status,
-                'message_id' => $messageId,
-                'sent_at' => now(),
-            ]);
-
-            $message->refresh();
-            event(new \App\Events\WhatsappMessageReceived($message));
-
-            return response()->json($message, 201);
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::error("SendMedia Fatal Error: " . $e->getMessage());
-            return response()->json([
-                'error' => $e->getMessage(),
-                'line' => $e->getLine(),
-                'file' => $e->getFile(),
-                'class' => get_class($e)
-            ], 500);
         }
+        return response()->json(['error' => 'Failed to send media'], 500);
     }
 
     public function markAsRead($orderId)
-
     {
-        \App\Models\WhatsappMessage::where('order_id', $orderId)
-            ->where('is_from_client', true)
-            ->where('status', '!=', 'read')
-            ->update(['status' => 'read']);
-
-        // Refresh order to broadcast new unread count if needed
-        $order = \App\Models\Order::find($orderId);
-        if ($order) {
-            $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
-            event(new \App\Events\OrderUpdated($order));
-        }
-
+        WhatsappMessage::where('order_id', $orderId)->where('is_from_client', true)->update(['status' => 'read']);
+        $order = Order::find($orderId);
+        if ($order) event(new \App\Events\OrderUpdated($order));
         return response()->json(['status' => 'success']);
     }
 }
-

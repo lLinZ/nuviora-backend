@@ -11,13 +11,18 @@ use Illuminate\Support\Facades\Log;
 
 class WhatsappConversationController extends Controller
 {
+    /**
+     * Devuelve la lista de clientes/contactos para la Sidebar de WhatsApp.
+     */
     public function index(Request $request)
     {
         $user = Auth::user();
         $isAdmin = $user->role && in_array($user->role->description, ['Admin', 'Gerente', 'Master', 'SuperAdmin']);
         $search = $request->query('search');
+
         $query = Client::query();
 
+        // 1. Filtrar por búsqueda si se proporciona
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
@@ -26,6 +31,7 @@ class WhatsappConversationController extends Controller
             });
         }
 
+        // 2. Filtrar visibilidad según el rol
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
                 $q->where('agent_id', $user->id)
@@ -69,15 +75,25 @@ class WhatsappConversationController extends Controller
         return response()->json($paginator);
     }
 
+    /**
+     * Trae todos los mensajes de un cliente.
+     */
     public function show($clientId)
     {
-        return response()->json(WhatsappMessage::where('client_id', $clientId)->orderBy('created_at', 'asc')->get());
+        $messages = WhatsappMessage::where('client_id', $clientId)
+            ->orderBy('created_at', 'asc')
+            ->get();
+        return response()->json($messages);
     }
 
+    /**
+     * Enviar mensaje centralizado
+     */
     public function store(Request $request, $clientId)
     {
         $request->validate([
             'body' => 'required|string',
+            'is_from_client' => 'boolean',
             'template_name' => 'nullable|string',
             'vars' => 'nullable|array',
         ]);
@@ -86,74 +102,87 @@ class WhatsappConversationController extends Controller
         
         if (!$request->input('is_from_client', false) && !$request->filled('template_name')) {
             if (!$client->isWhatsappWindowOpen()) {
-                return response()->json(['message' => 'Ventana cerrada'], 403);
+                return response()->json(['message' => 'Ventana de 24 horas cerrada'], 403);
             }
         }
 
+        $latestOrder = \App\Models\Order::where('client_id', $client->id)->orderBy('created_at', 'desc')->first();
+
         $message = WhatsappMessage::create([
+            'order_id' => $latestOrder ? $latestOrder->id : null,
             'client_id' => $client->id,
             'body' => $request->body,
-            'is_from_client' => false,
+            'is_from_client' => $request->input('is_from_client', false),
             'status' => 'sending',
             'sent_at' => now(),
         ]);
 
-        $service = new \App\Services\WhatsAppService();
-        if ($request->filled('template_name')) {
+        if (!$message->is_from_client) {
+            $service = new \App\Services\WhatsAppService();
             $components = [];
-            $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
 
-            if ($tpl && !empty($tpl->meta_components)) {
-                $vars = $request->vars ?? [];
-                Log::error("DEBUG_WA: Iniciando envio de plantilla " . $request->template_name);
-                Log::error("DEBUG_WA: Vars recibidas: " . json_encode($vars));
+            if ($request->filled('template_name')) {
+                $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
 
-                foreach ($tpl->meta_components as $component) {
-                    $type = strtoupper($component['type'] ?? '');
-                    if (!in_array($type, ['HEADER', 'BODY'])) continue;
+                if ($tpl && !empty($tpl->meta_components)) {
+                    $vars = $request->vars ?? [];
+                    Log::critical("DEBUG_WA: Enviando plantilla " . $request->template_name);
 
-                    $text = $component['text'] ?? '';
-                    preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
-                    
-                    $parameters = [];
-                    if (!empty($matches[1])) {
-                        foreach ($matches[1] as $placeholderNum) {
-                            $idx = (int)$placeholderNum - 1;
-                            $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
+                    foreach ($tpl->meta_components as $component) {
+                        $rawType = strtoupper($component['type'] ?? '');
+                        if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+
+                        $text = $component['text'] ?? '';
+                        preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
+                        
+                        $parameters = [];
+                        if (!empty($matches[1])) {
+                            foreach ($matches[1] as $placeholderNum) {
+                                $idx = (int)$placeholderNum - 1;
+                                $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
+                            }
+                        } else if ($rawType === 'HEADER' && count($vars) > 0) {
+                            Log::critical("DEBUG_WA: Fallback Header");
+                            $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
                         }
-                    } else if ($type === 'HEADER' && count($vars) > 0) {
-                        Log::error("DEBUG_WA: Forzando Header parameter pos 0");
-                        $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
-                    }
 
-                    if (!empty($parameters)) {
-                        $components[] = [
-                            'type' => strtolower($type),
-                            'parameters' => $parameters
-                        ];
+                        if (!empty($parameters)) {
+                            $components[] = [
+                                'type' => strtolower($rawType),
+                                'parameters' => $parameters
+                            ];
+                        }
                     }
                 }
-                Log::error("DEBUG_WA: Payload final: " . json_encode($components));
+
+                $result = $service->sendTemplate($client->phone, $request->template_name, 'es', $components);
+            } else {
+                $result = $service->sendMessage($client->phone, $message->body);
             }
 
-            $result = $service->sendTemplate($client->phone, $request->template_name, 'es', $components);
-        } else {
-            $result = $service->sendMessage($client->phone, $message->body);
-        }
-
-        if ($result && isset($result['messages'][0]['id'])) {
-            $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
-        } else {
-            $message->update(['status' => 'failed']);
-            Log::error("DEBUG_WA: Error de Meta: " . json_encode($result));
+            if ($result && isset($result['messages'][0]['id'])) {
+                $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
+            } else {
+                $message->update(['status' => 'failed']);
+                Log::error("EROR_WA: " . json_encode($result));
+            }
         }
 
         $client->update(['last_interaction_at' => now()]);
-        return response()->json($message->load('client'), 201);
+        $message->refresh();
+        event(new \App\Events\WhatsappMessageReceived($message));
+
+        return response()->json($message, 201);
     }
 
+    /**
+     * Enviar multimedia
+     */
     public function sendMedia(Request $request, $clientId)
     {
+        $request->validate(['file' => 'required|file|max:16384']);
+        $client = Client::findOrFail($clientId);
+        
         $file = $request->file('file');
         $path = $file->store('whatsapp_media', 'public');
         $fullPath = storage_path('app/public/' . $path);
@@ -164,7 +193,6 @@ class WhatsappConversationController extends Controller
         
         $upload = $service->uploadMedia($fullPath, $type);
         if ($upload && isset($upload['id'])) {
-            $client = Client::findOrFail($clientId);
             $send = $service->sendMedia($client->phone, $upload['id'], $type, $request->caption);
             if ($send && isset($send['messages'][0]['id'])) {
                 $msg = WhatsappMessage::create([
@@ -173,8 +201,9 @@ class WhatsappConversationController extends Controller
                     'body' => $request->caption ?? "Archivo {$type}",
                     'status' => 'sent',
                     'sent_at' => now(),
-                    'media' => ['link' => asset('storage/' . $path), 'type' => $type]
+                    'media' => asset('storage/' . $path)
                 ]);
+                event(new \App\Events\WhatsappMessageReceived($msg));
                 return response()->json($msg, 201);
             }
         }
