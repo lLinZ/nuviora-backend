@@ -146,7 +146,7 @@ class WhatsappConversationController extends Controller
             }
         }
 
-        // Fetch order context if applies (para retrocompatibilidad si es necesario)
+        // Fetch order context if applies
         $latestOrder = \App\Models\Order::where('client_id', $client->id)->orderBy('created_at', 'desc')->first();
 
         // 1. Persist to DB
@@ -170,49 +170,42 @@ class WhatsappConversationController extends Controller
                 $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
 
                 if ($tpl && !empty($tpl->meta_components)) {
-                    // Build components dynamically based on what Meta says the template has
                     $vars = $request->vars ?? [];
-                    \Log::info("Enviando WhatsApp Template: {$request->template_name}", ['vars' => $vars]);
+                    Log::info("Enviando WhatsApp Template: {$request->template_name}", ['vars' => $vars]);
 
                     foreach ($tpl->meta_components as $component) {
-                        $type = strtolower($component['type'] ?? '');
-
-                        // Only HEADER and BODY can have text parameters
-                        if (!in_array($type, ['header', 'body'])) continue;
+                        $rawType = strtoupper($component['type'] ?? '');
+                        if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
 
                         $text = $component['text'] ?? '';
-                        \Log::info("  - Componente {$type} detectado. Texto: {$text}");
-
-                        // Find all placeholders like {{1}}, {{2}}, etc.
-                        preg_match_all('/\{\{(\d+)\}\}/', $text, $matches);
+                        // Usamos flag /u para UTF-8 absoluto
+                        preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
                         
-                        if (empty($matches[0])) {
-                            \Log::info("    - No hay variables en este componente.");
-                            continue;
-                        }
-
                         $parameters = [];
-                        // $matches[1] contains just the numbers: [1, 2, ...]
-                        foreach ($matches[1] as $placeholderNum) {
-                            $index = (int)$placeholderNum - 1; // {{1}} is index 0
-                            $value = $vars[$index] ?? '';
-                            $parameters[] = ['type' => 'text', 'text' => $value];
+                        if (!empty($matches[1])) {
+                            foreach ($matches[1] as $placeholderNum) {
+                                $idx = (int)$placeholderNum - 1;
+                                $parameters[] = ['type' => 'text', 'text' => $vars[$idx] ?? ''];
+                            }
+                        } else {
+                            // Si el componente existe pero el regex no halló {{N}}, mandamos el primer var como fallback
+                            // para evitar que Meta rechace por '0 params'
+                            if ($rawType === 'HEADER' && count($vars) > 0) {
+                                $parameters[] = ['type' => 'text', 'text' => $vars[0]];
+                            }
                         }
 
-                        \Log::info("    - Añadiendo " . count($parameters) . " parámetros.");
-
-                        $components[] = [
-                            'type'       => $type,
-                            'parameters' => $parameters,
-                        ];
+                        if (count($parameters) > 0) {
+                            $components[] = [
+                                'type'       => strtolower($rawType),
+                                'parameters' => $parameters,
+                            ];
+                        }
                     }
-                    \Log::info("Payload de componentes construido:", $components);
+                    Log::info("Payload componentes final:", $components);
                 } elseif ($request->has('vars')) {
                     // Fallback: old behavior — only send body params
-                    $parameters = [];
-                    foreach ($request->vars as $v) {
-                        $parameters[] = ['type' => 'text', 'text' => $v];
-                    }
+                    $parameters = array_map(fn($v) => ['type' => 'text', 'text' => $v], $request->vars);
                     $components[] = ['type' => 'body', 'parameters' => $parameters];
                 }
 
@@ -231,7 +224,7 @@ class WhatsappConversationController extends Controller
             }
         }
 
-        // 3. Update last_interaction_at to keep sorted in index (WITHOUT opening Meta window)
+        // 3. Update last_interaction_at to keep sorted in index
         $client->update(['last_interaction_at' => now()]);
 
         $message->refresh();
@@ -264,61 +257,36 @@ class WhatsappConversationController extends Controller
         $mime = $file->getMimeType();
         $filename = $file->getClientOriginalName();
         
-        // 1. Guardar localmente para persistencia en el CRM
+        // 1. Guardar localmente
         $path = $file->store('whatsapp_media', 'public');
         $fullLocalPath = storage_path('app/public/' . $path);
         
-        // --- TRANSCODING LOGIC PARA BURBUJA NATIVA ---
-        // Forzamos conversión si el nombre contiene "voice-note" (independientemente del mime detectado)
+        // Transcoding logic
         $isVoiceRecording = str_contains(strtolower($filename), 'voice-note');
-        
-        if ($isVoiceRecording || str_contains($mime, 'webm') || str_ends_with($filename, '.webm')) {
+        if ($isVoiceRecording || str_contains($mime, 'webm')) {
             $oggPath = str_replace(['.webm', '.mp4'], '.ogg', $fullLocalPath);
             if (!str_ends_with($oggPath, '.ogg')) $oggPath .= '.ogg';
             
-            // Buscar FFmpeg en rutas comunes si no está en el PATH
             $ffmpegPath = env('FFMPEG_PATH', 'ffmpeg');
-            if ($ffmpegPath === 'ffmpeg') {
-                if (file_exists('/usr/bin/ffmpeg')) $ffmpegPath = '/usr/bin/ffmpeg';
-                elseif (file_exists('/usr/local/bin/ffmpeg')) $ffmpegPath = '/usr/local/bin/ffmpeg';
-            }
-
-            // Ejecutar ffmpeg para convertir a ogg opus (formato nativo de notas de voz)
-            // -ac 1 -ar 16000: Parámetros específicos para máxima compatibilidad con Meta
             $cmd = "{$ffmpegPath} -y -i \"$fullLocalPath\" -c:a libopus -ac 1 -ar 16000 \"$oggPath\" 2>&1";
-            exec($cmd, $output, $returnVar);
+            exec($cmd);
 
-            Log::info('FFMPEG Transcoding Attempt', [
-                'command' => $cmd,
-                'found_at' => $ffmpegPath,
-                'returnVar' => $returnVar,
-                'output' => $output
-            ]);
-
-            if ($returnVar === 0 && file_exists($oggPath)) {
-                // Éxito: Usamos el nuevo archivo OGG
+            if (file_exists($oggPath)) {
                 $fullLocalPath = $oggPath;
                 $path = str_replace(['.webm', '.mp4'], '.ogg', $path);
-                if (!str_ends_with($path, '.ogg')) $path .= '.ogg';
-                
-                $mime = 'audio/ogg'; // Forzar mime correcto para Meta
-                $filename = str_replace(['.webm', '.mp4'], '.ogg', $filename);
-                if (!str_ends_with($filename, '.ogg')) $filename .= '.ogg';
-            } else {
-                Log::warning('FFMPEG Transcoding FAILED. falling back to original file.');
+                $mime = 'audio/ogg';
             }
         }
-        // ---------------------------------------------
 
         $publicUrl = asset('storage/' . $path);
         $type = $this->getWhatsAppMediaType($mime, $filename);
 
-        // 2. Subir a Meta y Enviar
+        // 2. Subir a Meta
         $service = new \App\Services\WhatsAppService();
         $uploadResult = $service->uploadMedia($fullLocalPath, $type);
 
         if (!$uploadResult || !isset($uploadResult['id'])) {
-            return response()->json(['message' => 'Error al subir archivo a WhatsApp. ¿Está instalado FFMPEG?'], 500);
+            return response()->json(['message' => 'Error al subir archivo a WhatsApp'], 500);
         }
 
         $mediaId = $uploadResult['id'];
@@ -347,9 +315,7 @@ class WhatsappConversationController extends Controller
             ]
         ]);
 
-        // Actualizar última interacción
         $client->update(['last_interaction_at' => now()]);
-
         $message->load('client', 'order');
         event(new \App\Events\WhatsappMessageReceived($message));
 
@@ -359,18 +325,9 @@ class WhatsappConversationController extends Controller
     private function getWhatsAppMediaType($mime, $filename = '')
     {
         if (str_starts_with($mime, 'image/')) return 'image';
-        
-        // Si el nombre del archivo sugiere nota de voz o el mime es ogg/opus, es AUDIO
-        if (str_contains(strtolower($filename), 'voice-note') || 
-            $mime === 'audio/ogg' || 
-            str_contains($mime, 'opus')) {
-            return 'audio';
-        }
-
+        if (str_contains(strtolower($filename), 'voice-note') || $mime === 'audio/ogg') return 'audio';
         if (str_starts_with($mime, 'audio/')) return 'audio';
-        if (str_starts_with($mime, 'video/mp4')) return 'video';
         if (str_starts_with($mime, 'video/')) return 'video';
-        
         return 'document';
     }
 }
