@@ -172,31 +172,41 @@ class WhatsappConversationController extends Controller
                 if ($tpl && !empty($tpl->meta_components)) {
                     // Build components dynamically based on what Meta says the template has
                     $vars = $request->vars ?? [];
+                    \Log::info("Enviando WhatsApp Template: {$request->template_name}", ['vars' => $vars]);
+
                     foreach ($tpl->meta_components as $component) {
                         $type = strtolower($component['type'] ?? '');
 
                         // Only HEADER and BODY can have text parameters
                         if (!in_array($type, ['header', 'body'])) continue;
 
-                        // Count how many {{N}} placeholders this component has
                         $text = $component['text'] ?? '';
-                        preg_match_all('/\{\{\d+\}\}/', $text, $matches);
-                        $paramCount = count(array_unique($matches[0]));
+                        \Log::info("  - Componente {$type} detectado. Texto: {$text}");
 
-                        if ($paramCount === 0) continue;
+                        // Find all placeholders like {{1}}, {{2}}, etc.
+                        preg_match_all('/\{\{(\d+)\}\}/', $text, $matches);
+                        
+                        if (empty($matches[0])) {
+                            \Log::info("    - No hay variables en este componente.");
+                            continue;
+                        }
 
-                        // Map positional vars to parameters
                         $parameters = [];
-                        for ($i = 0; $i < $paramCount; $i++) {
-                            $value = $vars[$i] ?? '';
+                        // $matches[1] contains just the numbers: [1, 2, ...]
+                        foreach ($matches[1] as $placeholderNum) {
+                            $index = (int)$placeholderNum - 1; // {{1}} is index 0
+                            $value = $vars[$index] ?? '';
                             $parameters[] = ['type' => 'text', 'text' => $value];
                         }
+
+                        \Log::info("    - Añadiendo " . count($parameters) . " parámetros.");
 
                         $components[] = [
                             'type'       => $type,
                             'parameters' => $parameters,
                         ];
                     }
+                    \Log::info("Payload de componentes construido:", $components);
                 } elseif ($request->has('vars')) {
                     // Fallback: old behavior — only send body params
                     $parameters = [];
