@@ -43,7 +43,7 @@ class WebhookController extends Controller
                 'data' => $webhook->load('status')
             ], 201);
         } catch (\Exception $e) {
-            \Log::error('Error creating webhook: ' . $e->getMessage());
+            Log::error('Error creating webhook: ' . $e->getMessage());
             return response()->json([
                 'status' => false,
                 'message' => 'Error al crear: ' . $e->getMessage()
@@ -64,7 +64,35 @@ class WebhookController extends Controller
      */
     public function update(Request $request, string $id)
     {
-        //
+        $request->validate([
+            'name' => 'required|string',
+            'url' => 'required|url',
+            'status_id' => 'nullable|integer',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        try {
+            $webhook = Webhook::findOrFail($id);
+            $webhook->name = $request->name;
+            $webhook->url = $request->url;
+            $webhook->status_id = $request->status_id === 'all' ? null : $request->status_id;
+            if ($request->has('is_active')) {
+                $webhook->is_active = $request->is_active;
+            }
+            $webhook->save();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Webhook actualizado exitosamente',
+                'data' => $webhook->load('status')
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error updating webhook: ' . $e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Error al actualizar: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -72,6 +100,20 @@ class WebhookController extends Controller
      */
     public function destroy(string $id)
     {
-        //
+        try {
+            $webhook = Webhook::findOrFail($id);
+            $webhook->delete();
+            
+            return response()->json([
+                'status' => true,
+                'message' => 'Webhook eliminado exitosamente'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error deleting webhook: ' . $e->getMessage());
+            return response()->json([
+                'status' => false,
+                'message' => 'Error al eliminar: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }
