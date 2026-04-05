@@ -273,6 +273,8 @@ Route::middleware('auth:sanctum')->group(function () {
     /**---------------------
      * WHATSAPP MESSAGES
      * ---------------------**/
+    Route::get('/whatsapp-templates/meta', [\App\Http\Controllers\WhatsappTemplateController::class, 'metaTemplates']);
+    Route::post('/whatsapp-templates/import-meta', [\App\Http\Controllers\WhatsappTemplateController::class, 'importFromMeta']);
     Route::apiResource('whatsapp-templates', \App\Http\Controllers\WhatsappTemplateController::class);
     Route::get('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'index']);
     Route::post('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'store']);

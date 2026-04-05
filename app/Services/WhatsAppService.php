@@ -11,10 +11,13 @@ class WhatsAppService
     protected $phoneNumberId;
     protected $baseUrl = 'https://graph.facebook.com/v21.0';
 
+    protected $wabaId;
+
     public function __construct()
     {
         $this->accessToken = env('WHATSAPP_ACCESS_TOKEN');
         $this->phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID');
+        $this->wabaId = env('WHATSAPP_WABA_ID');
     }
 
     /**
@@ -184,6 +187,44 @@ class WhatsAppService
                 'to' => $cleanTo
             ]);
             return false;
+        }
+    }
+
+    /**
+     * Get all message templates from Meta (WhatsApp Business Account).
+     * Requires WHATSAPP_WABA_ID in .env
+     */
+    public function getMetaTemplates()
+    {
+        if (!$this->wabaId) {
+            return ['error' => 'WHATSAPP_WABA_ID no está configurado en el servidor. Agrégalo al .env del VPS.'];
+        }
+
+        $url = "{$this->baseUrl}/{$this->wabaId}/message_templates";
+
+        try {
+            $response = Http::withToken($this->accessToken)
+                ->withoutVerifying()
+                ->get($url, [
+                    'fields' => 'name,status,language,category,components,id',
+                    'limit'  => 100,
+                ]);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+
+            Log::error('WhatsApp Meta Templates Error', [
+                'status' => $response->status(),
+                'body'   => $response->body(),
+            ]);
+
+            return ['error' => 'Error al consultar Meta API: ' . $response->body()];
+        } catch (\Exception $e) {
+            Log::error('WhatsApp Meta Templates Exception', [
+                'message' => $e->getMessage()
+            ]);
+            return ['error' => $e->getMessage()];
         }
     }
 
