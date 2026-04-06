@@ -40,14 +40,28 @@ class ExternalWhatsAppController extends Controller
         
         // Ensure phone format (basic cleaning)
         $phone = preg_replace('/[^0-9]/', '', $phone);
+        $last10 = substr($phone, -10);
 
-        // 1. Find or create Client
-        $client = Client::where('phone', 'like', "%{$phone}")->first();
+        // 1. Find Client (priority: order_id > phone last 10)
+        $client = null;
+        if ($request->filled('order_id')) {
+            $order = Order::where('order_id', $request->order_id)->first();
+            if ($order) {
+                $client = $order->client;
+            }
+        }
+
+        if (!$client) {
+            $client = Client::where('phone', 'like', "%{$last10}")->first();
+        }
+
+        // 2. Create if not found
         if (!$client) {
             $client = Client::create([
                 'phone' => $phone,
                 'first_name' => 'Cliente',
                 'last_name' => 'Externo',
+                'customer_id' => null, // Allowed after migration
             ]);
         }
 
