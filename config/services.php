@@ -25,6 +25,12 @@ return [
         'key' => env('RESEND_KEY'),
     ],
 
+    'whatsapp' => [
+        'access_token'    => env('WHATSAPP_ACCESS_TOKEN'),
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
+        'waba_id'         => env('WHATSAPP_WABA_ID'),
+    ],
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),
