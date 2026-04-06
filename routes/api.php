@@ -48,6 +48,12 @@ Route::post('test/register', [AuthController::class, 'testRegister']);
 Route::get('whatsapp/webhook', [WhatsAppWebhookController::class, 'verify']);
 Route::post('whatsapp/webhook', [WhatsAppWebhookController::class, 'handle']);
 
+// --- External API for n8n ---
+Route::middleware('api_key')->prefix('external/whatsapp')->group(function () {
+    Route::get('templates', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'index']);
+    Route::post('send', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'send']);
+});
+
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/kanban-data', [OrderController::class, 'kanban']);
