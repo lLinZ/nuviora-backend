@@ -1289,6 +1289,11 @@ class OrderController extends Controller
         $order->agent_id = $agent->id;
         $order->save();
 
+        // 🔗 Sync with client to ensure consistency in CRM
+        if ($order->client_id) {
+            \App\Models\Client::where('id', $order->client_id)->update(['agent_id' => $agent->id]);
+        }
+
         // 📡 Broadcast for real-time updates
         event(new \App\Events\OrderUpdated($order));
 

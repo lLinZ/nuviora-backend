@@ -47,7 +47,7 @@ class WhatsappConversationController extends Controller
         $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
-            ->with(['agent', 'whatsappConversations' => function ($q) {
+            ->with(['agent', 'latestOrder.agent', 'whatsappConversations' => function ($q) {
                 $q->where('status', 'open');
             }])
             ->with('latestWhatsappMessage')
@@ -65,7 +65,7 @@ class WhatsappConversationController extends Controller
                 'last_message' => $latestMessage ? $latestMessage->body : 'Sin mensajes',
                 'last_message_date' => $latestMessage ? $latestMessage->sent_at : $client->created_at,
                 'context' => [
-                    'order' => $client->orders->first(),
+                    'order' => $client->latestOrder,
                     'agent' => $client->agent,
                     'conversation' => $client->whatsappConversations->first(),
                 ]

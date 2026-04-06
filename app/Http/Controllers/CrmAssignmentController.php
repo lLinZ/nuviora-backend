@@ -56,10 +56,23 @@ class CrmAssignmentController extends Controller
         $client = Client::findOrFail($clientId);
         $client->update(['agent_id' => $request->agent_id]);
 
+        // Sync with the latest active order if it exists
+        $latestOrder = $client->latestOrder;
+        if ($latestOrder) {
+            $latestOrder->load('status');
+            $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado'];
+            if (!$latestOrder->status || !in_array($latestOrder->status->description, $terminalStatuses)) {
+                $latestOrder->update(['agent_id' => $request->agent_id]);
+                
+                // Optional: Log activity or broadcast
+                event(new \App\Events\OrderUpdated($latestOrder));
+            }
+        }
+
         return response()->json([
             'status' => true,
-            'message' => "Cliente asignado exitosamente",
-            'client' => $client->load('agent')
+            'message' => "Cliente y orden vinculada asignados exitosamente",
+            'client' => $client->load(['agent', 'latestOrder.agent'])
         ]);
     }
 }

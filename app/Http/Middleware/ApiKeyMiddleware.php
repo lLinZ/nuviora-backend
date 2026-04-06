@@ -15,7 +15,7 @@ class ApiKeyMiddleware
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $apiKey = config('app.external_api_key') ?? env('EXTERNAL_API_KEY');
+        $apiKey = config('app.external_api_key');
 
         if (!$apiKey || $request->header('X-API-KEY') !== $apiKey) {
             return response()->json(['message' => 'Unauthorized api key'], 401);
