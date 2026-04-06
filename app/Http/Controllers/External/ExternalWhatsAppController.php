@@ -42,11 +42,13 @@ class ExternalWhatsAppController extends Controller
         $phone = preg_replace('/[^0-9]/', '', $phone);
         $last10 = substr($phone, -10);
 
-        // 1. Find Client (priority: order_id > phone last 10)
+        // 1. Find Client and Local Order ID
         $client = null;
+        $localOrderId = null;
         if ($request->filled('order_id')) {
             $order = Order::where('order_id', $request->order_id)->first();
             if ($order) {
+                $localOrderId = $order->id; // Internal numeric ID
                 $client = $order->client;
             }
         }
@@ -61,13 +63,13 @@ class ExternalWhatsAppController extends Controller
                 'phone' => $phone,
                 'first_name' => 'Cliente',
                 'last_name' => 'Externo',
-                'customer_id' => null, // Allowed after migration
+                'customer_id' => null,
             ]);
         }
 
-        // 2. Log message
+        // 3. Log message using the translated localOrderId
         $message = WhatsappMessage::create([
-            'order_id' => $request->order_id,
+            'order_id' => $localOrderId,
             'client_id' => $client->id,
             'body' => $request->body ?? "Plantilla: {$request->template_name}",
             'is_from_client' => false,
