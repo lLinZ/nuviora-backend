@@ -50,12 +50,12 @@ class WhatsAppWebhookController extends Controller
                 $lng = $messageData['location']['longitude'] ?? '';
                 $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
             } elseif ($type === 'image' || isset($messageData['image'])) {
-                $imageId = $messageData['image']['id'];
+                $imageId = $messageData['image']['id'] ?? null;
                 $caption = $messageData['image']['caption'] ?? '';
-                $token = env('WHATSAPP_ACCESS_TOKEN');
+                $token = config('services.whatsapp.access_token');
                 
-                if (!$token) {
-                    $body = "⚠️ Error interno: WHATSAPP_ACCESS_TOKEN no existe o la caché de Laravel está bloqueando el env().";
+                if (!$token || !$imageId) {
+                    $body = "⚠️ Error interno: Token no configurado o ID de imagen faltante.";
                 } else {
                     // 1. Request Media URL from Meta API
                     $response = \Illuminate\Support\Facades\Http::withToken($token)
@@ -87,9 +87,9 @@ class WhatsAppWebhookController extends Controller
                     }
                 }
             } elseif ($type === 'video' || isset($messageData['video'])) {
-                $videoId = $messageData['video']['id'];
+                $videoId = $messageData['video']['id'] ?? null;
                 $caption = $messageData['video']['caption'] ?? '';
-                $token = env('WHATSAPP_ACCESS_TOKEN');
+                $token = config('services.whatsapp.access_token');
                 
                 if ($token) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$videoId}");
@@ -108,7 +108,7 @@ class WhatsAppWebhookController extends Controller
             } elseif ($type === 'audio' || $type === 'voice' || isset($messageData['audio']) || isset($messageData['voice'])) {
                 $audioData = $messageData['audio'] ?? ($messageData['voice'] ?? []);
                 $audioId   = $audioData['id'] ?? null;
-                $token     = env('WHATSAPP_ACCESS_TOKEN');
+                $token     = config('services.whatsapp.access_token');
                 
                 if ($token && $audioId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$audioId}");
@@ -126,6 +126,7 @@ class WhatsAppWebhookController extends Controller
                         $body = "⚠️ Error obteniendo URL de audio de Meta: Status " . $response->status();
                     }
                 } else {
+                    \Illuminate\Support\Facades\Log::error("DEBUG_WA: No se pudo descargar audio. Token: " . ($token ? 'OK' : 'FAIL') . " | AudioID: " . ($audioId ? 'OK' : 'FAIL'));
                     $body = "🎵 Nota de voz recibida (sin archivo disponible)";
                 }
             }
