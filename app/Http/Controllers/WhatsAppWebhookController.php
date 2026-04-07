@@ -239,7 +239,7 @@ class WhatsAppWebhookController extends Controller
                     'order_id'      => $orderId,
                     'client_id'     => $client->id,
                     'body'          => $body,
-                    'media'         => $mediaPath,
+                    'media'         => $mediaPath ? ['link' => $mediaPath, 'type' => $type] : null,
                     'is_from_client'=> true,
                     'status'        => 'delivered',
                     'sent_at'       => $receivedAt,
