@@ -57,6 +57,11 @@ class User extends Authenticatable
         return $this->hasMany(Order::class, 'agency_id');
     }
 
+    public function stockMovements()
+    {
+        return $this->hasMany(StockMovement::class, 'deliverer_id');
+    }
+
     /**
      * The attributes that are mass assignable.
      *

@@ -37,9 +37,39 @@ class InventoryController extends Controller
         $rawInventory = $query->get();
 
         if ($request->has('overview') && $request->overview === 'true') {
+            $products = \App\Models\Product::with(['inventories' => function ($q) use ($role) {
+                if ($role === 'Agencia') {
+                    $q->whereHas('warehouse', function ($innerQ) {
+                        $innerQ->where('user_id', '=', Auth::id());
+                    });
+                }
+            }, 'inventories.warehouse'])->get();
+
+            $flattened = [];
+            foreach ($products as $p) {
+                if ($p->inventories->isEmpty()) {
+                    $flattened[] = [
+                        'product_id' => $p->id,
+                        'product'    => $p,
+                        'warehouse_id' => 0,
+                        'warehouse'  => (object)[
+                            'name' => 'Sin Stock (General)',
+                            'code' => 'N/A'
+                        ],
+                        'quantity'   => 0
+                    ];
+                } else {
+                    foreach ($p->inventories as $inv) {
+                        // Ensure product object is present for frontend grouping
+                        $inv->product = $p;
+                        $flattened[] = $inv;
+                    }
+                }
+            }
+
             return response()->json([
                 'status' => true,
-                'data'   => $rawInventory,
+                'data'   => $flattened,
             ]);
         }
 
@@ -63,6 +93,7 @@ class InventoryController extends Controller
     // Stock personal del repartidor (se puede usar después)
     public function myStock(Request $request)
     {
+        /** @var \App\Models\User $user */
         $user = Auth::user();
         $role = $user->role?->description;
 

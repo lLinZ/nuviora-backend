@@ -26,7 +26,10 @@ class ProductController extends Controller
         }
 
         if ($request->query('paginate') === 'false') {
-            return response()->json($query->get());
+            return response()->json([
+                'status' => true,
+                'data'   => $query->get()
+            ]);
         }
 
         $paginated = $query->paginate($request->get('per_page', 20));
