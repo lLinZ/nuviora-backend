@@ -48,9 +48,13 @@ class InventoryController extends Controller
             $flattened = [];
             foreach ($products as $p) {
                 if ($p->inventories->isEmpty()) {
+                    $cleanProduct = $p->replicate();
+                    $cleanProduct->id = $p->id;
+                    $cleanProduct->setRelations([]);
+
                     $flattened[] = [
                         'product_id' => $p->id,
-                        'product'    => $p,
+                        'product'    => $cleanProduct,
                         'warehouse_id' => 0,
                         'warehouse'  => (object)[
                             'name' => 'Sin Stock (General)',
@@ -59,9 +63,14 @@ class InventoryController extends Controller
                         'quantity'   => 0
                     ];
                 } else {
+                    // Create a clean product object for the flattened items to avoid circular references
+                    $cleanProduct = $p->replicate();
+                    $cleanProduct->id = $p->id; // replicate doesn't copy ID
+                    $cleanProduct->setRelations([]); // Clear all loaded relations
+
                     foreach ($p->inventories as $inv) {
                         // Ensure product object is present for frontend grouping
-                        $inv->product = $p;
+                        $inv->setRelation('product', $cleanProduct);
                         $flattened[] = $inv;
                     }
                 }
