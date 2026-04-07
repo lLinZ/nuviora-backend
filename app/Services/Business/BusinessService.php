@@ -138,6 +138,9 @@ class BusinessService
 
     protected function resetOrdersForShop(int $shopId): void
     {
+        // 🔇 Silenciar webhooks de n8n durante este proceso de reseteo nocturno
+        \App\Observers\OrderObserver::$muteWebhooks = true;
+
         try {
             // ─────────────────────────────────────────────────────────
             // 1. STATUS IDs que necesitamos
@@ -261,6 +264,9 @@ class BusinessService
 
         } catch (\Exception $e) {
             Log::error("Error resetting orders on shop close (shop $shopId): " . $e->getMessage() . "\n" . $e->getTraceAsString());
+        } finally {
+            // 🔊 Reactivar webhooks para el funcionamiento normal
+            \App\Observers\OrderObserver::$muteWebhooks = false;
         }
     }
 

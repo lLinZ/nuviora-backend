@@ -14,6 +14,11 @@ class OrderObserver
     protected $whatsappService;
     protected $webhookService;
 
+    /**
+     * Flag to temporarily mute outgoing webhooks during batch/system processes.
+     */
+    public static $muteWebhooks = false;
+
     public function __construct(WhatsAppService $whatsappService, \App\Services\WebhookService $webhookService)
     {
         $this->whatsappService = $whatsappService;
@@ -114,7 +119,7 @@ class OrderObserver
         }
 
         // Trigger Outgoing Webhooks if status changed
-        if ($order->wasChanged('status_id')) {
+        if ($order->wasChanged('status_id') && !self::$muteWebhooks) {
             $this->webhookService->trigger('order.status_changed', $order);
         }
     }
