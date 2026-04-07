@@ -34,12 +34,19 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar visibilidad según el rol
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                $q->where('agent_id', $user->id)
+                // a) Cliente asignado directamente
+                $q->where('agent_id', $user->id) 
+                // b) Tiene una orden activa asignada a este vendedor
                 ->orWhereHas('orders', function ($oq) use ($user) {
                     $oq->where('agent_id', $user->id)
                        ->whereHas('status', function($sq) {
                            $sq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
                        });
+                })
+                // c) Tiene una conversación abierta (lead) asignada a este vendedor
+                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)
+                       ->where('status', 'open');
                 });
             });
         }

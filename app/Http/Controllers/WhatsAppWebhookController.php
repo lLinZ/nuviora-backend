@@ -160,18 +160,45 @@ class WhatsAppWebhookController extends Controller
             ]);
 
             // 3. Determine if there is an active Order to attach the thread
-            $order = \App\Models\Order::where('client_id', $client->id)
-                ->whereHas('status', function($q) {
-                    $q->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                })
-                ->orderBy('created_at', 'desc')
-                ->first();
+            // [NEW] 🕵️ BUSCAR ID DE ORDEN EN EL TEXTO (Caso: cliente escribe de otro número)
+            $order = null;
+            if (preg_match('/(\d{10,15})/', $body, $matches)) {
+                $orderIdFromText = $matches[1];
+                $order = \App\Models\Order::where(function($q) use ($orderIdFromText) {
+                    $q->where('order_id', $orderIdFromText)
+                      ->orWhere('order_number', $orderIdFromText)
+                      ->orWhere('name', 'LIKE', "%{$orderIdFromText}%");
+                })->orderBy('created_at', 'desc')->first();
+
+                if ($order && $order->client_id !== $client->id) {
+                    \Illuminate\Support\Facades\Log::info("Vinculando mensaje de nuevo número a orden existente #{$order->name}");
+                    // Opcionalmente podríamos vincular el numero nuevo al cliente original, o solo dejar el mensaje huerfano vinculado a la orden.
+                    // Por ahora vinculamos el mensaje a la orden encontrada.
+                }
+            }
+
+            // Si no se encontró por texto, buscar orden activa del remitente actual
+            if (!$order) {
+                $order = \App\Models\Order::where('client_id', $client->id)
+                    ->whereHas('status', function($q) {
+                        $q->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                    })
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+            }
 
             $orderId = null;
 
             if ($order) {
                 $orderId = $order->id;
                 // Agent is automatically the one assigned to the order
+                if ($order->agent_id) {
+                    // Asegurar que la conversación huerfana (si existe) se asigne a quien tiene la orden
+                    $conv = \App\Models\WhatsappConversation::where('client_id', $client->id)->where('status', 'open')->first();
+                    if ($conv) {
+                        $conv->update(['agent_id' => $order->agent_id]);
+                    }
+                }
             } else {
                 // No active order -> Check for open Orphan Conversation
                 $conversation = \App\Models\WhatsappConversation::where('client_id', $client->id)

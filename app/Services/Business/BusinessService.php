@@ -157,71 +157,22 @@ class BusinessService
             }
 
             // ─────────────────────────────────────────────────────────
-            // 2. "Asignado a vendedor" → SIEMPRE reset a Nuevo + reset_count + 1
-            //    NUNCA se cancela (tiene potencial de lead)
-            // ─────────────────────────────────────────────────────────
-            if ($asignadoId) {
-                $asignadoOrders = Order::where('shop_id', $shopId)
-                    ->where('status_id', $asignadoId)
-                    ->get(['id', 'reset_count']);
-
-                if ($asignadoOrders->isNotEmpty()) {
-                    foreach ($asignadoOrders as $order) {
-                        $order->update([
-                            'agent_id'    => null,
-                            'status_id'   => $nuevoId,
-                            'reset_count' => $order->reset_count + 1,
-                        ]);
-                    }
-                    Log::info("Shop $shopId closed. Reset {$asignadoOrders->count()} 'Asignado a vendedor' orders to 'Nuevo' (incremented reset_count).");
-                }
-            }
-
-            // ─────────────────────────────────────────────────────────
-            // 3. "Reprogramado para hoy" → mover a "Programado para otro dia"
-            //    con scheduled_for = mañana (mismo horario)
-            // ─────────────────────────────────────────────────────────
-            if ($reprogramadoHoyId && $programmadoOtroDiaId) {
-                $reprogramadoOrders = Order::where('shop_id', $shopId)
-                    ->where('status_id', $reprogramadoHoyId)
-                    ->get(['id', 'scheduled_for']);
-
-                if ($reprogramadoOrders->isNotEmpty()) {
-                    foreach ($reprogramadoOrders as $order) {
-                        // Mantener la hora si existe, mover la fecha a mañana
-                        $existingTime = $order->scheduled_for
-                            ? $order->scheduled_for->format('H:i:s')
-                            : '09:00:00';
-                        $scheduledForTomorrow = now()->addDay()->format('Y-m-d') . ' ' . $existingTime;
-
-                        $order->update([
-                            'agent_id'      => null,
-                            'status_id'     => $programmadoOtroDiaId,
-                            'scheduled_for' => $scheduledForTomorrow,
-                        ]);
-                    }
-                    Log::info("Shop $shopId closed. Moved {$reprogramadoOrders->count()} 'Reprogramado para hoy' orders to 'Programado para otro dia' (scheduled for tomorrow).");
-                }
-            }
-
-            // ─────────────────────────────────────────────────────────
-            // 4. Llamado 1/2/3, Esperando Ubicacion, Programado para mas tarde
-            //    Lógica: primer cierre → reset a Nuevo (reset_count = 1)
-            //            segundo cierre → CANCELAR
+            // 2. "Asignado a vendedor" y "Llamados" (Lógica de Reset/Cancelación)
             // ─────────────────────────────────────────────────────────
             $statusesToReset = [
+                'Asignado a vendedor',
                 'Llamado 1',
                 'Llamado 2',
                 'Llamado 3',
                 'Esperando Ubicacion',
                 'Programado para mas tarde',
             ];
+            $resetStatusIds = Status::whereIn('description', $statusesToReset)->pluck('id');
 
-            $statusIds = Status::whereIn('description', $statusesToReset)->pluck('id');
-
-            if ($statusIds->isNotEmpty()) {
+            if ($resetStatusIds->isNotEmpty()) {
+                // Obtenemos órdenes para separar las que se cancelan de las que se resetean
                 $ordersToProcess = Order::where('shop_id', $shopId)
-                    ->whereIn('status_id', $statusIds)
+                    ->whereIn('status_id', $resetStatusIds)
                     ->get(['id', 'reset_count']);
 
                 $toCancel = $ordersToProcess->where('reset_count', '>', 0)->pluck('id');
@@ -234,7 +185,7 @@ class BusinessService
                         'cancelled_at' => now(),
                         'reset_count'  => 0,
                     ]);
-                    Log::info("Shop $shopId closed. Cancelled {$toCancel->count()} orders (Llamado/Esperando) already reset once.");
+                    Log::info("Shop $shopId: Canceladas {$toCancel->count()} órdenes por reincidencia.");
                 }
 
                 if ($toReset->isNotEmpty()) {
@@ -243,20 +194,34 @@ class BusinessService
                         'status_id'   => $nuevoId,
                         'reset_count' => 1,
                     ]);
-                    Log::info("Shop $shopId closed. Reset {$toReset->count()} orders (Llamado/Esperando) to 'Nuevo' (first reset).");
+                    Log::info("Shop $shopId: Reseteadas {$toReset->count()} órdenes a 'Nuevo' (primera vez).");
                 }
             }
 
             // ─────────────────────────────────────────────────────────
-            // 5. "Programado para otro dia" y "Reprogramado" → solo quitar vendedor
+            // 3. "Reprogramado para hoy" → mover a "Programado para otro dia" para mañana
+            // ─────────────────────────────────────────────────────────
+            if ($reprogramadoHoyId && $programmadoOtroDiaId) {
+                // Para este caso específico usamos un pequeño bucle o bulk si es posible.
+                // Dado que scheduled_for debe ser relativo, lo haremos eficiente.
+                Order::where('shop_id', $shopId)
+                    ->where('status_id', $reprogramadoHoyId)
+                    ->update([
+                        'agent_id'      => null,
+                        'status_id'     => $programmadoOtroDiaId,
+                        'scheduled_for' => now()->addDay()->startOfDay()->addHours(9), // Fallback a las 9 AM
+                    ]);
+                Log::info("Shop $shopId: Movidas órdenes 'Reprogramado para hoy' a mañana.");
+            }
+
+            // ─────────────────────────────────────────────────────────
+            // 4. Estatus que mantienen su estado pero pierden el vendedor
             // ─────────────────────────────────────────────────────────
             $keepStatusNames = ['Programado para otro dia', 'Reprogramado'];
             $keepIds = Status::whereIn('description', $keepStatusNames)->pluck('id');
 
             if ($keepIds->isNotEmpty()) {
-                Order::where('shop_id', $shopId)
-                    ->whereIn('status_id', $keepIds)
-                    ->update(['agent_id' => null]);
+                Order::where('shop_id', $shopId)->whereIn('status_id', $keepIds)->update(['agent_id' => null]);
                 Log::info("Shop $shopId closed. Cleared agent from 'Programado para otro dia' / 'Reprogramado' orders.");
             }
 
