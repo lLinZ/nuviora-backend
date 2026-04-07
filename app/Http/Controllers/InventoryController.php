@@ -37,42 +37,39 @@ class InventoryController extends Controller
         $rawInventory = $query->get();
 
         if ($request->has('overview') && $request->overview === 'true') {
-            $products = \App\Models\Product::with(['inventories' => function ($q) use ($role) {
-                if ($role === 'Agencia') {
-                    $q->whereHas('warehouse', function ($innerQ) {
-                        $innerQ->where('user_id', '=', Auth::id());
-                    });
-                }
-            }, 'inventories.warehouse'])->get();
-
+            $allProducts = \App\Models\Product::all();
+            
             $flattened = [];
-            foreach ($products as $p) {
-                if ($p->inventories->isEmpty()) {
-                    $cleanProduct = $p->replicate();
-                    $cleanProduct->id = $p->id;
-                    $cleanProduct->setRelations([]);
+            $processedProductIds = [];
 
+            // 1. Process existing inventories
+            foreach ($rawInventory as $inv) {
+                if (!$inv->product) continue;
+                
+                $flattened[] = [
+                    'product_id'   => $inv->product_id,
+                    'product'      => $inv->product->toArray(),
+                    'warehouse_id' => $inv->warehouse_id,
+                    'warehouse'    => $inv->warehouse ? $inv->warehouse->toArray() : null,
+                    'quantity'     => $inv->quantity
+                ];
+                $processedProductIds[] = $inv->product_id;
+            }
+
+            // 2. Add products that have NO inventory record
+            $processedProductIds = array_unique($processedProductIds);
+            foreach ($allProducts as $p) {
+                if (!in_array($p->id, $processedProductIds)) {
                     $flattened[] = [
-                        'product_id' => $p->id,
-                        'product'    => $cleanProduct,
+                        'product_id'   => $p->id,
+                        'product'      => $p->toArray(),
                         'warehouse_id' => 0,
-                        'warehouse'  => (object)[
+                        'warehouse'    => [
                             'name' => 'Sin Stock (General)',
                             'code' => 'N/A'
                         ],
-                        'quantity'   => 0
+                        'quantity'     => 0
                     ];
-                } else {
-                    // Create a clean product object for the flattened items to avoid circular references
-                    $cleanProduct = $p->replicate();
-                    $cleanProduct->id = $p->id; // replicate doesn't copy ID
-                    $cleanProduct->setRelations([]); // Clear all loaded relations
-
-                    foreach ($p->inventories as $inv) {
-                        // Ensure product object is present for frontend grouping
-                        $inv->setRelation('product', $cleanProduct);
-                        $flattened[] = $inv;
-                    }
                 }
             }
 
