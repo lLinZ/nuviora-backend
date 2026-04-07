@@ -31,22 +31,34 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 2. Filtrar visibilidad según el rol
+        // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                // a) Cliente asignado directamente
-                $q->where('agent_id', $user->id) 
-                // b) Tiene una orden activa asignada a este vendedor
-                ->orWhereHas('orders', function ($oq) use ($user) {
+                // CASO A: El vendedor tiene una orden ACTIVA con este cliente
+                // (Si hay orden activa, este es el filtro principal)
+                $q->whereHas('orders', function ($oq) use ($user) {
                     $oq->where('agent_id', $user->id)
                        ->whereHas('status', function($sq) {
-                           $sq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                           // Estatus que consideramos "Activos/En proceso"
+                           $sq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado', 'Finalizado']);
                        });
                 })
-                // c) Tiene una conversación abierta (lead) asignada a este vendedor
-                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)
-                       ->where('status', 'open');
+                // CASO B: El cliente NO tiene ninguna orden activa de NADIE, 
+                // pero el vendedor es el dueño del cliente o del lead
+                ->orWhere(function ($sq) use ($user) {
+                    // No debe tener órdenes activas de otros agentes
+                    $sq->whereDoesntHave('orders', function ($oq) {
+                        $oq->whereHas('status', function($sq) {
+                            $sq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado', 'Finalizado']);
+                        });
+                    })
+                    ->where(function ($inner) use ($user) {
+                        $inner->where('agent_id', $user->id) // Dueño del cliente
+                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                  $cq->where('agent_id', $user->id) // Dueño del lead
+                                     ->where('status', 'open');
+                              });
+                    });
                 });
             });
         }
