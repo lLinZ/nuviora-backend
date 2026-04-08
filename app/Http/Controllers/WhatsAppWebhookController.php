@@ -43,6 +43,9 @@ class WhatsAppWebhookController extends Controller
             $body        = '';
             $mediaPath   = null;
 
+            // [LOG AGRESIVO] Ver estructura cruda para diagnosticar stickers animados
+            \Illuminate\Support\Facades\Log::info("Webhook Message Data: " . json_encode($messageData));
+
             if ($type === 'text') {
                 $body = $messageData['text']['body'] ?? '';
             } elseif ($type === 'location') {
@@ -53,45 +56,23 @@ class WhatsAppWebhookController extends Controller
                 $imageId = $messageData['image']['id'] ?? null;
                 $caption = $messageData['image']['caption'] ?? '';
                 $token = config('services.whatsapp.access_token');
-                
-                if (!$token || !$imageId) {
-                    $body = "⚠️ Error interno: Token no configurado o ID de imagen faltante.";
-                } else {
-                    // 1. Request Media URL from Meta API
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)
-                        ->get("https://graph.facebook.com/v17.0/{$imageId}");
-                    
+                if ($token && $imageId) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$imageId}");
                     if ($response->successful() && isset($response['url'])) {
-                        $mediaUrl = $response['url'];
-                        
-                        // 2. Download the actual binary file from Meta (Añadimos User-Agent para evitar bloqueos)
-                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
-                            ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
-                            ->get($mediaUrl);
-                        
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
                         if ($mediaResponse->successful()) {
-                            // Save to public storage
-                            $filename = 'whatsapp_media/' . uniqid('wa_') . '.jpg';
+                            $filename = 'whatsapp_media/' . uniqid('wa_img_') . '.jpg';
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
-                            
-                            // 3. Assign to variables BEFORE saving the message to DB
-                            $mediaPath = url('storage/' . $filename); 
+                            $mediaPath = url('storage/' . $filename);
                             $body = $caption;
-                        } else {
-                            // SI FALLA, ESCUPIMOS EL ERROR EN EL CHAT DE REACT
-                            $body = "⚠️ Error descargando archivo de Meta: Status " . $mediaResponse->status() . " | " . $mediaResponse->body();
                         }
-                    } else {
-                        // SI FALLA LA URL, ESCUPIMOS EL ERROR EN EL CHAT DE REACT
-                        $body = "⚠️ Error pidiendo URL a Meta: Status " . $response->status() . " | " . $response->body();
                     }
                 }
             } elseif ($type === 'video' || isset($messageData['video'])) {
                 $videoId = $messageData['video']['id'] ?? null;
                 $caption = $messageData['video']['caption'] ?? '';
                 $token = config('services.whatsapp.access_token');
-                
-                if ($token) {
+                if ($token && $videoId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$videoId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->timeout(60)->get($response['url']);
@@ -100,8 +81,6 @@ class WhatsAppWebhookController extends Controller
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                             $mediaPath = url('storage/' . $filename);
                             $body = $caption;
-                        } else {
-                            $body = "⚠️ Error descargando video de Meta: Status " . $mediaResponse->status();
                         }
                     }
                 }
@@ -109,7 +88,6 @@ class WhatsAppWebhookController extends Controller
                 $audioData = $messageData['audio'] ?? ($messageData['voice'] ?? []);
                 $audioId   = $audioData['id'] ?? null;
                 $token     = config('services.whatsapp.access_token');
-                
                 if ($token && $audioId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$audioId}");
                     if ($response->successful() && isset($response['url'])) {
@@ -119,54 +97,41 @@ class WhatsAppWebhookController extends Controller
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                             $mediaPath = url('storage/' . $filename);
                             $body = '🎵 Nota de voz';
-                        } else {
-                            $body = "⚠️ Error descargando audio de Meta: Status " . $mediaResponse->status();
                         }
-                    } else {
-                        $body = "⚠️ Error obteniendo URL de audio de Meta: Status " . $response->status();
                     }
-                } else {
-                    \Illuminate\Support\Facades\Log::error("DEBUG_WA: No se pudo descargar audio. Token: " . ($token ? 'OK' : 'FAIL') . " | AudioID: " . ($audioId ? 'OK' : 'FAIL'));
-                    $body = "🎵 Nota de voz recibida (sin archivo disponible)";
                 }
             } elseif ($type === 'sticker' || isset($messageData['sticker'])) {
+                $type = 'sticker';
                 $stickerId = $messageData['sticker']['id'] ?? null;
                 $isAnimated = $messageData['sticker']['animated'] ?? false;
                 $token     = config('services.whatsapp.access_token');
-                
-                \Illuminate\Support\Facades\Log::info("Procesando sticker: {$stickerId} (Animado: " . ($isAnimated ? 'SI' : 'NO') . ")");
-
+                \Illuminate\Support\Facades\Log::info("DETECCIÓN STICKER: ID {$stickerId}, Animado: " . ($isAnimated ? 'SI' : 'NO'));
                 if ($token && $stickerId) {
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)
-                        ->get("https://graph.facebook.com/v17.0/{$stickerId}");
-                    
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$stickerId}");
                     if ($response->successful() && isset($response['url'])) {
-                        \Illuminate\Support\Facades\Log::info("Descargando media de sticker desde: " . $response['url']);
-                        
+                        \Illuminate\Support\Facades\Log::info("GET MEDIA URL: " . $response['url']);
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
                             ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
-                            ->timeout(30)
+                            ->followRedirects()
+                            ->timeout(60)
                             ->get($response['url']);
-                            
                         if ($mediaResponse->successful()) {
-                            // Prefix diferente para stickers animados — el frontend los renderiza con <video>
-                            $prefix    = $isAnimated ? 'wa_sticker_anim_' : 'wa_sticker_';
-                            $filename  = 'whatsapp_media/' . uniqid($prefix) . '.webp';
+                            $prefix = $isAnimated ? 'wa_sticker_anim_' : 'wa_sticker_';
+                            $filename = 'whatsapp_media/' . uniqid($prefix) . '.webp';
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                             $mediaPath = url('storage/' . $filename);
-                            $body      = $isAnimated ? '🎬 Sticker animado' : '🎨 Sticker';
-                            
-                            \Illuminate\Support\Facades\Log::info("Sticker guardado exitosamente: {$filename}");
+                            $body = $isAnimated ? '🎬 Sticker animado' : '🎨 Sticker';
+                            \Illuminate\Support\Facades\Log::info("STICKER GUARDADO: {$filename} (" . strlen($mediaResponse->body()) . " bytes)");
                         } else {
-                            $body = $isAnimated ? '🎬 Sticker animado (no disponible)' : '🎨 Sticker (no disponible)';
-                            \Illuminate\Support\Facades\Log::error("Error al descargar media del sticker: " . $mediaResponse->status());
+                            $body = $isAnimated ? '🎬 Sticker animado (Descarga fallida)' : '🎨 Sticker (Descarga fallida)';
+                            \Illuminate\Support\Facades\Log::error("ERROR DESCARGA MEDIA: Status " . $mediaResponse->status());
                         }
                     } else {
-                        $body = '🎨 Sticker (no disponible)';
-                        \Illuminate\Support\Facades\Log::error("Error al obtener URL del sticker desde Meta: " . $response->status());
+                        $body = '🎨 Sticker (URL no obtenida)';
+                        \Illuminate\Support\Facades\Log::error("ERROR URL META: Status " . $response->status());
                     }
                 } else {
-                    $body = '🎨 Sticker';
+                    $body = '🎨 Sticker (Sin ID/Token)';
                 }
             }
 
@@ -174,10 +139,8 @@ class WhatsAppWebhookController extends Controller
             $cleanPhone = preg_replace('/[^0-9]/', '', $from);
             $last10     = substr($cleanPhone, -10);
 
-            // 1. Find or Create Client (Lead)
             $client = \App\Models\Client::where('phone', 'like', "%{$last10}")->first();
             if (!$client) {
-                // Mocking Shopify ID as we do in manual orders
                 $tempId = (int) (microtime(true) * 1000); 
                 $client = \App\Models\Client::create([
                     'phone'           => '+' . $cleanPhone,
@@ -187,20 +150,16 @@ class WhatsAppWebhookController extends Controller
                 ]);
             }
 
-            // [NEW] Lead Assignment
             if (!$client->agent_id) {
                 \App\Services\CrmAssignmentService::assignNextAgent($client);
             }
 
-            // 2. Update the "last received" vital for Meta's 24H window + sorting
             $receivedAt = now();
             $client->update([
                 'last_whatsapp_received_at' => $receivedAt,
                 'last_interaction_at' => $receivedAt
             ]);
 
-            // 3. Determine if there is an active Order to attach the thread
-            // [NEW] 🕵️ BUSCAR ID DE ORDEN EN EL TEXTO (Caso: cliente escribe de otro número)
             $order = null;
             if (preg_match('/(\d{10,15})/', $body, $matches)) {
                 $orderIdFromText = $matches[1];
@@ -209,15 +168,8 @@ class WhatsAppWebhookController extends Controller
                       ->orWhere('order_number', $orderIdFromText)
                       ->orWhere('name', 'LIKE', "%{$orderIdFromText}%");
                 })->orderBy('created_at', 'desc')->first();
-
-                if ($order && $order->client_id !== $client->id) {
-                    \Illuminate\Support\Facades\Log::info("Vinculando mensaje de nuevo número a orden existente #{$order->name}");
-                    // Opcionalmente podríamos vincular el numero nuevo al cliente original, o solo dejar el mensaje huerfano vinculado a la orden.
-                    // Por ahora vinculamos el mensaje a la orden encontrada.
-                }
             }
 
-            // Si no se encontró por texto, buscar orden activa del remitente actual
             if (!$order) {
                 $order = \App\Models\Order::where('client_id', $client->id)
                     ->whereHas('status', function($q) {
@@ -228,40 +180,18 @@ class WhatsAppWebhookController extends Controller
             }
 
             $orderId = null;
-
             if ($order) {
                 $orderId = $order->id;
-                // Agent is automatically the one assigned to the order
                 if ($order->agent_id) {
-                    // Asegurar que la conversación huerfana (si existe) se asigne a quien tiene la orden
                     $conv = \App\Models\WhatsappConversation::where('client_id', $client->id)->where('status', 'open')->first();
-                    if ($conv) {
-                        $conv->update(['agent_id' => $order->agent_id]);
-                    }
+                    if ($conv) { $conv->update(['agent_id' => $order->agent_id]); }
                 }
             } else {
-                // No active order -> Check for open Orphan Conversation
-                $conversation = \App\Models\WhatsappConversation::where('client_id', $client->id)
-                    ->where('status', 'open')
-                    ->first();
-
+                $conversation = \App\Models\WhatsappConversation::where('client_id', $client->id)->where('status', 'open')->first();
                 if (!$conversation) {
-                    // No conversation -> ROUND ROBIN Allocation
-                    // Find least busy agent active for whatsapp today
-                    $availableRoster = \App\Models\DailyAgentRoster::where('is_whatsapp_active', true)
-                        ->inRandomOrder()->first(); // Simple random allocation for now
-                    
-                    $agentId = null;
-                    $shopId = null;
-                    if ($availableRoster) {
-                        $agentId = $availableRoster->agent_id;
-                        $shopId = $availableRoster->shop_id;
-                    } else {
-                        // Fallback: Assign to Admin
-                        $admin = \App\Models\User::whereHas('role', function($q){ $q->where('description', 'Admin'); })->first();
-                        $agentId = $admin ? $admin->id : 1;
-                    }
-
+                    $availableRoster = \App\Models\DailyAgentRoster::where('is_whatsapp_active', true)->inRandomOrder()->first();
+                    $agentId = $availableRoster ? $availableRoster->agent_id : 1;
+                    $shopId = $availableRoster ? $availableRoster->shop_id : null;
                     \App\Models\WhatsappConversation::create([
                         'client_id' => $client->id,
                         'agent_id' => $agentId,
@@ -271,7 +201,6 @@ class WhatsAppWebhookController extends Controller
                 }
             }
 
-            // 4. Create the message
             $msg = \App\Models\WhatsappMessage::updateOrCreate(
                 ['message_id' => $messageId],
                 [
@@ -285,10 +214,7 @@ class WhatsAppWebhookController extends Controller
                 ]
             );
 
-            $msg->refresh();
-            // Load relationships for real-time frontend mapping
-            $msg->load('client', 'order');
-            
+            $msg->refresh()->load('client', 'order');
             event(new \App\Events\WhatsappMessageReceived($msg));
         }
 
