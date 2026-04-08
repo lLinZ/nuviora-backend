@@ -131,6 +131,7 @@ class WhatsAppWebhookController extends Controller
                 }
             } elseif ($type === 'sticker' || isset($messageData['sticker'])) {
                 $stickerId = $messageData['sticker']['id'] ?? null;
+                $isAnimated = $messageData['sticker']['animated'] ?? false;
                 $token     = config('services.whatsapp.access_token');
 
                 if ($token && $stickerId) {
@@ -139,14 +140,17 @@ class WhatsAppWebhookController extends Controller
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
                             ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
+                            ->timeout(30)
                             ->get($response['url']);
                         if ($mediaResponse->successful()) {
-                            $filename  = 'whatsapp_media/' . uniqid('wa_sticker_') . '.webp';
+                            // Prefix diferente para stickers animados — el frontend los renderiza con <video>
+                            $prefix    = $isAnimated ? 'wa_sticker_anim_' : 'wa_sticker_';
+                            $filename  = 'whatsapp_media/' . uniqid($prefix) . '.webp';
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                             $mediaPath = url('storage/' . $filename);
-                            $body      = '🎨 Sticker';
+                            $body      = $isAnimated ? '🎬 Sticker animado' : '🎨 Sticker';
                         } else {
-                            $body = '🎨 Sticker (no disponible)';
+                            $body = $isAnimated ? '🎬 Sticker animado (no disponible)' : '🎨 Sticker (no disponible)';
                         }
                     } else {
                         $body = '🎨 Sticker (no disponible)';
