@@ -44,6 +44,10 @@ class WhatsAppWebhookController extends Controller
 
             if ($type === 'text') {
                 $body = $messageData['text']['body'] ?? '';
+            } elseif ($type === 'location') {
+                $lat = $messageData['location']['latitude'] ?? '';
+                $lng = $messageData['location']['longitude'] ?? '';
+                $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
             } elseif ($type === 'image' || isset($messageData['image'])) {
                 $imageId = $messageData['image']['id'] ?? null;
                 $caption = $messageData['image']['caption'] ?? '';
@@ -60,21 +64,57 @@ class WhatsAppWebhookController extends Controller
                         }
                     }
                 }
+            } elseif ($type === 'video' || isset($messageData['video'])) {
+                $videoId = $messageData['video']['id'] ?? null;
+                $caption = $messageData['video']['caption'] ?? '';
+                $token = config('services.whatsapp.access_token');
+                if ($token && $videoId) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$videoId}");
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->timeout(60)->get($response['url']);
+                        if ($mediaResponse->successful()) {
+                            $filename = 'whatsapp_media/' . uniqid('wa_vid_') . '.mp4';
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            $mediaPath = url('storage/' . $filename);
+                            $body = $caption ?: '🎥 Video';
+                        }
+                    }
+                }
+            } elseif ($type === 'audio' || $type === 'voice' || isset($messageData['audio']) || isset($messageData['voice'])) {
+                $audioData = $messageData['audio'] ?? ($messageData['voice'] ?? []);
+                $audioId   = $audioData['id'] ?? null;
+                $token     = config('services.whatsapp.access_token');
+                if ($token && $audioId) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$audioId}");
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
+                        if ($mediaResponse->successful()) {
+                            $filename = 'whatsapp_media/' . uniqid('wa_audio_') . '.ogg';
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            $mediaPath = url('storage/' . $filename);
+                            $body = '🎵 Nota de voz';
+                        }
+                    }
+                }
             } elseif ($type === 'sticker' || isset($messageData['sticker'])) {
                 $stickerId = $messageData['sticker']['id'] ?? null;
+                $isAnimated = $messageData['sticker']['animated'] ?? false;
                 $token = config('services.whatsapp.access_token');
                 if ($token && $stickerId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$stickerId}");
                     if ($response->successful() && isset($response['url'])) {
-                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->followRedirects()->timeout(60)->get($response['url']);
                         if ($mediaResponse->successful()) {
-                            $filename = 'whatsapp_media/' . uniqid('wa_sticker_') . '.webp';
+                            $prefix = $isAnimated ? 'wa_sticker_anim_' : 'wa_sticker_';
+                            $filename = 'whatsapp_media/' . uniqid($prefix) . '.webp';
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                             $mediaPath = url('storage/' . $filename);
-                            $body = '🎨 Sticker';
+                            $body = $isAnimated ? '🎬 Sticker animado' : '🎨 Sticker';
                         }
                     }
                 }
+            } elseif ($type === 'unsupported') {
+                $body = '⚠️ Sticker o documento no soportado';
             }
 
             if (!$from || !$messageId) {
