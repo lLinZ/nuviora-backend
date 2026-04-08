@@ -38,24 +38,12 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
-        if (!$isAdmin) {
-            // EXCLUSIÓN ABSOLUTA: Si el cliente tiene una orden ACTIVA con OTRO vendedor, Roxi NO lo ve.
-            $query->whereDoesntHave('orders', function ($oq) use ($user) {
-                $oq->where('agent_id', '!=', $user->id)
-                   ->where(function ($sq) {
-                       $sq->whereDoesntHave('status')
-                          ->orWhereHas('status', function ($ssq) {
-                              $ssq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                          });
-                   });
-            });
-
-            // INCLUSIÓN RESTRICTIVA: De los que NO están bloqueados por otros, Roxi solo ve los suyos.
-            $query->where(function ($q) use ($user) {
-                // a) Ella tiene una orden activa (o sin estatus)
-                $q->whereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
+            // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
+            if (!$isAdmin) {
+                // CONDICIÓN UNICA Y BRUTAL: 
+                // A) No debe tener NINGUNA orden activa con OTRO vendedor.
+                $query->whereDoesntHave('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', '!=', $user->id)
                        ->where(function ($sq) {
                            $sq->whereDoesntHave('status')
                               ->orWhereHas('status', function ($ssq) {
@@ -63,32 +51,34 @@ class WhatsappConversationController extends Controller
                               });
                        });
                 })
-                // b) O ella es la dueña del cliente/lead (y ya sabemos que no hay órdenes ajenas por el filtro de arriba)
-                ->orWhere(function ($q2) use ($user) {
-                    $q2->where('agent_id', $user->id)
-                       ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                           $cq->where('agent_id', $user->id)
-                              ->where('status', 'open');
-                       });
+                // B) Y debe pertenecerle a ella (por orden activa, dueño del cliente o lead)
+                ->where(function ($inner) use ($user) {
+                    $inner->where('agent_id', $user->id)
+                        ->orWhereHas('orders', function ($oq) use ($user) {
+                            $oq->where('agent_id', $user->id);
+                        })
+                        ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                            $cq->where('agent_id', $user->id)
+                               ->where('status', 'open');
+                        });
                 });
-            });
-        }
+            }
 
-        $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
-                $q->where('is_from_client', true)->where('status', '!=', 'read');
-            }])
-            ->with(['agent', 'latestOrder.agent', 'whatsappConversations' => function ($q) {
-                $q->where('status', 'open');
-            }])
-            ->with('latestWhatsappMessage')
-            ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
-            ->paginate(50);
+            $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
+                    $q->where('is_from_client', true)->where('status', '!=', 'read');
+                }])
+                ->with(['agent', 'latestOrder.agent', 'whatsappConversations' => function ($q) {
+                    $q->where('status', 'open');
+                }])
+                ->with('latestWhatsappMessage')
+                ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
+                ->paginate(50);
 
-        $paginator->getCollection()->transform(function ($client) {
-            $latestMessage = $client->latestWhatsappMessage;
-            return [
-                'id' => $client->id,
-                'name' => $client->first_name . ' ' . $client->last_name,
+            $paginator->getCollection()->transform(function ($client) {
+                $latestMessage = $client->latestWhatsappMessage;
+                return [
+                    'id' => $client->id,
+                    'name' => '[FILTRO] ' . $client->first_name . ' ' . $client->last_name,
                 'phone' => $client->phone,
                 'unread_count' => $client->unread_count,
                 'is_window_open' => $client->isWhatsappWindowOpen(),
