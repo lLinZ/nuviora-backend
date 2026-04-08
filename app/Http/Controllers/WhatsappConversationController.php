@@ -33,27 +33,36 @@ class WhatsappConversationController extends Controller
 
         // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
         if (!$isAdmin) {
-            // REGLA NUCLEAR: Si el cliente tiene una orden ACTIVA asignada a OTRO, Roxi NO lo ve.
-            $query->whereDoesntHave('orders', function ($oq) use ($user) {
-                $oq->where('agent_id', '!=', $user->id)
-                   ->where(function ($sq) {
-                       $sq->whereDoesntHave('status')
-                          ->orWhereHas('status', function ($ssq) {
-                              $ssq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                          });
-                   });
-            });
-
-            // REGLA DE INCLUSIÓN: De los que quedan, solo muestra los que le pertenecen a ella
             $query->where(function ($q) use ($user) {
-                $q->where('agent_id', $user->id) // Dueña del cliente
-                  ->orWhereHas('orders', function ($oq) use ($user) {
-                      $oq->where('agent_id', $user->id); // Tiene orden de ella
-                  })
-                  ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                      $cq->where('agent_id', $user->id) // Dueño del lead
-                         ->where('status', 'open');
-                  });
+                // CONDICIÓN 1: La vendedora logueada tiene una orden ACTIVA con el cliente
+                $q->whereHas('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)
+                       ->where(function ($sq) {
+                           $sq->whereDoesntHave('status')
+                              ->orWhereHas('status', function ($ssq) {
+                                  $ssq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                              });
+                       });
+                })
+                // CONDICIÓN 2: NADIE en el sistema tiene una orden activa con este cliente,
+                // por lo tanto, el chat es del dueño del cliente o lead.
+                ->orWhere(function ($q2) use ($user) {
+                    $q2->whereDoesntHave('orders', function ($oq) {
+                        $oq->where(function ($sq) {
+                            $sq->whereDoesntHave('status')
+                               ->orWhereHas('status', function ($ssq) {
+                                   $ssq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                               });
+                        });
+                    })
+                    ->where(function ($q3) use ($user) {
+                        $q3->where('agent_id', $user->id) // Dueño del cliente
+                          ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                              $cq->where('agent_id', $user->id)
+                                 ->where('status', 'open');
+                          });
+                    });
+                });
             });
         }
 
