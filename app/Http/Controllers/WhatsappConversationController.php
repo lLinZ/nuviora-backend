@@ -74,11 +74,12 @@ class WhatsappConversationController extends Controller
                 ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
                 ->paginate(50);
 
-            $paginator->getCollection()->transform(function ($client) {
+            $paginator->getCollection()->transform(function ($client) use ($user, $roleName) {
                 $latestMessage = $client->latestWhatsappMessage;
+                $userTag = "[ID:{$user->id} - ROL:{$roleName}] ";
                 return [
                     'id' => $client->id,
-                    'name' => '[FILTRO] ' . $client->first_name . ' ' . $client->last_name,
+                    'name' => $userTag . $client->first_name . ' ' . $client->last_name,
                 'phone' => $client->phone,
                 'unread_count' => $client->unread_count,
                 'is_window_open' => $client->isWhatsappWindowOpen(),
