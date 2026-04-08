@@ -133,15 +133,21 @@ class WhatsAppWebhookController extends Controller
                 $stickerId = $messageData['sticker']['id'] ?? null;
                 $isAnimated = $messageData['sticker']['animated'] ?? false;
                 $token     = config('services.whatsapp.access_token');
+                
+                \Illuminate\Support\Facades\Log::info("Procesando sticker: {$stickerId} (Animado: " . ($isAnimated ? 'SI' : 'NO') . ")");
 
                 if ($token && $stickerId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)
                         ->get("https://graph.facebook.com/v17.0/{$stickerId}");
+                    
                     if ($response->successful() && isset($response['url'])) {
+                        \Illuminate\Support\Facades\Log::info("Descargando media de sticker desde: " . $response['url']);
+                        
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
                             ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
                             ->timeout(30)
                             ->get($response['url']);
+                            
                         if ($mediaResponse->successful()) {
                             // Prefix diferente para stickers animados — el frontend los renderiza con <video>
                             $prefix    = $isAnimated ? 'wa_sticker_anim_' : 'wa_sticker_';
@@ -149,11 +155,15 @@ class WhatsAppWebhookController extends Controller
                             \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
                             $mediaPath = url('storage/' . $filename);
                             $body      = $isAnimated ? '🎬 Sticker animado' : '🎨 Sticker';
+                            
+                            \Illuminate\Support\Facades\Log::info("Sticker guardado exitosamente: {$filename}");
                         } else {
                             $body = $isAnimated ? '🎬 Sticker animado (no disponible)' : '🎨 Sticker (no disponible)';
+                            \Illuminate\Support\Facades\Log::error("Error al descargar media del sticker: " . $mediaResponse->status());
                         }
                     } else {
                         $body = '🎨 Sticker (no disponible)';
+                        \Illuminate\Support\Facades\Log::error("Error al obtener URL del sticker desde Meta: " . $response->status());
                     }
                 } else {
                     $body = '🎨 Sticker';
