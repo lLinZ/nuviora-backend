@@ -40,10 +40,12 @@ class WhatsappConversationController extends Controller
 
             // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
             if (!$isAdmin) {
-                // CONDICIÓN UNICA Y BRUTAL: 
-                // A) No debe tener NINGUNA orden activa con OTRO vendedor.
+                // A) No debe tener NINGUNA orden activa con OTRO vendedor (o sin vendedor).
                 $query->whereDoesntHave('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', '!=', $user->id)
+                    $oq->where(function ($sub) use ($user) {
+                        $sub->where('agent_id', '!=', $user->id)
+                            ->orWhereNull('agent_id');
+                    })
                        ->where(function ($sq) {
                            $sq->whereDoesntHave('status')
                               ->orWhereHas('status', function ($ssq) {
@@ -76,7 +78,7 @@ class WhatsappConversationController extends Controller
 
             $paginator->getCollection()->transform(function ($client) use ($user, $roleName) {
                 $latestMessage = $client->latestWhatsappMessage;
-                $userTag = "[ID:{$user->id} - ROL:{$roleName}] ";
+                $userTag = "[ID:{$user->id} - CID:{$client->id}] ";
                 return [
                     'id' => $client->id,
                     'name' => $userTag . $client->first_name . ' ' . $client->last_name,
