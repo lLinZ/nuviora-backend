@@ -42,13 +42,14 @@ class WhatsAppWebhookController extends Controller
             $body        = '';
             $mediaPath   = null;
 
-            if ($type === 'text') {
+            // Prioridad a la detección por contenido por si el "type" falla o es "unsupported"
+            if (isset($messageData['text'])) {
                 $body = $messageData['text']['body'] ?? '';
-            } elseif ($type === 'location') {
+            } elseif (isset($messageData['location'])) {
                 $lat = $messageData['location']['latitude'] ?? '';
                 $lng = $messageData['location']['longitude'] ?? '';
                 $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
-            } elseif ($type === 'image' || isset($messageData['image'])) {
+            } elseif (isset($messageData['image'])) {
                 $imageId = $messageData['image']['id'] ?? null;
                 $caption = $messageData['image']['caption'] ?? '';
                 $token = config('services.whatsapp.access_token');
@@ -64,7 +65,7 @@ class WhatsAppWebhookController extends Controller
                         }
                     }
                 }
-            } elseif ($type === 'video' || isset($messageData['video'])) {
+            } elseif (isset($messageData['video'])) {
                 $videoId = $messageData['video']['id'] ?? null;
                 $caption = $messageData['video']['caption'] ?? '';
                 $token = config('services.whatsapp.access_token');
@@ -80,7 +81,7 @@ class WhatsAppWebhookController extends Controller
                         }
                     }
                 }
-            } elseif ($type === 'audio' || $type === 'voice' || isset($messageData['audio']) || isset($messageData['voice'])) {
+            } elseif (isset($messageData['audio']) || isset($messageData['voice'])) {
                 $audioData = $messageData['audio'] ?? ($messageData['voice'] ?? []);
                 $audioId   = $audioData['id'] ?? null;
                 $token     = config('services.whatsapp.access_token');
@@ -96,7 +97,23 @@ class WhatsAppWebhookController extends Controller
                         }
                     }
                 }
-            } elseif ($type === 'sticker' || isset($messageData['sticker'])) {
+            } elseif (isset($messageData['document'])) {
+                $docId = $messageData['document']['id'] ?? null;
+                $fileNameOrig = $messageData['document']['filename'] ?? 'documento';
+                $token = config('services.whatsapp.access_token');
+                if ($token && $docId) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$docId}");
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->timeout(60)->get($response['url']);
+                        if ($mediaResponse->successful()) {
+                            $filename = 'whatsapp_media/' . uniqid('wa_doc_') . '_' . $fileNameOrig;
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            $mediaPath = url('storage/' . $filename);
+                            $body = "📄 {$fileNameOrig}";
+                        }
+                    }
+                }
+            } elseif (isset($messageData['sticker'])) {
                 $stickerId = $messageData['sticker']['id'] ?? null;
                 $isAnimated = $messageData['sticker']['animated'] ?? false;
                 $token = config('services.whatsapp.access_token');
