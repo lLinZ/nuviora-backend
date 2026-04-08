@@ -22,9 +22,9 @@ class WhatsappConversationController extends Controller
         }
         
         $roleName = strtolower($user->role->description ?? '');
-        // Solo Admin y Master pueden ver TODO. 
-        // Gerentes y Vendedores pasarán por el filtro de privacidad.
-        $isAdmin = in_array($roleName, ['admin', 'master', 'superadmin']);
+        // RESTRICCIÓN TOTAL: Solo el rol 'admin' ve todo.
+        // Master, Gerente y Vendedor pasan por el filtro de privacidad.
+        $isAdmin = ($roleName === 'admin');
         $search = $request->query('search');
 
         $query = Client::query();
@@ -38,33 +38,27 @@ class WhatsappConversationController extends Controller
             });
         }
 
-            // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
-            if (!$isAdmin) {
-                // A) No debe tener NINGUNA orden activa con OTRO vendedor (o sin vendedor).
-                $query->whereDoesntHave('orders', function ($oq) use ($user) {
-                    $oq->where(function ($sub) use ($user) {
-                        $sub->where('agent_id', '!=', $user->id)
-                            ->orWhereNull('agent_id');
-                    })
-                       ->where(function ($sq) {
-                           $sq->whereDoesntHave('status')
-                              ->orWhereHas('status', function ($ssq) {
-                                  $ssq->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+        // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
+        if (!$isAdmin) {
+            $query->where(function ($q) use ($user) {
+                // Opción A: Eres el dueño del PEDIDO MÁS RECIENTE del cliente
+                $q->whereHas('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)
+                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)');
+                })
+                // Opción B: No hay NINGÚN pedido aún, y tú eres el dueño del cliente o lead
+                ->orWhere(function ($q2) use ($user) {
+                    $q2->whereDoesntHave('orders')
+                       ->where(function ($q3) use ($user) {
+                           $q3->where('agent_id', $user->id)
+                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                  $cq->where('agent_id', $user->id)
+                                     ->where('status', 'open');
                               });
                        });
-                })
-                // B) Y debe pertenecerle a ella (por orden activa, dueño del cliente o lead)
-                ->where(function ($inner) use ($user) {
-                    $inner->where('agent_id', $user->id)
-                        ->orWhereHas('orders', function ($oq) use ($user) {
-                            $oq->where('agent_id', $user->id);
-                        })
-                        ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                            $cq->where('agent_id', $user->id)
-                               ->where('status', 'open');
-                        });
                 });
-            }
+            });
+        }
 
             $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
                     $q->where('is_from_client', true)->where('status', '!=', 'read');
@@ -76,12 +70,11 @@ class WhatsappConversationController extends Controller
                 ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
                 ->paginate(50);
 
-            $paginator->getCollection()->transform(function ($client) use ($user, $roleName) {
-                $latestMessage = $client->latestWhatsappMessage;
-                $userTag = "[ID:{$user->id} - CID:{$client->id}] ";
-                return [
-                    'id' => $client->id,
-                    'name' => $userTag . $client->first_name . ' ' . $client->last_name,
+        $paginator->getCollection()->transform(function ($client) {
+            $latestMessage = $client->latestWhatsappMessage;
+            return [
+                'id' => $client->id,
+                'name' => $client->first_name . ' ' . $client->last_name,
                 'phone' => $client->phone,
                 'unread_count' => $client->unread_count,
                 'is_window_open' => $client->isWhatsappWindowOpen(),
