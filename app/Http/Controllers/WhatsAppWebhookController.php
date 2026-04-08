@@ -129,6 +129,31 @@ class WhatsAppWebhookController extends Controller
                     \Illuminate\Support\Facades\Log::error("DEBUG_WA: No se pudo descargar audio. Token: " . ($token ? 'OK' : 'FAIL') . " | AudioID: " . ($audioId ? 'OK' : 'FAIL'));
                     $body = "🎵 Nota de voz recibida (sin archivo disponible)";
                 }
+            } elseif ($type === 'sticker' || isset($messageData['sticker'])) {
+                $stickerId = $messageData['sticker']['id'] ?? null;
+                $token     = config('services.whatsapp.access_token');
+
+                if ($token && $stickerId) {
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)
+                        ->get("https://graph.facebook.com/v17.0/{$stickerId}");
+                    if ($response->successful() && isset($response['url'])) {
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
+                            ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
+                            ->get($response['url']);
+                        if ($mediaResponse->successful()) {
+                            $filename  = 'whatsapp_media/' . uniqid('wa_sticker_') . '.webp';
+                            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $mediaResponse->body());
+                            $mediaPath = url('storage/' . $filename);
+                            $body      = '🎨 Sticker';
+                        } else {
+                            $body = '🎨 Sticker (no disponible)';
+                        }
+                    } else {
+                        $body = '🎨 Sticker (no disponible)';
+                    }
+                } else {
+                    $body = '🎨 Sticker';
+                }
             }
 
             // Normalize phone: strip non-digits, search by last 10 digits
