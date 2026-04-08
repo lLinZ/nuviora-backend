@@ -222,6 +222,7 @@ class WhatsappConversationController extends Controller
                     'client_id' => $client->id,
                     'message_id' => $send['messages'][0]['id'],
                     'body' => $request->caption ?? "Archivo {$type}",
+                    'is_from_client' => false,
                     'status' => 'sent',
                     'sent_at' => now(),
                     'media' => asset('storage/' . $path)

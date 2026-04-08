@@ -120,6 +120,7 @@ class WhatsappMessageController extends Controller
                 $msg = WhatsappMessage::create([
                     'order_id' => $order->id,
                     'client_id' => $order->client_id,
+                    'is_from_client' => false,
                     'body' => $request->caption ?? "Archivo {$type}",
                     'media' => asset('storage/' . $path),
                     'status' => 'sent',
