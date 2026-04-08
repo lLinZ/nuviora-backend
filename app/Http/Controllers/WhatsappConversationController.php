@@ -17,7 +17,14 @@ class WhatsappConversationController extends Controller
     public function index(Request $request)
     {
         $user = Auth::user();
-        $isAdmin = $user->role && in_array($user->role->description, ['Admin', 'Gerente', 'Master', 'SuperAdmin']);
+        if (!$user->relationLoaded('role')) {
+            $user->load('role');
+        }
+        
+        $roleName = strtolower($user->role->description ?? '');
+        // Solo Admin y Master pueden ver TODO. 
+        // Gerentes y Vendedores pasarán por el filtro de privacidad.
+        $isAdmin = in_array($roleName, ['admin', 'master', 'superadmin']);
         $search = $request->query('search');
 
         $query = Client::query();
