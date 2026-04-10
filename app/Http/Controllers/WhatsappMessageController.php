@@ -60,28 +60,30 @@ class WhatsappMessageController extends Controller
             if ($request->filled('template_name')) {
                 if ($tpl) {
                     if (!empty($tpl->meta_components)) {
-                        $rawType = strtoupper($component['type'] ?? '');
-                        if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+                        foreach ($tpl->meta_components as $component) {
+                            $rawType = strtoupper($component['type'] ?? '');
+                            if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
 
-                        $text = $component['text'] ?? '';
-                        preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
-                        
-                        $parameters = [];
-                        if (!empty($matches[1])) {
-                            foreach ($matches[1] as $placeholderNum) {
-                                $idx = (int)$placeholderNum - 1;
-                                $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
+                            $text = $component['text'] ?? '';
+                            preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
+                            
+                            $parameters = [];
+                            if (!empty($matches[1])) {
+                                foreach ($matches[1] as $placeholderNum) {
+                                    $idx = (int)$placeholderNum - 1;
+                                    $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
+                                }
+                            } else if ($rawType === 'HEADER' && count($vars) > 0) {
+                                Log::critical("DEBUG_MSG_CTRL: Fallback Header para {$request->template_name}");
+                                $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
                             }
-                        } else if ($rawType === 'HEADER' && count($vars) > 0) {
-                            Log::critical("DEBUG_MSG_CTRL: Fallback Header para {$request->template_name}");
-                            $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
-                        }
 
-                        if (!empty($parameters)) {
-                            $components[] = [
-                                'type' => strtolower($rawType),
-                                'parameters' => $parameters
-                            ];
+                            if (!empty($parameters)) {
+                                $components[] = [
+                                    'type' => strtolower($rawType),
+                                    'parameters' => $parameters
+                                ];
+                            }
                         }
                     }
                 } else {
