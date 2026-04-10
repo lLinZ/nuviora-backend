@@ -80,46 +80,56 @@ class ExternalWhatsAppController extends Controller
         $service = new WhatsAppService();
         $components = [];
 
+        // Normalize template name (remove spaces, lowercase) to be more robust for n8n
+        $templateName = $request->template_name;
         if ($request->filled('template_name')) {
-            $tpl = WhatsappTemplate::where('name', $request->template_name)->first();
+            $normalizedName = strtolower(str_replace(' ', '_', $templateName));
+            $tpl = WhatsappTemplate::where('name', $normalizedName)
+                ->orWhere('name', $templateName)
+                ->orWhere('label', $templateName)
+                ->first();
 
-            if ($tpl && !empty($tpl->meta_components)) {
+            if ($tpl) {
+                $templateName = $tpl->name; // Use the technical name from DB
                 $vars = $request->vars ?? [];
-                Log::info("EXTERNAL_WA: Preparation Template " . $request->template_name);
+                Log::info("EXTERNAL_WA: Preparation Template " . $templateName, ['vars' => $vars]);
 
-                foreach ($tpl->meta_components as $component) {
-                    $rawType = strtoupper($component['type'] ?? '');
-                    if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+                if (!empty($tpl->meta_components)) {
+                    foreach ($tpl->meta_components as $component) {
+                        $rawType = strtoupper($component['type'] ?? '');
+                        if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
 
-                    $text = $component['text'] ?? '';
-                    preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
-                    
-                    $parameters = [];
-                    if (!empty($matches[1])) {
-                        foreach ($matches[1] as $placeholderNum) {
-                            $idx = (int)$placeholderNum - 1;
-                            $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
+                        $text = $component['text'] ?? '';
+                        preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
+                        
+                        $parameters = [];
+                        if (!empty($matches[1])) {
+                            foreach ($matches[1] as $placeholderNum) {
+                                $idx = (int)$placeholderNum - 1;
+                                $val = (string)($vars[$idx] ?? '');
+                                if ($val === '') {
+                                    Log::warning("EXTERNAL_WA: Missing variable for index {$idx} in template {$templateName}");
+                                }
+                                $parameters[] = ['type' => 'text', 'text' => $val];
+                            }
+                        } else if ($rawType === 'HEADER' && count($vars) > 0) {
+                            $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
                         }
-                    } else if ($rawType === 'HEADER' && count($vars) > 0) {
-                        $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
-                    }
 
-                    if (!empty($parameters)) {
-                        $components[] = [
-                            'type' => strtolower($rawType),
-                            'parameters' => $parameters
-                        ];
+                        if (!empty($parameters)) {
+                            $components[] = [
+                                'type' => strtolower($rawType),
+                                'parameters' => $parameters
+                            ];
+                        }
                     }
                 }
             } else {
-                // Fallback for missing mapping
-                if ($request->has('vars')) {
-                    $parameters = array_map(fn($v) => ['type' => 'text', 'text' => (string)$v], $request->vars);
-                    $components[] = ['type' => 'body', 'parameters' => $parameters];
-                }
+                Log::warning("EXTERNAL_WA: Template NOT found in local DB: " . $templateName);
             }
 
-            $result = $service->sendTemplate($client->phone, $request->template_name, 'es', $components);
+            Log::debug("EXTERNAL_WA: Final components for {$templateName}", ['components' => $components]);
+            $result = $service->sendTemplate($client->phone, $templateName, 'es', $components);
         } else {
             // Raw body message
             $result = $service->sendMessage($client->phone, $message->body);
