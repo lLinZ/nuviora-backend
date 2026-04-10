@@ -35,6 +35,12 @@ class OrderObserver
             'description' => 'Orden creada/importada.',
         ]);
 
+        // 🔥 CLIENT FIX: Trigger event for "Nuevo" status even if auto-assignment happens instantly.
+        // This allows n8n to process "New Order" automations correctly.
+        if (!self::$muteWebhooks) {
+            $this->webhookService->trigger('order.status_changed', $order);
+        }
+
         try {
             app(AssignOrderService::class)->assignOne($order);
         } catch (\Throwable $e) {

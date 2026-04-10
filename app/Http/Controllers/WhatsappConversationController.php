@@ -8,6 +8,7 @@ use App\Models\WhatsappConversation;
 use App\Models\WhatsappMessage;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use App\Constants\OrderStatus;
 
 class WhatsappConversationController extends Controller
 {
@@ -41,10 +42,13 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                // Opción A: Eres el dueño del PEDIDO MÁS RECIENTE del cliente
+                // Opción A: Eres el dueño del PEDIDO MÁS RECIENTE del cliente (y no es Sin Stock)
                 $q->whereHas('orders', function ($oq) use ($user) {
                     $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)');
+                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
+                       ->whereHas('status', function($sq) {
+                           $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                       });
                 })
                 // Opción B: No hay NINGÚN pedido aún, y tú eres el dueño del cliente o lead
                 ->orWhere(function ($q2) use ($user) {
