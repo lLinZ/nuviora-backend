@@ -31,7 +31,8 @@ class WhatsAppWebhookController extends Controller
     public function handle(Request $request)
     {
         $payload = $request->all();
-        \Illuminate\Support\Facades\Log::info('WhatsApp Webhook Payload Received:', $payload);
+        // Use json_encode to avoid "Over 9 levels deep" normalization errors in some loggers
+        \Illuminate\Support\Facades\Log::info('WhatsApp Webhook Payload Received: ' . json_encode($payload));
 
         if (isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
             $messageData = $payload['entry'][0]['changes'][0]['value']['messages'][0];
