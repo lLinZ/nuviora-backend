@@ -122,6 +122,7 @@ class ExternalWhatsAppController extends Controller
             } else {
                 Log::warning("EXTERNAL_WA: Template NOT found in local DB: " . $templateName);
             }
+        }
 
         // 3. Log message using the translated localOrderId and rendered body
         $message = WhatsappMessage::create([
