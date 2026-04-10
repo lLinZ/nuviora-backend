@@ -128,29 +128,32 @@ class WhatsappConversationController extends Controller
 
         $latestOrder = \App\Models\Order::where('client_id', $client->id)->orderBy('created_at', 'desc')->first();
 
+        $renderedBody = $request->body;
+        $components = [];
+        $vars = $request->vars ?? [];
+        $tpl = null;
+        $service = new \App\Services\WhatsAppService();
+
+        if ($request->filled('template_name')) {
+            $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
+            if ($tpl) {
+                $renderedBody = $tpl->render($vars);
+                Log::critical("DEBUG_WA: Enviando plantilla estructurada " . $request->template_name);
+            }
+        }
+
         $message = WhatsappMessage::create([
             'order_id' => $latestOrder ? $latestOrder->id : null,
             'client_id' => $client->id,
-            'body' => $request->body,
+            'body' => $renderedBody,
             'is_from_client' => $request->input('is_from_client', false),
             'status' => 'sending',
             'sent_at' => now(),
         ]);
 
         if (!$message->is_from_client) {
-            $service = new \App\Services\WhatsAppService();
-            $components = [];
-
             if ($request->filled('template_name')) {
-                $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
-
                 if ($tpl) {
-                    $vars = $request->vars ?? [];
-                    Log::critical("DEBUG_WA: Enviando plantilla estructurada " . $request->template_name);
-
-                    // Update the message body with the rendered template text
-                    $message->update(['body' => $tpl->render($vars)]);
-
                     if (!empty($tpl->meta_components)) {
                         $rawType = strtoupper($component['type'] ?? '');
                         if (!in_array($rawType, ['HEADER', 'BODY'])) continue;

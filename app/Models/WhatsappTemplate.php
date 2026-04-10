@@ -31,7 +31,10 @@ class WhatsappTemplate extends Model
             foreach ($this->meta_components as $component) {
                 if (($component['type'] ?? '') === 'HEADER') {
                     $headerText = ($component['text'] ?? '') . "\n\n";
-                    break;
+                }
+                // Fallback: If body string is empty or doesn't look like it has placeholders, try getting it from META
+                if (($component['type'] ?? '') === 'BODY' && (empty($renderedBody) || !str_contains($renderedBody, '{{'))) {
+                    $renderedBody = $component['text'] ?? '';
                 }
             }
         }
@@ -41,6 +44,11 @@ class WhatsappTemplate extends Model
         foreach ($vars as $index => $value) {
             $placeholder = '{{' . ($index + 1) . '}}';
             $fullText = str_replace($placeholder, (string)$value, $fullText);
+        }
+
+        // If rendering still fails to find variables and it's mostly empty, just show the template name
+        if (trim($fullText) === '') {
+            return "Plantilla: " . $this->name;
         }
 
         return $fullText;

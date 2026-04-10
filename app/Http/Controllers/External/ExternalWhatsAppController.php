@@ -67,21 +67,14 @@ class ExternalWhatsAppController extends Controller
             ]);
         }
 
-        // 3. Log message using the translated localOrderId
-        $message = WhatsappMessage::create([
-            'order_id' => $localOrderId,
-            'client_id' => $client->id,
-            'body' => $request->body ?? "Plantilla: {$request->template_name}",
-            'is_from_client' => false,
-            'status' => 'sending',
-            'sent_at' => now(),
-        ]);
-
-        $service = new WhatsAppService();
-        $components = [];
-
         // Normalize template name (remove spaces, lowercase) to be more robust for n8n
         $templateName = $request->template_name;
+        $components = [];
+        $renderedBody = $request->body ?? "Plantilla: {$templateName}";
+        $service = new WhatsAppService();
+        $tpl = null;
+        $vars = $request->vars ?? [];
+
         if ($request->filled('template_name')) {
             $normalizedName = strtolower(str_replace(' ', '_', $templateName));
             $tpl = WhatsappTemplate::where('name', $normalizedName)
@@ -90,13 +83,11 @@ class ExternalWhatsAppController extends Controller
                 ->first();
 
             if ($tpl) {
-                $templateName = $tpl->name; // Use the technical name from DB
-                $vars = $request->vars ?? [];
+                $templateName = $tpl->name;
                 Log::info("EXTERNAL_WA: Preparation Template " . $templateName, ['vars' => $vars]);
-
-                // Update the message body with the rendered template text
-                $message->update(['body' => $tpl->render($vars)]);
-
+                // RENDER BEFORE CREATING RECORD
+                $renderedBody = $tpl->render($vars);
+                
                 if (!empty($tpl->meta_components)) {
                     Log::debug("EXTERNAL_WA: Using technical definition for {$templateName}", ['meta_components' => $tpl->meta_components]);
                     foreach ($tpl->meta_components as $component) {
@@ -132,7 +123,17 @@ class ExternalWhatsAppController extends Controller
                 Log::warning("EXTERNAL_WA: Template NOT found in local DB: " . $templateName);
             }
 
-            Log::debug("EXTERNAL_WA: Final components for {$templateName}", ['components' => $components]);
+        // 3. Log message using the translated localOrderId and rendered body
+        $message = WhatsappMessage::create([
+            'order_id' => $localOrderId,
+            'client_id' => $client->id,
+            'body' => $renderedBody,
+            'is_from_client' => false,
+            'status' => 'sending',
+            'sent_at' => now(),
+        ]);
+
+        if ($request->filled('template_name')) {
             $result = $service->sendTemplate($client->phone, $templateName, 'es', $components);
         } else {
             // Raw body message

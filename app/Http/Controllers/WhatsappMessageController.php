@@ -33,29 +33,32 @@ class WhatsappMessageController extends Controller
 
         $order = Order::with('client')->findOrFail($orderId);
 
+        $renderedBody = $request->body;
+        $components = [];
+        $vars = $request->vars ?? [];
+        $tpl = null;
+        $service = new WhatsAppService();
+
+        if ($request->filled('template_name')) {
+            $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
+            if ($tpl) {
+                $renderedBody = $tpl->render($vars);
+                Log::critical("DEBUG_MSG_CTRL: Enviando {$request->template_name}", ['vars' => $vars]);
+            }
+        }
+
         $message = WhatsappMessage::create([
             'order_id' => $order->id,
             'client_id' => $order->client_id,
-            'body' => $request->body,
+            'body' => $renderedBody,
             'is_from_client' => $request->input('is_from_client', false),
             'status' => 'sending',
             'sent_at' => now(),
         ]);
 
         if (!$message->is_from_client) {
-            $service = new WhatsAppService();
-            
             if ($request->filled('template_name')) {
-                $components = [];
-                $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
-
                 if ($tpl) {
-                    $vars = $request->vars ?? [];
-                    Log::critical("DEBUG_MSG_CTRL: Enviando {$request->template_name}", ['vars' => $vars]);
-
-                    // Update the message body with the rendered template text
-                    $message->update(['body' => $tpl->render($vars)]);
-
                     if (!empty($tpl->meta_components)) {
                         $rawType = strtoupper($component['type'] ?? '');
                         if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
