@@ -18,4 +18,31 @@ class WhatsappTemplate extends Model
         'is_official'     => 'boolean',
         'meta_components' => 'array',
     ];
+
+    /**
+     * Render the template body replacing placeholders {{1}}, {{2}}, etc. with provided vars.
+     */
+    public function render(array $vars): string
+    {
+        $renderedBody = $this->body;
+        // Also check if there's a header to prepend
+        $headerText = '';
+        if (!empty($this->meta_components)) {
+            foreach ($this->meta_components as $component) {
+                if (($component['type'] ?? '') === 'HEADER') {
+                    $headerText = ($component['text'] ?? '') . "\n\n";
+                    break;
+                }
+            }
+        }
+
+        $fullText = $headerText . $renderedBody;
+
+        foreach ($vars as $index => $value) {
+            $placeholder = '{{' . ($index + 1) . '}}';
+            $fullText = str_replace($placeholder, (string)$value, $fullText);
+        }
+
+        return $fullText;
+    }
 }

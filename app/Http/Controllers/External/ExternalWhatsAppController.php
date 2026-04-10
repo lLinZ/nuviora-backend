@@ -94,6 +94,9 @@ class ExternalWhatsAppController extends Controller
                 $vars = $request->vars ?? [];
                 Log::info("EXTERNAL_WA: Preparation Template " . $templateName, ['vars' => $vars]);
 
+                // Update the message body with the rendered template text
+                $message->update(['body' => $tpl->render($vars)]);
+
                 if (!empty($tpl->meta_components)) {
                     Log::debug("EXTERNAL_WA: Using technical definition for {$templateName}", ['meta_components' => $tpl->meta_components]);
                     foreach ($tpl->meta_components as $component) {

@@ -144,11 +144,14 @@ class WhatsappConversationController extends Controller
             if ($request->filled('template_name')) {
                 $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
 
-                if ($tpl && !empty($tpl->meta_components)) {
+                if ($tpl) {
                     $vars = $request->vars ?? [];
                     Log::critical("DEBUG_WA: Enviando plantilla estructurada " . $request->template_name);
 
-                    foreach ($tpl->meta_components as $component) {
+                    // Update the message body with the rendered template text
+                    $message->update(['body' => $tpl->render($vars)]);
+
+                    if (!empty($tpl->meta_components)) {
                         $rawType = strtoupper($component['type'] ?? '');
                         if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
 

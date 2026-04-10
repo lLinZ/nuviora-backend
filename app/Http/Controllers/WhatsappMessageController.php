@@ -49,11 +49,14 @@ class WhatsappMessageController extends Controller
                 $components = [];
                 $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
 
-                if ($tpl && !empty($tpl->meta_components)) {
+                if ($tpl) {
                     $vars = $request->vars ?? [];
                     Log::critical("DEBUG_MSG_CTRL: Enviando {$request->template_name}", ['vars' => $vars]);
 
-                    foreach ($tpl->meta_components as $component) {
+                    // Update the message body with the rendered template text
+                    $message->update(['body' => $tpl->render($vars)]);
+
+                    if (!empty($tpl->meta_components)) {
                         $rawType = strtoupper($component['type'] ?? '');
                         if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
 
