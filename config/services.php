@@ -29,6 +29,7 @@ return [
         'access_token'    => env('WHATSAPP_ACCESS_TOKEN'),
         'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
         'waba_id'         => env('WHATSAPP_WABA_ID'),
+        'verify_token'    => env('WHATSAPP_VERIFY_TOKEN'),
     ],
 
     'ses' => [
