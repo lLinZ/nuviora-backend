@@ -15,6 +15,15 @@ class WhatsappMessageController extends Controller
     {
         $perPage = $request->query('per_page', 20);
         $order = Order::findOrFail($orderId);
+        
+        $user = auth()->user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+
+        if (!$isAdmin && $order->agent_id !== $user->id) {
+            return response()->json(['message' => 'No tienes permiso para ver los mensajes de esta orden.'], 403);
+        }
+
         $messages = WhatsappMessage::where('client_id', $order->client_id)
             ->orderBy('created_at', 'desc')
             ->paginate($perPage);
@@ -32,6 +41,14 @@ class WhatsappMessageController extends Controller
         ]);
 
         $order = Order::with('client')->findOrFail($orderId);
+        
+        $user = auth()->user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+
+        if (!$isAdmin && $order->agent_id !== $user->id) {
+            return response()->json(['message' => 'No tienes permiso para enviar mensajes en esta orden.'], 403);
+        }
 
         $renderedBody = $request->body;
         $components = [];
@@ -114,6 +131,14 @@ class WhatsappMessageController extends Controller
     {
         $request->validate(['file' => 'required|file|max:15000']);
         $order = Order::with('client')->findOrFail($orderId);
+
+        $user = auth()->user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+
+        if (!$isAdmin && $order->agent_id !== $user->id) {
+            return response()->json(['message' => 'No tienes permiso para enviar multimedia en esta orden.'], 403);
+        }
         $file = $request->file('file');
         $path = $file->store('whatsapp_media', 'public');
         
@@ -144,9 +169,18 @@ class WhatsappMessageController extends Controller
 
     public function markAsRead($orderId)
     {
+        $order = Order::findOrFail($orderId);
+        
+        $user = auth()->user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+
+        if (!$isAdmin && $order->agent_id !== $user->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
         WhatsappMessage::where('order_id', $orderId)->where('is_from_client', true)->update(['status' => 'read']);
-        $order = Order::find($orderId);
-        if ($order) event(new \App\Events\OrderUpdated($order));
+        event(new \App\Events\OrderUpdated($order));
         return response()->json(['status' => 'success']);
     }
 }

@@ -42,7 +42,8 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                // Opción A: Eres el dueño del PEDIDO MÁS RECIENTE del cliente (y no es Sin Stock)
+                // EXCLUSIVIDAD: Si hay un pedido activo/reciente (no Sin Stock), ese agente es el único dueño.
+                // Prioridad 1: Eres el dueño del PEDIDO MÁS RECIENTE del cliente (y no es Sin Stock)
                 $q->whereHas('orders', function ($oq) use ($user) {
                     $oq->where('agent_id', $user->id)
                        ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
@@ -50,12 +51,21 @@ class WhatsappConversationController extends Controller
                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
                        });
                 })
-                // Opción B: Eres el AGENTE ASIGNADO directamente al cliente (Lead o Re-asignado)
-                ->orWhere('agent_id', $user->id)
-                // Opción C: No hay ningún pedido aún, pero tienes una conversación abierta
-                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)
-                       ->where('status', 'open');
+                // Prioridad 2: El cliente NO tiene pedidos válidos (distintos a Sin Stock),
+                // en cuyo caso permitimos acceso si eres el Agente Asignado o tienes sesión abierta.
+                ->orWhere(function($sub) use ($user) {
+                    $sub->whereDoesntHave('orders', function($oq) {
+                        $oq->whereHas('status', function($sq) {
+                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                        });
+                    })
+                    ->where(function($inner) use ($user) {
+                        $inner->where('agent_id', $user->id)
+                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                  $cq->where('agent_id', $user->id)
+                                     ->where('status', 'open');
+                              });
+                    });
                 });
             });
         }
@@ -92,10 +102,51 @@ class WhatsappConversationController extends Controller
     }
 
     /**
-     * Trae todos los mensajes de un cliente.
+     * Trae todos los mensajes de un cliente con verificación de privacidad.
      */
     public function show($clientId)
     {
+        $user = Auth::user();
+        if (!$user->relationLoaded('role')) {
+            $user->load('role');
+        }
+        $roleName = strtolower($user->role->description ?? '');
+        $isAdmin = ($roleName === 'admin');
+
+        $query = Client::where('id', $clientId);
+
+        if (!$isAdmin) {
+            $query->where(function ($q) use ($user) {
+                $q->whereHas('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)
+                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
+                       ->whereHas('status', function($sq) {
+                           $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                       });
+                })
+                ->orWhere(function($sub) use ($user) {
+                    $sub->whereDoesntHave('orders', function($oq) {
+                        $oq->whereHas('status', function($sq) {
+                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                        });
+                    })
+                    ->where(function($inner) use ($user) {
+                        $inner->where('agent_id', $user->id)
+                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                  $cq->where('agent_id', $user->id)
+                                     ->where('status', 'open');
+                              });
+                    });
+                });
+            });
+        }
+
+        $client = $query->first();
+
+        if (!$client) {
+            return response()->json(['message' => 'No tienes acceso a este chat o el cliente no existe.'], 403);
+        }
+
         $messages = WhatsappMessage::where('client_id', $clientId)
             ->orderBy('created_at', 'asc')
             ->get();
@@ -107,14 +158,43 @@ class WhatsappConversationController extends Controller
      */
     public function store(Request $request, $clientId)
     {
-        $request->validate([
-            'body' => 'required|string',
-            'is_from_client' => 'boolean',
-            'template_name' => 'nullable|string',
-            'vars' => 'nullable|array',
-        ]);
+        $user = Auth::user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
 
         $client = Client::findOrFail($clientId);
+
+        // PRIVACY CHECK
+        if (!$isAdmin) {
+            $hasAccess = Client::where('id', $clientId)
+                ->where(function ($q) use ($user) {
+                    $q->whereHas('orders', function ($oq) use ($user) {
+                        $oq->where('agent_id', $user->id)
+                           ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
+                           ->whereHas('status', function($sq) {
+                               $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                           });
+                    })
+                    ->orWhere(function($sub) use ($user) {
+                        $sub->whereDoesntHave('orders', function($oq) {
+                            $oq->whereHas('status', function($sq) {
+                                $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                            });
+                        })
+                        ->where(function($inner) use ($user) {
+                            $inner->where('agent_id', $user->id)
+                                  ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                      $cq->where('agent_id', $user->id)
+                                         ->where('status', 'open');
+                                  });
+                        });
+                    });
+                })->exists();
+
+            if (!$hasAccess) {
+                return response()->json(['message' => 'No tienes permiso para enviar mensajes a este cliente.'], 403);
+            }
+        }
         
         if (!$request->input('is_from_client', false) && !$request->filled('template_name')) {
             if (!$client->isWhatsappWindowOpen()) {
@@ -212,7 +292,44 @@ class WhatsappConversationController extends Controller
     public function sendMedia(Request $request, $clientId)
     {
         $request->validate(['file' => 'required|file|max:16384']);
+        
+        $user = Auth::user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+
         $client = Client::findOrFail($clientId);
+
+        // PRIVACY CHECK
+        if (!$isAdmin) {
+            $hasAccess = Client::where('id', $clientId)
+                ->where(function ($q) use ($user) {
+                    $q->whereHas('orders', function ($oq) use ($user) {
+                        $oq->where('agent_id', $user->id)
+                           ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
+                           ->whereHas('status', function($sq) {
+                               $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                           });
+                    })
+                    ->orWhere(function($sub) use ($user) {
+                        $sub->whereDoesntHave('orders', function($oq) {
+                            $oq->whereHas('status', function($sq) {
+                                $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                            });
+                        })
+                        ->where(function($inner) use ($user) {
+                            $inner->where('agent_id', $user->id)
+                                  ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                      $cq->where('agent_id', $user->id)
+                                         ->where('status', 'open');
+                                  });
+                        });
+                    });
+                })->exists();
+
+            if (!$hasAccess) {
+                return response()->json(['message' => 'No tienes permiso para enviar multimedia a este cliente.'], 403);
+            }
+        }
         
         $file = $request->file('file');
         $path = $file->store('whatsapp_media', 'public');
