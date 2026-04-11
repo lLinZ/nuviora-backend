@@ -181,7 +181,13 @@ class WhatsAppWebhookController extends Controller
                     
                     if ($foundOrder && $foundOrder->agent_id) {
                         $client->update(['agent_id' => $foundOrder->agent_id]);
-                        \Illuminate\Support\Facades\Log::info("WA_HOOK: Re-asignado cliente {$client->id} al agente {$foundOrder->agent_id} por mención de orden #{$orderNum}");
+                        
+                        // Sync active conversation
+                        \App\Models\WhatsappConversation::where('client_id', $client->id)
+                            ->where('status', 'open')
+                            ->update(['agent_id' => $foundOrder->agent_id]);
+
+                        \Illuminate\Support\Facades\Log::info("WA_HOOK: Re-asignado cliente {$client->id} y conversación al agente {$foundOrder->agent_id} por mención de orden #{$orderNum}");
                     }
                 }
             }

@@ -39,6 +39,11 @@ class CrmAssignmentService
         $agent = $activeAgents[$nextIndex];
         
         $client->update(['agent_id' => $agent->id]);
+
+        // Sync active conversation if it exists
+        \App\Models\WhatsappConversation::where('client_id', $client->id)
+            ->where('status', 'open')
+            ->update(['agent_id' => $agent->id]);
         
         Cache::forever('crm_assignment_last_index', $nextIndex);
         

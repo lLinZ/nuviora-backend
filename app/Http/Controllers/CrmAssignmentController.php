@@ -69,6 +69,11 @@ class CrmAssignmentController extends Controller
             }
         }
 
+        // --- NEW: Sync Open WhatsApp Conversations ---
+        \App\Models\WhatsappConversation::where('client_id', $client->id)
+            ->where('status', 'open')
+            ->update(['agent_id' => $request->agent_id]);
+
         return response()->json([
             'status' => true,
             'message' => "Cliente y orden vinculada asignados exitosamente",

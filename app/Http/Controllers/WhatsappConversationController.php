@@ -358,4 +358,38 @@ class WhatsappConversationController extends Controller
         }
         return response()->json(['message' => 'Error'], 500);
     }
+
+    /**
+     * Reasignar una conversación específica (y opcionalmente el cliente/orden).
+     */
+    public function assignAgent(Request $request, $conversationId)
+    {
+        $request->validate(['agent_id' => 'required|exists:users,id']);
+        
+        $conv = WhatsappConversation::findOrFail($conversationId);
+        $conv->update(['agent_id' => $request->agent_id]);
+
+        // Sync client
+        $client = $conv->client;
+        if ($client) {
+            $client->update(['agent_id' => $request->agent_id]);
+            
+            // Sync latest active order
+            $latestOrder = $client->latestOrder;
+            if ($latestOrder) {
+                $latestOrder->load('status');
+                $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado'];
+                if (!$latestOrder->status || !in_array($latestOrder->status->description, $terminalStatuses)) {
+                    $latestOrder->update(['agent_id' => $request->agent_id]);
+                    event(new \App\Events\OrderUpdated($latestOrder));
+                }
+            }
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Chat reasignado exitosamente',
+            'conversation' => $conv->load('agent')
+        ]);
+    }
 }
