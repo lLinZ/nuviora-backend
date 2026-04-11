@@ -120,7 +120,18 @@ class ExternalWhatsAppController extends Controller
                     }
                 }
             } else {
-                Log::warning("EXTERNAL_WA: Template NOT found in local DB: " . $templateName);
+                Log::warning("EXTERNAL_WA: Template NOT found in local DB: " . $templateName . ". Using direct vars fallback.");
+                // FALLBACK: Si no existe en la BD local, enviamos las variables directamente al BODY
+                if (!empty($vars)) {
+                    $parameters = array_map(function($v) {
+                        return ['type' => 'text', 'text' => (string)$v];
+                    }, $vars);
+                    
+                    $components[] = [
+                        'type' => 'body',
+                        'parameters' => $parameters
+                    ];
+                }
             }
         }
 
