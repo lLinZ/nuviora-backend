@@ -50,16 +50,12 @@ class WhatsappConversationController extends Controller
                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
                        });
                 })
-                // Opción B: No hay NINGÚN pedido aún, y tú eres el dueño del cliente o lead
-                ->orWhere(function ($q2) use ($user) {
-                    $q2->whereDoesntHave('orders')
-                       ->where(function ($q3) use ($user) {
-                           $q3->where('agent_id', $user->id)
-                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                                  $cq->where('agent_id', $user->id)
-                                     ->where('status', 'open');
-                              });
-                       });
+                // Opción B: Eres el AGENTE ASIGNADO directamente al cliente (Lead o Re-asignado)
+                ->orWhere('agent_id', $user->id)
+                // Opción C: No hay ningún pedido aún, pero tienes una conversación abierta
+                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)
+                       ->where('status', 'open');
                 });
             });
         }

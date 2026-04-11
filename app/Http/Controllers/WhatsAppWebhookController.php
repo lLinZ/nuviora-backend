@@ -30,11 +30,14 @@ class WhatsAppWebhookController extends Controller
      */
     public function handle(Request $request)
     {
-        $payload = $request->all();
-        // Use json_encode to avoid "Over 9 levels deep" normalization errors in some loggers
-        \Illuminate\Support\Facades\Log::info('WhatsApp Webhook Payload Received: ' . json_encode($payload));
+        try {
+            $payload = $request->all();
+            \Illuminate\Support\Facades\Log::info('WhatsApp Webhook Payload Received: ' . json_encode($payload));
 
-        if (isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
+            if (!isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
+                return response()->json(['status' => 'no_messages']);
+            }
+
             $messageData = $payload['entry'][0]['changes'][0]['value']['messages'][0];
             $from        = $messageData['from'] ?? '';
             $type        = $messageData['type'] ?? 'text';
@@ -43,19 +46,32 @@ class WhatsAppWebhookController extends Controller
             $body        = '';
             $mediaPath   = null;
 
-            // Prioridad a la detección por contenido por si el "type" falla o es "unsupported"
+            // 1. Extraer contenido según el tipo
             if (isset($messageData['text'])) {
                 $body = $messageData['text']['body'] ?? '';
             } elseif (isset($messageData['location'])) {
                 $lat = $messageData['location']['latitude'] ?? '';
                 $lng = $messageData['location']['longitude'] ?? '';
+                $name = $messageData['location']['name'] ?? '';
+                $addr = $messageData['location']['address'] ?? '';
                 $body = "📍 Ubicación: https://www.google.com/maps?q={$lat},{$lng}";
+                if ($name) $body .= "\nNombre: {$name}";
+                if ($addr) $body .= "\nDir: {$addr}";
+            } elseif (isset($messageData['interactive'])) {
+                $iType = $messageData['interactive']['type'] ?? '';
+                if ($iType === 'button_reply') {
+                    $body = $messageData['interactive']['button_reply']['title'] ?? 'Botón presionado';
+                } elseif ($iType === 'list_reply') {
+                    $body = $messageData['interactive']['list_reply']['title'] ?? 'Opción de lista';
+                    $desc = $messageData['interactive']['list_reply']['description'] ?? '';
+                    if ($desc) $body .= " ({$desc})";
+                }
             } elseif (isset($messageData['image'])) {
                 $imageId = $messageData['image']['id'] ?? null;
                 $caption = $messageData['image']['caption'] ?? '';
                 $token = config('services.whatsapp.access_token');
                 if ($token && $imageId) {
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$imageId}");
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v21.0/{$imageId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
                         if ($mediaResponse->successful()) {
@@ -71,7 +87,7 @@ class WhatsAppWebhookController extends Controller
                 $caption = $messageData['video']['caption'] ?? '';
                 $token = config('services.whatsapp.access_token');
                 if ($token && $videoId) {
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$videoId}");
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v21.0/{$videoId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->timeout(60)->get($response['url']);
                         if ($mediaResponse->successful()) {
@@ -87,7 +103,7 @@ class WhatsAppWebhookController extends Controller
                 $audioId   = $audioData['id'] ?? null;
                 $token     = config('services.whatsapp.access_token');
                 if ($token && $audioId) {
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$audioId}");
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v21.0/{$audioId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->get($response['url']);
                         if ($mediaResponse->successful()) {
@@ -103,7 +119,7 @@ class WhatsAppWebhookController extends Controller
                 $fileNameOrig = $messageData['document']['filename'] ?? 'documento';
                 $token = config('services.whatsapp.access_token');
                 if ($token && $docId) {
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$docId}");
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v21.0/{$docId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->timeout(60)->get($response['url']);
                         if ($mediaResponse->successful()) {
@@ -119,7 +135,7 @@ class WhatsAppWebhookController extends Controller
                 $isAnimated = $messageData['sticker']['animated'] ?? false;
                 $token = config('services.whatsapp.access_token');
                 if ($token && $stickerId) {
-                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v17.0/{$stickerId}");
+                    $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v21.0/{$stickerId}");
                     if ($response->successful() && isset($response['url'])) {
                         $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->followRedirects()->timeout(60)->get($response['url']);
                         if ($mediaResponse->successful()) {
@@ -143,6 +159,7 @@ class WhatsAppWebhookController extends Controller
             $cleanPhone = preg_replace('/[^0-9]/', '', $from);
             $last10     = substr($cleanPhone, -10);
             $client = \App\Models\Client::where('phone', 'like', "%{$last10}")->first();
+            
             if (!$client) {
                 $tempId = (int) (microtime(true) * 1000); 
                 $client = \App\Models\Client::create([
@@ -153,14 +170,34 @@ class WhatsAppWebhookController extends Controller
                 ]);
             }
 
-            if (!$client->agent_id) { \App\Services\CrmAssignmentService::assignNextAgent($client); }
+            // REGLA DE ASIGNACIÓN POR NÚMERO DE ORDEN EN EL MENSAJE
+            if (!empty($body)) {
+                // Buscar patrón #1234 o solo 1234 (mínimo 4 dígitos)
+                if (preg_match('/#?(\d{4,10})/', $body, $matches)) {
+                    $orderNum = $matches[1];
+                    $foundOrder = \App\Models\Order::where('customer_number', $orderNum)
+                        ->orWhere('id', $orderNum)
+                        ->first();
+                    
+                    if ($foundOrder && $foundOrder->agent_id) {
+                        $client->update(['agent_id' => $foundOrder->agent_id]);
+                        \Illuminate\Support\Facades\Log::info("WA_HOOK: Re-asignado cliente {$client->id} al agente {$foundOrder->agent_id} por mención de orden #{$orderNum}");
+                    }
+                }
+            }
+
+            if (!$client->agent_id) { 
+                \App\Services\CrmAssignmentService::assignNextAgent($client); 
+            }
 
             $receivedAt = now();
             $client->update(['last_whatsapp_received_at' => $receivedAt, 'last_interaction_at' => $receivedAt]);
 
-            // Order Link
+            // Link to active order if exists
             $order = \App\Models\Order::where('client_id', $client->id)
-                ->whereHas('status', function($q) { $q->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']); })
+                ->whereHas('status', function($q) { 
+                    $q->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']); 
+                })
                 ->orderBy('created_at', 'desc')->first();
 
             $orderId = $order ? $order->id : null;
@@ -178,9 +215,16 @@ class WhatsAppWebhookController extends Controller
 
             $msg->refresh()->load('client', 'order');
             event(new \App\Events\WhatsappMessageReceived($msg));
-        }
 
-        return response()->json(['status' => 'success']);
+            return response()->json(['status' => 'success']);
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('WA_HOOK_ERROR: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
     }
+
 }
 
