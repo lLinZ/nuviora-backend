@@ -175,7 +175,7 @@ class WhatsAppWebhookController extends Controller
                 // Buscar patrón #1234 o solo 1234 (mínimo 4 dígitos)
                 if (preg_match('/#?(\d{4,10})/', $body, $matches)) {
                     $orderNum = $matches[1];
-                    $foundOrder = \App\Models\Order::where('customer_number', $orderNum)
+                    $foundOrder = \App\Models\Order::where('order_number', $orderNum)
                         ->orWhere('id', $orderNum)
                         ->first();
                     
