@@ -184,7 +184,19 @@ class Order extends Model
     }
     
     // Virtual attributes
-    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt', 'whatsapp_unread_count'];
+    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt', 'whatsapp_unread_count', 'is_store_open'];
+
+    public function getIsStoreOpenAttribute()
+    {
+        // 1. Intentar con la tienda de la orden
+        if ($this->shop) {
+            return $this->shop->is_open;
+        }
+
+        // 2. Fallback: Buscar la primera tienda con horario configurado
+        $defaultShop = \App\Models\Shop::where('auto_schedule_enabled', true)->first();
+        return $defaultShop ? $defaultShop->is_open : true;
+    }
 
 
     public function getChangePaymentDetailsAttribute()
