@@ -162,6 +162,7 @@ class ExternalWhatsAppController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => $message,
+                'is_window_open' => $client->isWhatsappWindowOpen(),
                 'external_id' => $result['messages'][0]['id']
             ], 201);
         }
@@ -171,6 +172,7 @@ class ExternalWhatsAppController extends Controller
         
         return response()->json([
             'success' => false,
+            'is_window_open' => $client->isWhatsappWindowOpen(),
             'error' => $result,
             'message_id' => $message->id
         ], 500);
