@@ -33,6 +33,13 @@ class Client extends Model
         'agent_id' => 'integer',
     ];
 
+    protected $appends = ['is_whatsapp_window_open'];
+
+    public function getIsWhatsappWindowOpenAttribute()
+    {
+        return $this->isWhatsappWindowOpen();
+    }
+
     public function agent()
     {
         return $this->belongsTo(User::class, 'agent_id');
