@@ -201,7 +201,6 @@ class ExternalWhatsAppController extends Controller
             'is_window_open' => $client->isWhatsappWindowOpen(),
         ]);
     }
-    }
 
     /**
      * Get a comprehensive snapshot for n8n to decide how to proceed.
