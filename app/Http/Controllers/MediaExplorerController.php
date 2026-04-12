@@ -29,12 +29,26 @@ class MediaExplorerController extends Controller
     }
 
     /**
+     * Sanitize the path to prevent Path Traversal.
+     */
+    protected function sanitizePath($path)
+    {
+        // 1. Remove any ".." or ".\" or "./" to prevent going up
+        $path = str_replace(['..', './', '.\\'], '', $path);
+        
+        // 2. Remove leading/trailing slashes
+        $path = trim($path, '/\\');
+
+        return $path;
+    }
+
+    /**
      * List files and directories.
      */
     public function index(Request $request)
     {
         $this->authorizeAdmin();
-        $path = $request->query('path', '');
+        $path = $this->sanitizePath($request->query('path', ''));
         $fullPath = $this->basePath . ($path ? '/' . $path : '');
 
         // Ensure base directory exists
@@ -51,7 +65,7 @@ class MediaExplorerController extends Controller
             $result[] = [
                 'name' => basename($dir),
                 'type' => 'directory',
-                'path' => str_replace($this->basePath . '/', '', $dir),
+                'path' => $this->sanitizePath(str_replace($this->basePath, '', $dir)),
                 'last_modified' => Storage::disk($this->disk)->lastModified($dir),
             ];
         }
@@ -60,7 +74,7 @@ class MediaExplorerController extends Controller
             $result[] = [
                 'name' => basename($file),
                 'type' => 'file',
-                'path' => str_replace($this->basePath . '/', '', $file),
+                'path' => $this->sanitizePath(str_replace($this->basePath, '', $file)),
                 'size' => Storage::disk($this->disk)->size($file),
                 'url'  => Storage::disk($this->disk)->url($file),
                 'extension' => pathinfo($file, PATHINFO_EXTENSION),
@@ -83,10 +97,13 @@ class MediaExplorerController extends Controller
         $this->authorizeAdmin();
         $request->validate([
             'path' => 'nullable|string',
-            'name' => 'required|string|max:100'
+            'name' => 'required|string|max:50|regex:/^[a-zA-Z0-9_\-\s]+$/'
         ]);
 
-        $fullPath = $this->basePath . ($request->path ? '/' . $request->path : '') . '/' . $request->name;
+        $path = $this->sanitizePath($request->path);
+        $name = Str::slug($request->name); // Secure naming
+        
+        $fullPath = $this->basePath . ($path ? '/' . $path : '') . '/' . $name;
 
         if (Storage::disk($this->disk)->exists($fullPath)) {
             return response()->json(['message' => 'La carpeta ya existe.'], 422);
@@ -106,16 +123,22 @@ class MediaExplorerController extends Controller
         $request->validate([
             'path' => 'nullable|string',
             'files' => 'required|array',
-            'files.*' => 'required|file|max:10240' // 10MB limit
+            'files.*' => 'required|file|mimes:jpg,jpeg,png,webp,gif,pdf,svg,xlsx,docx|max:10240' // Secure extensions
         ]);
 
         $uploaded = [];
-        $targetDir = $this->basePath . ($request->path ? '/' . $request->path : '');
+        $path = $this->sanitizePath($request->path);
+        $targetDir = $this->basePath . ($path ? '/' . $path : '');
 
         foreach ($request->file('files') as $file) {
-            $name = $file->getClientOriginalName();
-            $path = Storage::disk($this->disk)->putFileAs($targetDir, $file, $name);
-            $uploaded[] = $path;
+            $originalName = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+            $extension = $file->getClientOriginalExtension();
+            
+            // Sanitize filename for safe URLs
+            $safeName = Str::slug($originalName) . '.' . $extension;
+            
+            $finalPath = Storage::disk($this->disk)->putFileAs($targetDir, $file, $safeName);
+            $uploaded[] = $finalPath;
         }
 
         return response()->json([
@@ -134,15 +157,25 @@ class MediaExplorerController extends Controller
         $request->validate([
             'path' => 'nullable|string',
             'old_name' => 'required|string',
-            'new_name' => 'required|string'
+            'new_name' => 'required|string|max:100|regex:/^[a-zA-Z0-9_\-\s\.]+$/'
         ]);
 
-        $base = $this->basePath . ($request->path ? '/' . $request->path : '');
-        $oldPath = $base . '/' . $request->old_name;
-        $newPath = $base . '/' . $request->new_name;
+        $path = $this->sanitizePath($request->path);
+        $base = $this->basePath . ($path ? '/' . $path : '');
+        
+        $oldPath = $base . '/' . $this->sanitizePath($request->old_name);
+        
+        // Check if new name is a file or directory
+        $extension = pathinfo($request->old_name, PATHINFO_EXTENSION);
+        $newNameClean = Str::slug(pathinfo($request->new_name, PATHINFO_FILENAME));
+        $newPath = $base . '/' . $newNameClean . ($extension ? '.' . $extension : '');
 
         if (!Storage::disk($this->disk)->exists($oldPath)) {
             return response()->json(['message' => 'El archivo original no existe.'], 404);
+        }
+
+        if (Storage::disk($this->disk)->exists($newPath)) {
+            return response()->json(['message' => 'Ya existe un archivo con ese nombre.'], 422);
         }
 
         Storage::disk($this->disk)->move($oldPath, $newPath);
@@ -161,13 +194,23 @@ class MediaExplorerController extends Controller
             'name' => 'required|string'
         ]);
 
-        $fullPath = $this->basePath . ($request->path ? '/' . $request->path : '') . '/' . $request->name;
+        $path = $this->sanitizePath($request->path);
+        $name = $this->sanitizePath($request->name);
+        $fullPath = $this->basePath . ($path ? '/' . $path : '') . '/' . $name;
 
         if (!Storage::disk($this->disk)->exists($fullPath)) {
             return response()->json(['message' => 'El archivo no existe.'], 404);
         }
 
-        if (is_dir(Storage::disk($this->disk)->path($fullPath))) {
+        // Prevent deleting the base library folder itself
+        if ($fullPath === $this->basePath) {
+            return response()->json(['message' => 'Operación no permitida.'], 403);
+        }
+
+        // Check if it's a directory (directories method returns paths)
+        $isDir = collect(Storage::disk($this->disk)->directories(dirname($fullPath)))->contains($fullPath);
+
+        if ($isDir) {
             Storage::disk($this->disk)->deleteDirectory($fullPath);
         } else {
             Storage::disk($this->disk)->delete($fullPath);
