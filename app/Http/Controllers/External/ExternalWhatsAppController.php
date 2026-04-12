@@ -263,4 +263,54 @@ class ExternalWhatsAppController extends Controller
             'timestamp' => now()->toDateTimeString()
         ]);
     }
+
+    /**
+     * List folders and files for n8n.
+     * GET /media-library?path=...
+     */
+    public function listMedia(Request $request)
+    {
+        $path = $request->query('path', '');
+        
+        // Sanitization logic (to match internal explorer security)
+        $path = str_replace(['..', './', '.\\'], '', $path);
+        $path = trim($path, '/\\');
+        
+        $baseName = 'media_library';
+        $fullPath = $baseName . ($path ? '/' . $path : '');
+        $disk = 'public';
+
+        if (!\Storage::disk($disk)->exists($fullPath)) {
+            return response()->json(['success' => false, 'message' => 'Path not found'], 404);
+        }
+
+        $directories = \Storage::disk($disk)->directories($fullPath);
+        $files = \Storage::disk($disk)->files($fullPath);
+
+        $items = [];
+
+        foreach ($directories as $dir) {
+            $items[] = [
+                'name' => basename($dir),
+                'type' => 'directory',
+                'path' => trim(str_replace($baseName, '', $dir), '/')
+            ];
+        }
+
+        foreach ($files as $file) {
+            $items[] = [
+                'name' => basename($file),
+                'type' => 'file',
+                'path' => trim(str_replace($baseName, '', $file), '/'),
+                'url' => \Storage::disk($disk)->url($file),
+                'size' => \Storage::disk($disk)->size($file)
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'current_path' => $path,
+            'items' => $items
+        ]);
+    }
 }

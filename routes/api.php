@@ -53,6 +53,7 @@ Route::middleware('api_key')->prefix('external/whatsapp')->group(function () {
     Route::get('templates', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'index']);
     Route::post('send', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'send']);
     Route::get('check-window', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'checkWindow']);
+    Route::get('media-library', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'listMedia']);
 });
 
 // Endpoints
