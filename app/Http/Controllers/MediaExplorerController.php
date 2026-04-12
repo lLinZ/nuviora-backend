@@ -123,7 +123,7 @@ class MediaExplorerController extends Controller
         $request->validate([
             'path' => 'nullable|string',
             'files' => 'required|array',
-            'files.*' => 'required|file|mimes:jpg,jpeg,png,webp,gif,pdf,svg,xlsx,docx|max:10240' // Secure extensions
+            'files.*' => 'required|file|mimes:jpg,jpeg,png,webp,gif,pdf,svg,xlsx,docx,mp4,mov,avi,wmv|max:102400' // 100MB limit
         ]);
 
         $uploaded = [];
