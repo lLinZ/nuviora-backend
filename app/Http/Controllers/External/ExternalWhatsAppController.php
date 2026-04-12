@@ -72,8 +72,20 @@ class ExternalWhatsAppController extends Controller
         $mediaResults = [];
 
         // 3. Handle Media (Images, Documents, etc.)
-        if ($request->filled('media')) {
-            foreach ($request->media as $url) {
+        $mediaUrls = $request->input('media', []);
+        
+        // Robustness: Handle case where n8n sends a single string with commas instead of a real array
+        if (is_string($mediaUrls)) {
+            $mediaUrls = explode(',', $mediaUrls);
+        } elseif (is_array($mediaUrls) && count($mediaUrls) === 1 && str_contains($mediaUrls[0], ',')) {
+            $mediaUrls = explode(',', $mediaUrls[0]);
+        }
+
+        if (!empty($mediaUrls)) {
+            foreach ($mediaUrls as $url) {
+                $url = trim($url);
+                if (empty($url)) continue;
+
                 // Determine type based on extension
                 $ext = strtolower(pathinfo($url, PATHINFO_EXTENSION));
                 $type = 'document';
@@ -98,6 +110,7 @@ class ExternalWhatsAppController extends Controller
                     $mediaResults[] = ['url' => $url, 'success' => true, 'id' => $res['messages'][0]['id']];
                 } else {
                     $msgModel->update(['status' => 'failed']);
+                    Log::error("EXTERNAL_MEDIA_FAIL: " . json_encode($res));
                     $mediaResults[] = ['url' => $url, 'success' => false];
                 }
             }
