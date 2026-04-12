@@ -191,6 +191,56 @@ class WhatsAppService
     }
 
     /**
+     * Send a media message (image, video, audio, document) using a public URL.
+     */
+    public function sendMediaByUrl($to, $url, $type, $caption = null)
+    {
+        $cleanTo = $this->cleanNumber($to);
+        $apiUrl = "{$this->baseUrl}/{$this->phoneNumberId}/messages";
+
+        $data = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $cleanTo,
+            'type' => $type,
+            $type => [
+                'link' => $url
+            ]
+        ];
+
+        if ($caption && in_array($type, ['image', 'video', 'document'])) {
+            $data[$type]['caption'] = $caption;
+        }
+
+        try {
+            $response = Http::withToken($this->accessToken)
+                ->withoutVerifying()
+                ->post($apiUrl, $data);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+
+            Log::error('WhatsApp Media Send URL Error', [
+                'type' => $type,
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'to' => $cleanTo,
+                'url' => $url
+            ]);
+
+            return false;
+        } catch (\Exception $e) {
+            Log::error('WhatsApp Media Send URL Exception', [
+                'message' => $e->getMessage(),
+                'to' => $cleanTo,
+                'url' => $url
+            ]);
+            return false;
+        }
+    }
+
+    /**
      * Get all message templates from Meta (WhatsApp Business Account).
      * Requires WHATSAPP_WABA_ID in .env
      */

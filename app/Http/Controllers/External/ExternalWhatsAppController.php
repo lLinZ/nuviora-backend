@@ -32,7 +32,8 @@ class ExternalWhatsAppController extends Controller
             'phone' => 'required|string',
             'template_name' => 'nullable|string',
             'vars' => 'nullable|array',
-            'body' => 'nullable|string|required_without:template_name',
+            'body' => 'nullable|string|required_without_all:template_name,media',
+            'media' => 'nullable|array',
             'order_id' => 'nullable|integer'
         ]);
 
@@ -67,115 +68,139 @@ class ExternalWhatsAppController extends Controller
             ]);
         }
 
-        // Normalize template name (remove spaces, lowercase) to be more robust for n8n
-        $templateName = $request->template_name;
-        $components = [];
-        $renderedBody = $request->body ?? "Plantilla: {$templateName}";
         $service = new WhatsAppService();
-        $tpl = null;
-        $vars = $request->vars ?? [];
+        $mediaResults = [];
 
-        if ($request->filled('template_name')) {
-            $normalizedName = strtolower(str_replace(' ', '_', $templateName));
-            $tpl = WhatsappTemplate::where('name', $normalizedName)
-                ->orWhere('name', $templateName)
-                ->orWhere('label', $templateName)
-                ->first();
+        // 3. Handle Media (Images, Documents, etc.)
+        if ($request->filled('media')) {
+            foreach ($request->media as $url) {
+                // Determine type based on extension
+                $ext = strtolower(pathinfo($url, PATHINFO_EXTENSION));
+                $type = 'document';
+                if (in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif'])) $type = 'image';
+                elseif (in_array($ext, ['mp4', '3gp'])) $type = 'video';
+                elseif (in_array($ext, ['mp3', 'ogg', 'aac'])) $type = 'audio';
 
-            if ($tpl) {
-                $templateName = $tpl->name;
-                Log::info("EXTERNAL_WA: Preparation Template " . $templateName, ['vars' => $vars]);
-                // RENDER BEFORE CREATING RECORD
-                $renderedBody = $tpl->render($vars);
-                
-                if (!empty($tpl->meta_components)) {
-                    Log::debug("EXTERNAL_WA: Using technical definition for {$templateName}", ['meta_components' => $tpl->meta_components]);
-                    foreach ($tpl->meta_components as $component) {
-                        $rawType = strtoupper($component['type'] ?? '');
-                        if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+                // Create DB Record
+                $msgModel = WhatsappMessage::create([
+                    'order_id' => $localOrderId,
+                    'client_id' => $client->id,
+                    'body' => "Archivo {$type}",
+                    'media' => $url,
+                    'is_from_client' => false,
+                    'status' => 'sending',
+                    'sent_at' => now(),
+                ]);
 
-                        $text = $component['text'] ?? '';
-                        preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
-                        
-                        $parameters = [];
-                        if (!empty($matches[1])) {
-                            foreach ($matches[1] as $placeholderNum) {
-                                $idx = (int)$placeholderNum - 1;
-                                $val = (string)($vars[$idx] ?? '');
-                                if ($val === '') {
-                                    Log::warning("EXTERNAL_WA: Missing variable for index {$idx} in template {$templateName}");
-                                }
-                                $parameters[] = ['type' => 'text', 'text' => $val];
-                            }
-                        } else if ($rawType === 'HEADER' && count($vars) > 0) {
-                            $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
-                        }
-
-                        if (!empty($parameters)) {
-                            $components[] = [
-                                'type' => strtolower($rawType),
-                                'parameters' => $parameters
-                            ];
-                        }
-                    }
-                }
-            } else {
-                Log::warning("EXTERNAL_WA: Template NOT found in local DB: " . $templateName . ". Using direct vars fallback.");
-                // FALLBACK: Si no existe en la BD local, enviamos las variables directamente al BODY
-                if (!empty($vars)) {
-                    $parameters = array_map(function($v) {
-                        return ['type' => 'text', 'text' => (string)$v];
-                    }, $vars);
-                    
-                    $components[] = [
-                        'type' => 'body',
-                        'parameters' => $parameters
-                    ];
+                $res = $service->sendMediaByUrl($client->phone, $url, $type);
+                if ($res && isset($res['messages'][0]['id'])) {
+                    $msgModel->update(['message_id' => $res['messages'][0]['id'], 'status' => 'sent']);
+                    $mediaResults[] = ['url' => $url, 'success' => true, 'id' => $res['messages'][0]['id']];
+                } else {
+                    $msgModel->update(['status' => 'failed']);
+                    $mediaResults[] = ['url' => $url, 'success' => false];
                 }
             }
         }
 
-        // 3. Log message using the translated localOrderId and rendered body
-        $message = WhatsappMessage::create([
-            'order_id' => $localOrderId,
-            'client_id' => $client->id,
-            'body' => $renderedBody,
-            'is_from_client' => false,
-            'status' => 'sending',
-            'sent_at' => now(),
-        ]);
+        // 4. Handle Text or Template
+        if ($request->filled('template_name') || $request->filled('body')) {
+            $templateName = $request->template_name;
+            $components = [];
+            $renderedBody = $request->body ?? "Plantilla: {$templateName}";
+            $tpl = null;
+            $vars = $request->vars ?? [];
 
-        if ($request->filled('template_name')) {
-            $result = $service->sendTemplate($client->phone, $templateName, 'es', $components);
-        } else {
-            // Raw body message
-            $result = $service->sendMessage($client->phone, $message->body);
-        }
+            if ($request->filled('template_name')) {
+                $normalizedName = strtolower(str_replace(' ', '_', $templateName));
+                $tpl = WhatsappTemplate::where('name', $normalizedName)
+                    ->orWhere('name', $templateName)
+                    ->orWhere('label', $templateName)
+                    ->first();
 
-        // 3. Update status
-        if ($result && isset($result['messages'][0]['id'])) {
-            $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
-            
-            // Trigger event for real-time frontend update if needed
-            event(new \App\Events\WhatsappMessageReceived($message));
-            
+                if ($tpl) {
+                    $templateName = $tpl->name;
+                    $renderedBody = $tpl->render($vars);
+                    
+                    if (!empty($tpl->meta_components)) {
+                        foreach ($tpl->meta_components as $component) {
+                            $rawType = strtoupper($component['type'] ?? '');
+                            if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+
+                            $text = $component['text'] ?? '';
+                            preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
+                            
+                            $parameters = [];
+                            if (!empty($matches[1])) {
+                                foreach ($matches[1] as $placeholderNum) {
+                                    $idx = (int)$placeholderNum - 1;
+                                    $val = (string)($vars[$idx] ?? '');
+                                    $parameters[] = ['type' => 'text', 'text' => $val];
+                                }
+                            } else if ($rawType === 'HEADER' && count($vars) > 0) {
+                                $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
+                            }
+
+                            if (!empty($parameters)) {
+                                $components[] = [
+                                    'type' => strtolower($rawType),
+                                    'parameters' => $parameters
+                                ];
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback
+                    if (!empty($vars)) {
+                        $parameters = array_map(fn($v) => ['type' => 'text', 'text' => (string)$v], $vars);
+                        $components[] = ['type' => 'body', 'parameters' => $parameters];
+                    }
+                }
+            }
+
+            // Create DB Record for text
+            $message = WhatsappMessage::create([
+                'order_id' => $localOrderId,
+                'client_id' => $client->id,
+                'body' => $renderedBody,
+                'is_from_client' => false,
+                'status' => 'sending',
+                'sent_at' => now(),
+            ]);
+
+            if ($request->filled('template_name')) {
+                $result = $service->sendTemplate($client->phone, $templateName, 'es', $components);
+            } else {
+                $result = $service->sendMessage($client->phone, $message->body);
+            }
+
+            // Update status
+            if ($result && isset($result['messages'][0]['id'])) {
+                $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
+                event(new \App\Events\WhatsappMessageReceived($message));
+                
+                return response()->json([
+                    'success' => true,
+                    'message' => $message,
+                    'media' => $mediaResults,
+                    'is_window_open' => $client->isWhatsappWindowOpen(),
+                ], 201);
+            }
+
+            $message->update(['status' => 'failed']);
             return response()->json([
-                'success' => true,
-                'message' => $message,
-                'is_window_open' => $client->isWhatsappWindowOpen(),
-                'external_id' => $result['messages'][0]['id']
-            ], 201);
+                'success' => false,
+                'error' => $result,
+                'media' => $mediaResults,
+            ], 500);
         }
 
-        $message->update(['status' => 'failed']);
-        Log::error("EXTERNAL_WA_ERROR: " . json_encode($result));
-        
         return response()->json([
-            'success' => false,
+            'success' => true,
+            'media' => $mediaResults,
             'is_window_open' => $client->isWhatsappWindowOpen(),
-            'error' => $result,
-            'message_id' => $message->id
-        ], 500);
+        ]);
+    }
     }
 
     /**
