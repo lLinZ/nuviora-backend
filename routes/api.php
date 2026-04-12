@@ -298,6 +298,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/whatsapp-conversations/{client}/read', [\App\Http\Controllers\WhatsappConversationController::class, 'markAsRead']);
     Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
 
+    // --- Media Explorer (Filesystem) ---
+    Route::get('/media-explorer', [\App\Http\Controllers\MediaExplorerController::class, 'index']);
+    Route::post('/media-explorer/mkdir', [\App\Http\Controllers\MediaExplorerController::class, 'mkdir']);
+    Route::post('/media-explorer/upload', [\App\Http\Controllers\MediaExplorerController::class, 'upload']);
+    Route::post('/media-explorer/rename', [\App\Http\Controllers\MediaExplorerController::class, 'rename']);
+    Route::post('/media-explorer/delete', [\App\Http\Controllers\MediaExplorerController::class, 'delete']);
+
     // --- CRM Assignment & Shift Management (Automated Roster) ---
     Route::get('/crm/agents', [\App\Http\Controllers\CrmAssignmentController::class, 'index']);
     Route::post('/crm/agents/{id}/toggle', [\App\Http\Controllers\CrmAssignmentController::class, 'toggleStatus']);
