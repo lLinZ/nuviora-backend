@@ -294,6 +294,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'show']);
     Route::post('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'store']);
     Route::post('/whatsapp-conversations/{client}/media', [\App\Http\Controllers\WhatsappConversationController::class, 'sendMedia']);
+    Route::post('/whatsapp-conversations/{client}/read', [\App\Http\Controllers\WhatsappConversationController::class, 'markAsRead']);
     Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
 
     // --- CRM Assignment & Shift Management (Automated Roster) ---

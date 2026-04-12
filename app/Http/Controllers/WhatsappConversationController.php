@@ -39,7 +39,19 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 2. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
+        // 2. Filtrar por estado de lectura (inteligente)
+        $filter = $request->query('filter', 'all');
+        if ($filter === 'unread') {
+            $query->whereHas('whatsappMessages', function ($q) {
+                $q->where('is_from_client', true)->where('status', '!=', 'read');
+            });
+        } elseif ($filter === 'read') {
+            $query->whereDoesntHave('whatsappMessages', function ($q) {
+                $q->where('is_from_client', true)->where('status', '!=', 'read');
+            });
+        }
+
+        // 3. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
                 // EXCLUSIVIDAD: Si hay un pedido activo/reciente (no Sin Stock), ese agente es el único dueño.
@@ -391,5 +403,59 @@ class WhatsappConversationController extends Controller
             'message' => 'Chat reasignado exitosamente',
             'conversation' => $conv->load('agent')
         ]);
+    }
+
+    /**
+     * Marca todos los mensajes entrantes de un cliente como leídos.
+     */
+    public function markAsRead(Request $request, $clientId)
+    {
+        $user = Auth::user();
+        if (!$user->relationLoaded('role')) {
+            $user->load('role');
+        }
+        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+
+        // PRIVACY CHECK (same as show)
+        $query = Client::where('id', $clientId);
+        if (!$isAdmin) {
+            $query->where(function ($q) use ($user) {
+                $q->whereHas('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)
+                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
+                       ->whereHas('status', function($sq) {
+                           $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                       });
+                })
+                ->orWhere(function($sub) use ($user) {
+                    $sub->whereDoesntHave('orders', function($oq) {
+                        $oq->whereHas('status', function($sq) {
+                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                        });
+                    })
+                    ->where(function($inner) use ($user) {
+                        $inner->where('agent_id', $user->id)
+                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                                  $cq->where('agent_id', $user->id)
+                                     ->where('status', 'open');
+                              });
+                    });
+                });
+            });
+        }
+
+        $client = $query->first();
+
+        if (!$client) {
+            return response()->json(['message' => 'No tienes acceso a este chat.'], 403);
+        }
+
+        // Actualizar estados
+        \App\Models\WhatsappMessage::where('client_id', $clientId)
+            ->where('is_from_client', true)
+            ->where('status', '!=', 'read')
+            ->update(['status' => 'read']);
+
+        return response()->json(['status' => true, 'message' => 'Mensajes marcados como leídos']);
     }
 }
