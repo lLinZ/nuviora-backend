@@ -177,4 +177,90 @@ class ExternalWhatsAppController extends Controller
             'message_id' => $message->id
         ], 500);
     }
+
+    /**
+     * Get a comprehensive snapshot for n8n to decide how to proceed.
+     * GET /check-window?phone=...&order_id=...
+     */
+    public function checkWindow(Request $request)
+    {
+        $phone = $request->query('phone');
+        $orderId = $request->query('order_id');
+
+        $client = null;
+        $order = null;
+
+        // 1. Find by Order ID (numeric or Shopify string)
+        if ($orderId) {
+            $order = Order::where('order_id', $orderId)
+                ->orWhere('id', $orderId)
+                ->first();
+            if ($order) {
+                $client = $order->client;
+            }
+        }
+
+        // 2. Find by Phone if not found by order
+        if (!$client && $phone) {
+            $phone = preg_replace('/[^0-9]/', '', $phone);
+            $last10 = substr($phone, -10);
+            $client = Client::where('phone', 'like', "%{$last10}")->first();
+        }
+
+        if (!$client) {
+            return response()->json(['success' => false, 'message' => 'Client not found'], 404);
+        }
+
+        // 3. Get latest order if none specified
+        if (!$order) {
+            $order = Order::where('client_id', $client->id)->latest()->first();
+        }
+
+        // 4. Products Formatting
+        $products = [];
+        if ($order) {
+            $products = $order->products->map(function($op) {
+                return [
+                    'name' => $op->name ?? $op->title,
+                    'qty'  => $op->quantity,
+                    'price'=> $op->price
+                ];
+            });
+        }
+
+        // 5. Latest Messages Formatting
+        $messages = WhatsappMessage::where('client_id', $client->id)
+            ->latest()
+            ->take(5)
+            ->get()
+            ->map(function($m) {
+                return [
+                    'body' => $m->body,
+                    'sender' => $m->is_from_client ? 'client' : 'agent',
+                    'date' => $m->sent_at,
+                    'status' => $m->status
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'client' => [
+                'id' => $client->id,
+                'name' => "{$client->first_name} {$client->last_name}",
+                'phone' => $client->phone,
+                'is_window_open' => $client->isWhatsappWindowOpen(),
+            ],
+            'order' => $order ? [
+                'internal_id' => $order->id,
+                'order_id' => $order->order_id,
+                'status' => $order->status ? $order->status->description : 'N/A',
+                'status_id' => $order->status_id,
+                'total' => $order->current_total_price,
+                'items' => $products,
+                'store_is_open' => $order->is_store_open,
+            ] : null,
+            'latest_messages' => $messages,
+            'timestamp' => now()->toDateTimeString()
+        ]);
+    }
 }

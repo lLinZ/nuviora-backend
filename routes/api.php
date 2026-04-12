@@ -52,6 +52,7 @@ Route::post('whatsapp/webhook', [WhatsAppWebhookController::class, 'handle']);
 Route::middleware('api_key')->prefix('external/whatsapp')->group(function () {
     Route::get('templates', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'index']);
     Route::post('send', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'send']);
+    Route::get('check-window', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'checkWindow']);
 });
 
 // Endpoints
