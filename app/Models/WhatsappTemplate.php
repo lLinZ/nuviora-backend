@@ -10,6 +10,7 @@ class WhatsappTemplate extends Model
         'name',
         'label',
         'body',
+        'language',
         'is_official',
         'meta_components',
     ];

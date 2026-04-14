@@ -47,7 +47,10 @@ class ExternalWhatsAppController extends Controller
         $client = null;
         $localOrderId = null;
         if ($request->filled('order_id')) {
-            $order = Order::where('order_id', $request->order_id)->first();
+            // Search by Shopify order_id (string) OR by internal numeric id
+            $order = Order::where('order_id', $request->order_id)
+                ->orWhere('id', is_numeric($request->order_id) ? $request->order_id : null)
+                ->first();
             if ($order) {
                 $localOrderId = $order->id; // Internal numeric ID
                 $client = $order->client;
@@ -93,12 +96,12 @@ class ExternalWhatsAppController extends Controller
                 elseif (in_array($ext, ['mp4', '3gp'])) $type = 'video';
                 elseif (in_array($ext, ['mp3', 'ogg', 'aac'])) $type = 'audio';
 
-                // Create DB Record
+                // Create DB Record — media stored as array to match model cast
                 $msgModel = WhatsappMessage::create([
                     'order_id' => $localOrderId,
                     'client_id' => $client->id,
                     'body' => "Archivo {$type}",
-                    'media' => $url,
+                    'media' => ['link' => $url, 'type' => $type],
                     'is_from_client' => false,
                     'status' => 'sending',
                     'sent_at' => now(),
@@ -107,6 +110,7 @@ class ExternalWhatsAppController extends Controller
                 $res = $service->sendMediaByUrl($client->phone, $url, $type);
                 if ($res && isset($res['messages'][0]['id'])) {
                     $msgModel->update(['message_id' => $res['messages'][0]['id'], 'status' => 'sent']);
+                    event(new \App\Events\WhatsappMessageReceived($msgModel->fresh()->load('client', 'order')));
                     $mediaResults[] = ['url' => $url, 'success' => true, 'id' => $res['messages'][0]['id']];
                 } else {
                     $msgModel->update(['status' => 'failed']);
@@ -182,7 +186,9 @@ class ExternalWhatsAppController extends Controller
             ]);
 
             if ($request->filled('template_name')) {
-                $result = $service->sendTemplate($client->phone, $templateName, 'es', $components);
+                // Use the template's own language code; fallback to 'es' if not stored
+                $langCode = ($tpl && !empty($tpl->language)) ? $tpl->language : 'es';
+                $result = $service->sendTemplate($client->phone, $templateName, $langCode, $components);
             } else {
                 $result = $service->sendMessage($client->phone, $message->body);
             }

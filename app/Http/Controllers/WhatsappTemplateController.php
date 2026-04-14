@@ -26,6 +26,7 @@ class WhatsappTemplateController extends Controller
             'name'            => 'required|string|unique:whatsapp_templates,name',
             'label'           => 'required|string',
             'body'            => 'required|string',
+            'language'        => 'nullable|string',
             'is_official'     => 'boolean',
             'meta_components' => 'nullable|array',
         ]);
@@ -54,6 +55,7 @@ class WhatsappTemplateController extends Controller
             'name'            => 'string|unique:whatsapp_templates,name,' . $template->id,
             'label'           => 'string',
             'body'            => 'string',
+            'language'        => 'nullable|string',
             'is_official'     => 'boolean',
             'meta_components' => 'nullable|array',
         ]);
@@ -118,6 +120,7 @@ class WhatsappTemplateController extends Controller
             'name'            => 'required|string',
             'label'           => 'required|string',
             'body'            => 'required|string',
+            'language'        => 'nullable|string',
             'meta_components' => 'nullable|array',
         ]);
 
@@ -126,6 +129,7 @@ class WhatsappTemplateController extends Controller
             [
                 'label'           => $data['label'],
                 'body'            => $data['body'],
+                'language'        => $data['language'] ?? 'es',
                 'is_official'     => true,
                 'meta_components' => $data['meta_components'] ?? null,
             ]
