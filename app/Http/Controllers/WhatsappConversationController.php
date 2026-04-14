@@ -456,6 +456,12 @@ class WhatsappConversationController extends Controller
             ->where('status', '!=', 'read')
             ->update(['status' => 'read']);
 
+        // Broadcast real-time event so other tabs/sessions update the unread count immediately
+        event(new \App\Events\WhatsappChatRead(
+            (int) $clientId,
+            $client->agent_id
+        ));
+
         return response()->json(['status' => true, 'message' => 'Mensajes marcados como leídos']);
     }
 }

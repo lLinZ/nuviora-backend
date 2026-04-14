@@ -196,7 +196,8 @@ class ExternalWhatsAppController extends Controller
             // Update status
             if ($result && isset($result['messages'][0]['id'])) {
                 $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
-                event(new \App\Events\WhatsappMessageReceived($message));
+                $client->update(['last_interaction_at' => now()]);
+                event(new \App\Events\WhatsappMessageReceived($message->fresh()->load('client', 'order')));
                 
                 return response()->json([
                     'success' => true,
