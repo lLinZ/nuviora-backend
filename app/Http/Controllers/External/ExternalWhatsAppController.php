@@ -10,6 +10,7 @@ use App\Models\Client;
 use App\Models\Order;
 use App\Services\WhatsAppService;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class ExternalWhatsAppController extends Controller
 {
@@ -224,18 +225,28 @@ class ExternalWhatsAppController extends Controller
 
     /**
      * Get a comprehensive snapshot for n8n to decide how to proceed.
-     * GET /check-window?phone=...&order_id=...
+     * GET /check-window?phone=...&order_id=...&client_id=...
+     *
+     * Lookup priority: client_id > order_id > phone
+     * Always prefer sending client_id from n8n when available to avoid
+     * returning the wrong client when multiple clients share the same phone.
      */
     public function checkWindow(Request $request)
     {
-        $phone = $request->query('phone');
-        $orderId = $request->query('order_id');
+        $phone    = $request->query('phone');
+        $orderId  = $request->query('order_id');
+        $clientId = $request->query('client_id');
 
         $client = null;
-        $order = null;
+        $order  = null;
 
-        // 1. Find by Order ID (numeric or Shopify string)
-        if ($orderId) {
+        // 1. HIGHEST PRIORITY: Find directly by client_id
+        if ($clientId && is_numeric($clientId)) {
+            $client = Client::find((int) $clientId);
+        }
+
+        // 2. Find by Order ID (numeric or Shopify string)
+        if (!$client && $orderId) {
             $order = Order::where('order_id', $orderId)
                 ->orWhere('id', $orderId)
                 ->first();
@@ -244,9 +255,11 @@ class ExternalWhatsAppController extends Controller
             }
         }
 
-        // 2. Find by Phone if not found by order
+        // 3. Fallback: Find by Phone (last 10 digits)
+        //    NOTE: Multiple clients may share the same phone — this returns
+        //    the first match only. Always prefer sending client_id from n8n.
         if (!$client && $phone) {
-            $phone = preg_replace('/[^0-9]/', '', $phone);
+            $phone  = preg_replace('/[^0-9]/', '', $phone);
             $last10 = substr($phone, -10);
             $client = Client::where('phone', 'like', "%{$last10}")->first();
         }

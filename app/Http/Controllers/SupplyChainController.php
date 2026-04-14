@@ -23,20 +23,28 @@ class SupplyChainController extends Controller
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        $productId = $request->query('product_id');
-        $data = $this->engine->analyze($productId ? (int) $productId : null);
+        try {
+            $productId = $request->query('product_id');
+            $data = $this->engine->analyze($productId ? (int) $productId : null);
 
-        return response()->json([
-            'status' => true,
-            'data'   => $data,
-            'meta'   => [
-                'total'       => count($data),
-                'red_count'   => count(array_filter($data, fn($r) => $r['priority'] === 'red')),
-                'orange_count'=> count(array_filter($data, fn($r) => $r['priority'] === 'orange')),
-                'yellow_count'=> count(array_filter($data, fn($r) => $r['priority'] === 'yellow')),
-                'green_count' => count(array_filter($data, fn($r) => $r['priority'] === 'green')),
-            ],
-        ]);
+            return response()->json([
+                'status' => true,
+                'data'   => $data,
+                'meta'   => [
+                    'total'        => count($data),
+                    'red_count'    => count(array_filter($data, fn($r) => $r['priority'] === 'red')),
+                    'orange_count' => count(array_filter($data, fn($r) => $r['priority'] === 'orange')),
+                    'yellow_count' => count(array_filter($data, fn($r) => $r['priority'] === 'yellow')),
+                    'green_count'  => count(array_filter($data, fn($r) => $r['priority'] === 'green')),
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('SCM Dashboard error: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            return response()->json([
+                'status'  => false,
+                'message' => 'Error en el motor SCM: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
