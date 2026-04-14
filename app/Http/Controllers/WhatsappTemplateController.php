@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\WhatsappTemplate;
 use App\Services\WhatsAppService;
+use Illuminate\Support\Facades\Auth;
 
 class WhatsappTemplateController extends Controller
 {
@@ -14,7 +15,18 @@ class WhatsappTemplateController extends Controller
      */
     public function index()
     {
-        return response()->json(WhatsappTemplate::orderBy('label')->get());
+        $user = Auth::user();
+        if (!$user->relationLoaded('role')) $user->load('role');
+        $isSeller = strtolower($user->role->description ?? '') === 'vendedor';
+
+        $query = WhatsappTemplate::orderBy('label');
+
+        // Sellers only see templates explicitly marked as visible to them
+        if ($isSeller) {
+            $query->where('visible_to_sellers', true);
+        }
+
+        return response()->json($query->get());
     }
 
     /**
@@ -23,13 +35,17 @@ class WhatsappTemplateController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'name'            => 'required|string|unique:whatsapp_templates,name',
-            'label'           => 'required|string',
-            'body'            => 'required|string',
-            'language'        => 'nullable|string',
-            'is_official'     => 'boolean',
-            'meta_components' => 'nullable|array',
+            'name'                => 'required|string|unique:whatsapp_templates,name',
+            'label'               => 'required|string',
+            'body'                => 'required|string',
+            'language'            => 'nullable|string',
+            'is_official'         => 'boolean',
+            'visible_to_sellers'  => 'boolean',
+            'meta_components'     => 'nullable|array',
         ]);
+
+        // Default visible_to_sellers to true if not provided
+        $data['visible_to_sellers'] = $data['visible_to_sellers'] ?? true;
 
         $template = WhatsappTemplate::create($data);
 
@@ -52,12 +68,13 @@ class WhatsappTemplateController extends Controller
         $template = WhatsappTemplate::findOrFail($id);
 
         $data = $request->validate([
-            'name'            => 'string|unique:whatsapp_templates,name,' . $template->id,
-            'label'           => 'string',
-            'body'            => 'string',
-            'language'        => 'nullable|string',
-            'is_official'     => 'boolean',
-            'meta_components' => 'nullable|array',
+            'name'                => 'string|unique:whatsapp_templates,name,' . $template->id,
+            'label'               => 'string',
+            'body'                => 'string',
+            'language'            => 'nullable|string',
+            'is_official'         => 'boolean',
+            'visible_to_sellers'  => 'boolean',
+            'meta_components'     => 'nullable|array',
         ]);
 
         $template->update($data);
@@ -117,21 +134,23 @@ class WhatsappTemplateController extends Controller
     public function importFromMeta(Request $request)
     {
         $data = $request->validate([
-            'name'            => 'required|string',
-            'label'           => 'required|string',
-            'body'            => 'required|string',
-            'language'        => 'nullable|string',
-            'meta_components' => 'nullable|array',
+            'name'               => 'required|string',
+            'label'              => 'required|string',
+            'body'               => 'required|string',
+            'language'           => 'nullable|string',
+            'visible_to_sellers' => 'boolean',
+            'meta_components'    => 'nullable|array',
         ]);
 
         $template = WhatsappTemplate::updateOrCreate(
             ['name' => $data['name']],
             [
-                'label'           => $data['label'],
-                'body'            => $data['body'],
-                'language'        => $data['language'] ?? 'es',
-                'is_official'     => true,
-                'meta_components' => $data['meta_components'] ?? null,
+                'label'              => $data['label'],
+                'body'               => $data['body'],
+                'language'           => $data['language'] ?? 'es',
+                'visible_to_sellers' => $data['visible_to_sellers'] ?? true,
+                'is_official'        => true,
+                'meta_components'    => $data['meta_components'] ?? null,
             ]
         );
 

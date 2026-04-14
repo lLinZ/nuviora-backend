@@ -12,12 +12,14 @@ class WhatsappTemplate extends Model
         'body',
         'language',
         'is_official',
+        'visible_to_sellers',
         'meta_components',
     ];
 
     protected $casts = [
-        'is_official'     => 'boolean',
-        'meta_components' => 'array',
+        'is_official'        => 'boolean',
+        'visible_to_sellers' => 'boolean',
+        'meta_components'    => 'array',
     ];
 
     /**
