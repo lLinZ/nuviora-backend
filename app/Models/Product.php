@@ -68,6 +68,9 @@ class Product extends Model
         'sku',
         'image',
         'description',
+        // SCM fields
+        'lead_time_days',
+        'defect_percentage',
     ];
 
     protected $appends = ['stock', 'stock_available'];

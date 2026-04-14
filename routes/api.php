@@ -28,6 +28,7 @@ use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\WarehouseController;
 use App\Http\Controllers\OrderTrackingComprehensiveController;
 use App\Http\Controllers\WhatsAppWebhookController;
+use App\Http\Controllers\SupplyChainController;
 use Illuminate\Support\Facades\Route;
 
 
@@ -240,6 +241,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/stock/movements', [StockMovementController::class, 'store']);
     Route::get('/inventory', [InventoryController::class, 'index']);      // Admin / Gerente
     Route::get('/inventory/my', [InventoryController::class, 'myStock']); // Repartidor
+
+    // ─── SCM: Supply Chain Management ─────────────────────────────────────────
+    Route::prefix('scm')->group(function () {
+        Route::get('/dashboard', [SupplyChainController::class, 'dashboard']);
+        Route::put('/inventory/{id}', [SupplyChainController::class, 'updateInventoryScm']);
+        Route::put('/products/{id}', [SupplyChainController::class, 'updateProductScm']);
+    });
     Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']);
     Route::post('/deliverer/stock/open', [DelivererStockController::class, 'open']); // abre jornada y asigna items
     Route::post('/deliverer/stock/add-items', [DelivererStockController::class, 'addItems']); // agrega más durante el día
