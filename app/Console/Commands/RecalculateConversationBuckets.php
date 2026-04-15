@@ -24,8 +24,9 @@ class RecalculateConversationBuckets extends Command
         $isDryRun = $this->option('dry-run');
         $this->info($isDryRun ? '🔍 DRY RUN — no changes will be written.' : '🚀 Recalculating conversation buckets...');
 
-        // Get all clients that have at least one whatsapp message
-        $clientIds = WhatsappMessage::select('client_id')
+        // Get all clients that have at least one whatsapp message, excluding orphaned messages
+        $clientIds = WhatsappMessage::whereNotNull('client_id')
+            ->select('client_id')
             ->distinct()
             ->pluck('client_id');
 
