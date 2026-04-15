@@ -41,10 +41,37 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar por bucket (nuevo sistema)
         $bucket = $request->query('bucket', 'all');
         if ($bucket && $bucket !== 'all') {
-            $query->whereHas('whatsappConversations', function ($q) use ($bucket) {
-                $q->where('status', 'open')
-                  ->where('conversation_bucket', $bucket);
+            // Filtrar por bucket — busca la conversación más reciente del cliente
+            // sin importar el status de la conversación
+            $query->where(function($q) use ($bucket) {
+                $q->whereHas('whatsappConversations', function ($cq) use ($bucket) {
+                    $cq->whereRaw("COALESCE(conversation_bucket, 'follow_up') = ?", [$bucket]);
+                });
+
+                // Si el bucket es 'follow_up', también incluir clientes que tienen mensajes
+                // pero no tienen conversación registrada todavía
+                if ($bucket === 'follow_up') {
+                    $q->orWhere(function($sub) {
+                        $sub->whereHas('whatsappMessages')
+                            ->whereDoesntHave('whatsappConversations');
+                    });
+                }
+
+                // Si el bucket es 'requires_attention', también incluir clientes
+                // cuyo último mensaje es del cliente pero no tienen conversación
+                if ($bucket === 'requires_attention') {
+                    $q->orWhere(function($sub) {
+                        $sub->whereHas('whatsappMessages', function($mq) {
+                            // El mensaje más reciente es del cliente
+                            $mq->where('is_from_client', true)
+                               ->whereRaw('sent_at = (SELECT MAX(sent_at) FROM whatsapp_messages wm2 WHERE wm2.client_id = whatsapp_messages.client_id)');
+                        })->whereDoesntHave('whatsappConversations');
+                    });
+                }
             });
+        } else {
+            // 'all': mostrar todos los clientes que tienen al menos un mensaje de WhatsApp
+            $query->whereHas('whatsappMessages');
         }
 
         // 3. Compatibilidad legacy: filtro por estado de lectura
@@ -87,7 +114,7 @@ class WhatsappConversationController extends Controller
         }
 
         // 5. Ordenar por: bucket_priority ASC → unread DESC → last_message_at DESC
-        //    bucket_priority: requires_attention=1, follow_up=2, closed=3
+        //    COALESCE maneja NULLs y clientes sin conversación (prioridad 2 = follow_up)
         $paginator = $query
             ->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
@@ -98,7 +125,7 @@ class WhatsappConversationController extends Controller
             ->with('latestWhatsappMessage')
             ->orderByRaw("
                 COALESCE((
-                    SELECT CASE conversation_bucket
+                    SELECT CASE COALESCE(conversation_bucket, 'follow_up')
                         WHEN 'requires_attention' THEN 1
                         WHEN 'follow_up' THEN 2
                         WHEN 'closed' THEN 3

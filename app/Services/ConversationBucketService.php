@@ -32,14 +32,12 @@ class ConversationBucketService
      */
     public static function recalculate(int $clientId): string
     {
-        $conv = WhatsappConversation::where('client_id', $clientId)
-            ->where('status', 'open')
-            ->first();
-
-        if (!$conv) {
-            // Si no existe conversación abierta, no hay nada que recalcular
-            return WhatsappConversation::BUCKET_CLOSED;
-        }
+        // CRÍTICO: Si no existe conversación abierta, crearla.
+        // Sin esto, los clientes de webhook/External nunca aparecen en la sidebar.
+        $conv = WhatsappConversation::firstOrCreate(
+            ['client_id' => $clientId, 'status' => 'open'],
+            ['conversation_bucket' => WhatsappConversation::BUCKET_FOLLOW_UP]
+        );
 
         $bucket = self::calculateBucket($conv);
 
