@@ -9,6 +9,7 @@ use App\Models\WhatsappMessage;
 use App\Models\Client;
 use App\Models\Order;
 use App\Services\WhatsAppService;
+use App\Services\ConversationBucketService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -30,13 +31,19 @@ class ExternalWhatsAppController extends Controller
     public function send(Request $request)
     {
         $request->validate([
-            'phone' => 'required|string',
+            'phone'         => 'required|string',
             'template_name' => 'nullable|string',
-            'vars' => 'nullable|array',
-            'body' => 'nullable|string|required_without_all:template_name,media',
-            'media' => 'nullable|array',
-            'order_id' => 'nullable|integer'
+            'vars'          => 'nullable|array',
+            'body'          => 'nullable|string|required_without_all:template_name,media',
+            'media'         => 'nullable|array',
+            'order_id'      => 'nullable|integer',
+            // message_type allows n8n to override. Default: outgoing_automated_message
+            // Use 'outgoing_agent_message' only when a human is manually triggering via n8n
+            'message_type'  => 'nullable|string|in:outgoing_agent_message,outgoing_automated_message',
         ]);
+
+        // Resolve message_type — default is automated (templates/n8n automations)
+        $messageType = $request->input('message_type', WhatsappMessage::TYPE_AUTOMATED);
 
         $phone = $request->phone;
         
@@ -99,18 +106,26 @@ class ExternalWhatsAppController extends Controller
 
                 // Create DB Record — media stored as array to match model cast
                 $msgModel = WhatsappMessage::create([
-                    'order_id' => $localOrderId,
-                    'client_id' => $client->id,
-                    'body' => "Archivo {$type}",
-                    'media' => ['link' => $url, 'type' => $type],
+                    'order_id'     => $localOrderId,
+                    'client_id'    => $client->id,
+                    'body'         => "Archivo {$type}",
+                    'media'        => ['link' => $url, 'type' => $type],
                     'is_from_client' => false,
-                    'status' => 'sending',
-                    'sent_at' => now(),
+                    'message_type' => $messageType,
+                    'status'       => 'sending',
+                    'sent_at'      => now(),
                 ]);
 
                 $res = $service->sendMediaByUrl($client->phone, $url, $type);
                 if ($res && isset($res['messages'][0]['id'])) {
                     $msgModel->update(['message_id' => $res['messages'][0]['id'], 'status' => 'sent']);
+
+                    // Only recalculate bucket if this is a real agent message (not automation)
+                    $bucket = ($messageType === WhatsappMessage::TYPE_AGENT)
+                        ? ConversationBucketService::recalculate($client->id)
+                        : null;
+
+                    $msgModel->setRelation('_bucket', $bucket);
                     event(new \App\Events\WhatsappMessageReceived($msgModel->fresh()->load('client', 'order')));
                     $mediaResults[] = ['url' => $url, 'success' => true, 'id' => $res['messages'][0]['id']];
                 } else {
@@ -178,12 +193,13 @@ class ExternalWhatsAppController extends Controller
 
             // Create DB Record for text
             $message = WhatsappMessage::create([
-                'order_id' => $localOrderId,
-                'client_id' => $client->id,
-                'body' => $renderedBody,
+                'order_id'       => $localOrderId,
+                'client_id'      => $client->id,
+                'body'           => $renderedBody,
                 'is_from_client' => false,
-                'status' => 'sending',
-                'sent_at' => now(),
+                'message_type'   => $messageType,
+                'status'         => 'sending',
+                'sent_at'        => now(),
             ]);
 
             if ($request->filled('template_name')) {
@@ -198,12 +214,20 @@ class ExternalWhatsAppController extends Controller
             if ($result && isset($result['messages'][0]['id'])) {
                 $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
                 $client->update(['last_interaction_at' => now()]);
+
+                // REGLA CRÍTICA: Las automatizaciones NO mueven el bucket a follow_up.
+                // Solo se recalcula si el message_type es outgoing_agent_message.
+                $bucket = ($messageType === WhatsappMessage::TYPE_AGENT)
+                    ? ConversationBucketService::recalculate($client->id)
+                    : null;
+
+                $message->setRelation('_bucket', $bucket);
                 event(new \App\Events\WhatsappMessageReceived($message->fresh()->load('client', 'order')));
                 
                 return response()->json([
                     'success' => true,
                     'message' => $message,
-                    'media' => $mediaResults,
+                    'media'   => $mediaResults,
                     'is_window_open' => $client->isWhatsappWindowOpen(),
                 ], 201);
             }

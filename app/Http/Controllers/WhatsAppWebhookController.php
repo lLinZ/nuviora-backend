@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use App\Models\WhatsappMessage;
+use App\Services\ConversationBucketService;
 
 class WhatsAppWebhookController extends Controller
 {
@@ -208,19 +210,28 @@ class WhatsAppWebhookController extends Controller
 
             $orderId = $order ? $order->id : null;
             
-            // Save Message
-            $msg = \App\Models\WhatsappMessage::updateOrCreate(['message_id' => $messageId], [
-                'order_id'      => $orderId,
-                'client_id'     => $client->id,
-                'body'          => $body ?: '',
-                'media'         => $mediaPath ? ['link' => $mediaPath, 'type' => $type] : null,
-                'is_from_client'=> true,
-                'status'        => 'delivered',
-                'sent_at'       => $receivedAt,
+            // Save Message — always mark as incoming_message (activates requires_attention)
+            $msg = WhatsappMessage::updateOrCreate(['message_id' => $messageId], [
+                'order_id'       => $orderId,
+                'client_id'      => $client->id,
+                'body'           => $body ?: '',
+                'media'          => $mediaPath ? ['link' => $mediaPath, 'type' => $type] : null,
+                'is_from_client' => true,
+                'message_type'   => WhatsappMessage::TYPE_INCOMING,
+                'status'         => 'delivered',
+                'sent_at'        => $receivedAt,
             ]);
 
+            // Recalculate bucket → requires_attention because client just wrote
+            $bucket = ConversationBucketService::recalculate($client->id);
+
             $msg->refresh()->load('client', 'order');
-            event(new \App\Events\WhatsappMessageReceived($msg));
+
+            // Include bucket so frontend reorders without extra API call
+            $broadcastMsg = $msg->toArray();
+            $broadcastMsg['conversation_bucket'] = $bucket;
+
+            event(new \App\Events\WhatsappMessageReceived($msg->setRelation('_bucket', $bucket)));
 
             return response()->json(['status' => 'success']);
 

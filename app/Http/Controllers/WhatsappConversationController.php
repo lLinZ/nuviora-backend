@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\Client;
 use App\Models\WhatsappConversation;
 use App\Models\WhatsappMessage;
+use App\Services\ConversationBucketService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use App\Constants\OrderStatus;
@@ -23,14 +24,12 @@ class WhatsappConversationController extends Controller
         }
         
         $roleName = strtolower($user->role->description ?? '');
-        // RESTRICCIÓN TOTAL: Solo el rol 'admin' ve todo.
-        // Master, Gerente y Vendedor pasan por el filtro de privacidad.
-        $isAdmin = ($roleName === 'admin');
-        $search = $request->query('search');
+        $isAdmin  = ($roleName === 'admin');
+        $search   = $request->query('search');
 
         $query = Client::query();
 
-        // 1. Filtrar por búsqueda si se proporciona
+        // 1. Filtrar por búsqueda
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
@@ -39,7 +38,16 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 2. Filtrar por estado de lectura (inteligente)
+        // 2. Filtrar por bucket (nuevo sistema)
+        $bucket = $request->query('bucket', 'all');
+        if ($bucket && $bucket !== 'all') {
+            $query->whereHas('whatsappConversations', function ($q) use ($bucket) {
+                $q->where('status', 'open')
+                  ->where('conversation_bucket', $bucket);
+            });
+        }
+
+        // 3. Compatibilidad legacy: filtro por estado de lectura
         $filter = $request->query('filter', 'all');
         if ($filter === 'unread') {
             $query->whereHas('whatsappMessages', function ($q) {
@@ -51,11 +59,9 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 3. Filtrar visibilidad según el rol (Vendedoras solo ven lo suyo)
+        // 4. Filtrar visibilidad según rol
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                // EXCLUSIVIDAD: Si hay un pedido activo/reciente (no Sin Stock), ese agente es el único dueño.
-                // Prioridad 1: Eres el dueño del PEDIDO MÁS RECIENTE del cliente (y no es Sin Stock)
                 $q->whereHas('orders', function ($oq) use ($user) {
                     $oq->where('agent_id', $user->id)
                        ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
@@ -63,8 +69,6 @@ class WhatsappConversationController extends Controller
                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
                        });
                 })
-                // Prioridad 2: El cliente NO tiene pedidos válidos (distintos a Sin Stock),
-                // en cuyo caso permitimos acceso si eres el Agente Asignado o tienes sesión abierta.
                 ->orWhere(function($sub) use ($user) {
                     $sub->whereDoesntHave('orders', function($oq) {
                         $oq->whereHas('status', function($sq) {
@@ -82,30 +86,58 @@ class WhatsappConversationController extends Controller
             });
         }
 
-            $paginator = $query->withCount(['whatsappMessages as unread_count' => function ($q) {
-                    $q->where('is_from_client', true)->where('status', '!=', 'read');
-                }])
-                ->with(['agent', 'latestOrder.agent', 'whatsappConversations' => function ($q) {
-                    $q->where('status', 'open');
-                }])
-                ->with('latestWhatsappMessage')
-                ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
-                ->paginate(50);
+        // 5. Ordenar por: bucket_priority ASC → unread DESC → last_message_at DESC
+        //    bucket_priority: requires_attention=1, follow_up=2, closed=3
+        $paginator = $query
+            ->withCount(['whatsappMessages as unread_count' => function ($q) {
+                $q->where('is_from_client', true)->where('status', '!=', 'read');
+            }])
+            ->with(['agent', 'latestOrder.agent', 'whatsappConversations' => function ($q) {
+                $q->where('status', 'open');
+            }])
+            ->with('latestWhatsappMessage')
+            ->orderByRaw("
+                COALESCE((
+                    SELECT CASE conversation_bucket
+                        WHEN 'requires_attention' THEN 1
+                        WHEN 'follow_up' THEN 2
+                        WHEN 'closed' THEN 3
+                        ELSE 2
+                    END
+                    FROM whatsapp_conversations
+                    WHERE whatsapp_conversations.client_id = clients.id
+                      AND whatsapp_conversations.status = 'open'
+                    LIMIT 1
+                ), 2) ASC
+            ")
+            ->orderByRaw("
+                (SELECT COUNT(*) FROM whatsapp_messages
+                 WHERE whatsapp_messages.client_id = clients.id
+                   AND whatsapp_messages.is_from_client = 1
+                   AND whatsapp_messages.status != 'read') DESC
+            ")
+            ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
+            ->paginate(50);
 
         $paginator->getCollection()->transform(function ($client) {
-            $latestMessage = $client->latestWhatsappMessage;
+            $latestMessage  = $client->latestWhatsappMessage;
+            $conversation   = $client->whatsappConversations->first();
+            $bucket         = $conversation?->conversation_bucket ?? 'follow_up';
+            
             return [
-                'id' => $client->id,
-                'name' => $client->first_name . ' ' . $client->last_name,
-                'phone' => $client->phone,
-                'unread_count' => $client->unread_count,
-                'is_window_open' => $client->isWhatsappWindowOpen(),
-                'last_message' => $latestMessage ? $latestMessage->body : 'Sin mensajes',
-                'last_message_date' => $latestMessage ? $latestMessage->sent_at : $client->created_at,
-                'context' => [
-                    'order' => $client->latestOrder,
-                    'agent' => $client->agent,
-                    'conversation' => $client->whatsappConversations->first(),
+                'id'                  => $client->id,
+                'name'                => $client->first_name . ' ' . $client->last_name,
+                'phone'               => $client->phone,
+                'unread_count'        => $client->unread_count,
+                'is_window_open'      => $client->isWhatsappWindowOpen(),
+                'last_message'        => $latestMessage ? $latestMessage->body : 'Sin mensajes',
+                'last_message_date'   => $latestMessage ? $latestMessage->sent_at : $client->created_at,
+                'last_message_type'   => $latestMessage?->message_type ?? 'outgoing_agent_message',
+                'conversation_bucket' => $bucket,
+                'context'             => [
+                    'order'        => $client->latestOrder,
+                    'agent'        => $client->agent,
+                    'conversation' => $conversation,
                 ]
             ];
         });
@@ -231,12 +263,15 @@ class WhatsappConversationController extends Controller
         }
 
         $message = WhatsappMessage::create([
-            'order_id' => $latestOrder ? $latestOrder->id : null,
-            'client_id' => $client->id,
-            'body' => $renderedBody,
+            'order_id'     => $latestOrder ? $latestOrder->id : null,
+            'client_id'    => $client->id,
+            'body'         => $renderedBody,
             'is_from_client' => $request->input('is_from_client', false),
-            'status' => 'sending',
-            'sent_at' => now(),
+            'message_type' => $request->input('is_from_client', false)
+                ? WhatsappMessage::TYPE_INCOMING
+                : WhatsappMessage::TYPE_AGENT,
+            'status'       => 'sending',
+            'sent_at'      => now(),
         ]);
 
         if (!$message->is_from_client) {
@@ -293,6 +328,11 @@ class WhatsappConversationController extends Controller
 
         $client->update(['last_interaction_at' => now()]);
         $message->refresh();
+
+        // Recalculate bucket — agent message moves to follow_up
+        $bucket = ConversationBucketService::recalculate($client->id);
+        $message->setRelation('_bucket', $bucket);
+
         event(new \App\Events\WhatsappMessageReceived($message));
 
         return response()->json($message, 201);
@@ -356,14 +396,19 @@ class WhatsappConversationController extends Controller
             $send = $service->sendMedia($client->phone, $upload['id'], $type, $request->caption);
             if ($send && isset($send['messages'][0]['id'])) {
                 $msg = WhatsappMessage::create([
-                    'client_id' => $client->id,
-                    'message_id' => $send['messages'][0]['id'],
-                    'body' => $request->caption ?? "Archivo {$type}",
+                    'client_id'      => $client->id,
+                    'message_id'     => $send['messages'][0]['id'],
+                    'body'           => $request->caption ?? "Archivo {$type}",
                     'is_from_client' => false,
-                    'status' => 'sent',
-                    'sent_at' => now(),
-                    'media' => asset('storage/' . $path)
+                    'message_type'   => WhatsappMessage::TYPE_AGENT,
+                    'status'         => 'sent',
+                    'sent_at'        => now(),
+                    'media'          => asset('storage/' . $path)
                 ]);
+
+                $bucket = ConversationBucketService::recalculate($client->id);
+                $msg->setRelation('_bucket', $bucket);
+
                 event(new \App\Events\WhatsappMessageReceived($msg));
                 return response()->json($msg, 201);
             }
