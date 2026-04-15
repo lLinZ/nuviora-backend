@@ -23,8 +23,11 @@ class WhatsappConversationController extends Controller
             $user->load('role');
         }
         
-        $roleName = strtolower($user->role->description ?? '');
-        $isAdmin  = ($roleName === 'admin');
+        $roleName = $user->role->description ?? '';
+
+        // Admin, Gerente y Master ven TODOS los chats.
+        // Vendedor solo ve los suyos. Igual que en OrderController.
+        $isAdmin  = in_array($roleName, ['Admin', 'Gerente', 'Master']);
         $search   = $request->query('search');
 
         $query = Client::query();
@@ -181,8 +184,7 @@ class WhatsappConversationController extends Controller
         if (!$user->relationLoaded('role')) {
             $user->load('role');
         }
-        $roleName = strtolower($user->role->description ?? '');
-        $isAdmin = ($roleName === 'admin');
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
 
         $query = Client::where('id', $clientId);
 
@@ -231,7 +233,7 @@ class WhatsappConversationController extends Controller
     {
         $user = Auth::user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
 
         $client = Client::findOrFail($clientId);
 
@@ -356,9 +358,8 @@ class WhatsappConversationController extends Controller
         $client->update(['last_interaction_at' => now()]);
         $message->refresh();
 
-        // Recalculate bucket — agent message moves to follow_up
-        $bucket = ConversationBucketService::recalculate($client->id);
-        $message->setRelation('_bucket', $bucket);
+        // Recalculate bucket — agent reply moves conversation to follow_up
+        ConversationBucketService::recalculate($client->id);
 
         event(new \App\Events\WhatsappMessageReceived($message));
 
@@ -374,7 +375,7 @@ class WhatsappConversationController extends Controller
         
         $user = Auth::user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
 
         $client = Client::findOrFail($clientId);
 
@@ -433,8 +434,7 @@ class WhatsappConversationController extends Controller
                     'media'          => asset('storage/' . $path)
                 ]);
 
-                $bucket = ConversationBucketService::recalculate($client->id);
-                $msg->setRelation('_bucket', $bucket);
+                ConversationBucketService::recalculate($client->id);
 
                 event(new \App\Events\WhatsappMessageReceived($msg));
                 return response()->json($msg, 201);
@@ -486,7 +486,7 @@ class WhatsappConversationController extends Controller
         if (!$user->relationLoaded('role')) {
             $user->load('role');
         }
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
 
         // PRIVACY CHECK (same as show)
         $query = Client::where('id', $clientId);

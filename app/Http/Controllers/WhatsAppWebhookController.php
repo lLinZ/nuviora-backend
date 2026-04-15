@@ -223,15 +223,11 @@ class WhatsAppWebhookController extends Controller
             ]);
 
             // Recalculate bucket → requires_attention because client just wrote
-            $bucket = ConversationBucketService::recalculate($client->id);
+            ConversationBucketService::recalculate($client->id);
 
             $msg->refresh()->load('client', 'order');
 
-            // Include bucket so frontend reorders without extra API call
-            $broadcastMsg = $msg->toArray();
-            $broadcastMsg['conversation_bucket'] = $bucket;
-
-            event(new \App\Events\WhatsappMessageReceived($msg->setRelation('_bucket', $bucket)));
+            event(new \App\Events\WhatsappMessageReceived($msg));
 
             return response()->json(['status' => 'success']);
 

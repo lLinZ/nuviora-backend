@@ -27,18 +27,12 @@ class WhatsappMessageReceived implements ShouldBroadcast
 
     public function broadcastWith(): array
     {
-        // conversation_bucket is passed as a synthetic relation '_bucket' from webhook/controllers
-        $bucket = null;
-        if ($this->message->relationLoaded('_bucket')) {
-            $bucket = $this->message->getRelation('_bucket');
-        }
-        if (!$bucket) {
-            // Fallback: read from the conversation record
-            $conv = \App\Models\WhatsappConversation::where('client_id', $this->message->client_id)
-                ->where('status', 'open')
-                ->first();
-            $bucket = $conv?->conversation_bucket ?? 'follow_up';
-        }
+        // Read bucket directly from DB — always correct because ConversationBucketService
+        // updates the record BEFORE this event is fired/queued.
+        $conv = \App\Models\WhatsappConversation::where('client_id', $this->message->client_id)
+            ->orderByDesc('updated_at')
+            ->first();
+        $bucket = $conv?->conversation_bucket ?? 'follow_up';
 
         return [
             'message' => array_merge($this->message->toArray(), [
