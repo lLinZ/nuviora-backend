@@ -118,7 +118,10 @@ class ConversationBucketService
     public static function closeBucket(int $clientId): void
     {
         WhatsappConversation::where('client_id', $clientId)
-            ->update(['conversation_bucket' => WhatsappConversation::BUCKET_CLOSED]);
+            ->update([
+                'status' => 'closed',
+                'conversation_bucket' => WhatsappConversation::BUCKET_CLOSED
+            ]);
     }
 
     /**

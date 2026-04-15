@@ -86,6 +86,26 @@ class OrderObserver
                 $newStatusDesc = \App\Models\Status::find($newValue)?->description ?? 'N/A';
                 $descriptions[] = "Estado cambió de '{$oldStatusDesc}' a '{$newStatusDesc}'";
 
+                // --- Automatización del Embudo de WhatsApp ---
+                // Si la orden llegó a su punto final, cerramos el chat para liberar la pestaña "Seguimiento".
+                if (in_array($newStatusDesc, [\App\Constants\OrderStatus::ENTREGADO, \App\Constants\OrderStatus::CANCELADO, \App\Constants\OrderStatus::RECHAZADO])) {
+                    if ($order->client_id) {
+                        \App\Services\ConversationBucketService::closeBucket($order->client_id);
+                        
+                        // Enviar socket (usamos un msg dummy tipo system_event para que actualice el UI en tiempo real)
+                        $dummyMsg = \App\Models\WhatsappMessage::create([
+                            'order_id' => $order->id,
+                            'client_id' => $order->client_id,
+                            'body' => "Orden " . $newStatusDesc,
+                            'is_from_client' => false,
+                            'message_type' => \App\Models\WhatsappMessage::TYPE_SYSTEM,
+                            'status' => 'sent',
+                            'sent_at' => now(),
+                        ]);
+                        event(new \App\Events\WhatsappMessageReceived($dummyMsg));
+                    }
+                }
+
                 // --- Automated WhatsApp Notifications (DESACTIVADO temporalmente por solicitud del cliente) ---
                 // $this->handleStatusWhatsApp($order, $newStatusDesc);
             } elseif ($key === 'agent_id') {
