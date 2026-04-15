@@ -19,13 +19,17 @@ class CrmAssignmentService
             return User::find($client->agent_id);
         }
 
-        // Get all agents currently "On Duty" for CRM
-        $activeAgents = User::where('is_active_crm', true)
-            ->whereHas('role', function($q) {
-                $q->whereIn('description', ['Vendedor', 'Gerente', 'Admin', 'Master']);
-            })
-            ->orderBy('id', 'asc')
+        // Obtener vendedores que estén activos HOY en cualquier tienda, basándonos en el Roster Oficial
+        $activeRosters = \App\Models\DailyAgentRoster::with('agent.role')
+            ->where('date', now()->toDateString())
+            ->where('is_active', true)
             ->get();
+            
+        // Extraer los agentes únicos con su rol permitido
+        $activeAgents = $activeRosters->pluck('agent')->filter(function ($agent) {
+            if (!$agent || !$agent->role) return false;
+            return in_array($agent->role->description, ['Vendedor', 'Gerente', 'Admin', 'Master']);
+        })->unique('id')->values();
 
         if ($activeAgents->isEmpty()) {
             Log::warning("CrmAssignmentService: No active agents found for assignment. Lead #{$client->id} remains unassigned.");
