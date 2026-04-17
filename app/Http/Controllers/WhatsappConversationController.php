@@ -76,11 +76,23 @@ class WhatsappConversationController extends Controller
         // 5. Filtrar visibilidad según rol (si no es admin)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                $q->where('agent_id', $user->id)
-                  ->orWhereHas('whatsappConversations', function($cq) use ($user) {
-                      $cq->where('agent_id', $user->id)
-                         ->where('status', 'open');
-                  });
+                // A. Tienes el chat activo a tu nombre
+                $q->whereHas('whatsappConversations', function($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)->where('status', 'open');
+                })
+                // B. Tienes una orden reciente a tu nombre (eres el vendedor actual asignado a la venta)
+                ->orWhereHas('orders', function($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)->where('created_at', '>=', now()->subDays(45));
+                })
+                // C. Eres el dueño originario del cliente Y nadie más le ha sacado una orden recientemente
+                ->orWhere(function ($subQ) use ($user) {
+                    $subQ->where('agent_id', $user->id)
+                         ->whereDoesntHave('orders', function($oq) use ($user) {
+                             $oq->whereNotNull('agent_id')
+                                ->where('agent_id', '!=', $user->id)
+                                ->where('created_at', '>=', now()->subDays(45));
+                         });
+                });
             });
         }
 
@@ -140,12 +152,27 @@ class WhatsappConversationController extends Controller
         $convQuery = \App\Models\WhatsappConversation::query()->where('status', 'open');
 
         if (!$isAdmin) {
-            // Solo contar conversaciones del cliente asignado a esta vendedora
+            // Contar chats basados en la misma lógica blindada
             $convQuery->whereHas('client', function($cq) use ($user) {
-                $cq->where('agent_id', $user->id)
-                   ->orWhereHas('whatsappConversations', function($ccq) use ($user) {
-                       $ccq->where('agent_id', $user->id)->where('status', 'open');
-                   });
+                $cq->where(function ($q) use ($user) {
+                    // A. Tienes el chat activo a tu nombre
+                    $q->whereHas('whatsappConversations', function($subcq) use ($user) {
+                        $subcq->where('agent_id', $user->id)->where('status', 'open');
+                    })
+                    // B. Tienes una orden reciente a tu nombre
+                    ->orWhereHas('orders', function($oq) use ($user) {
+                        $oq->where('agent_id', $user->id)->where('created_at', '>=', now()->subDays(45));
+                    })
+                    // C. Eres el dueño originario del cliente Y nadie más le ha sacado una orden recientemente
+                    ->orWhere(function ($subQ) use ($user) {
+                        $subQ->where('agent_id', $user->id)
+                             ->whereDoesntHave('orders', function($oq) use ($user) {
+                                 $oq->whereNotNull('agent_id')
+                                    ->where('agent_id', '!=', $user->id)
+                                    ->where('created_at', '>=', now()->subDays(45));
+                             });
+                    });
+                });
             });
         }
 

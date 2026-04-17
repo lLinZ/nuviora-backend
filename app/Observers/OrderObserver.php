@@ -112,6 +112,14 @@ class OrderObserver
                 $oldVal = \App\Models\User::find($oldValue)?->names ?? 'Nadie';
                 $newVal = \App\Models\User::find($newValue)?->names ?? 'Nadie';
                 $descriptions[] = "Cambió el vendedor de '{$oldVal}' a '{$newVal}'";
+
+                // --- Sync CRM: Actualizar la propiedad del cliente y de la conversación ---
+                if ($order->client_id && $newValue) {
+                    \App\Models\Client::where('id', $order->client_id)->update(['agent_id' => $newValue]);
+                    \App\Models\WhatsappConversation::where('client_id', $order->client_id)
+                        ->where('status', 'open')
+                        ->update(['agent_id' => $newValue]);
+                }
             } elseif ($key === 'agency_id') {
                 $oldVal = \App\Models\User::find($oldValue)?->names ?? 'Ninguna';
                 $newVal = \App\Models\User::find($newValue)?->names ?? 'Ninguna';
