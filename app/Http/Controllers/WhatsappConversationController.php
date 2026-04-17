@@ -229,34 +229,15 @@ class WhatsappConversationController extends Controller
 
         $client = Client::findOrFail($clientId);
 
-        // PRIVACY CHECK
+        // PRIVACY CHECK — misma logica que show()
         if (!$isAdmin) {
-            $hasAccess = Client::where('id', $clientId)
-                ->where(function ($q) use ($user) {
-                    $q->whereHas('orders', function ($oq) use ($user) {
-                        $oq->where('agent_id', $user->id)
-                           ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
-                           ->whereHas('status', function($sq) {
-                               $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                           });
-                    })
-                    ->orWhere(function($sub) use ($user) {
-                        $sub->whereDoesntHave('orders', function($oq) {
-                            $oq->whereHas('status', function($sq) {
-                                $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                            });
-                        })
-                        ->where(function($inner) use ($user) {
-                            $inner->where('agent_id', $user->id)
-                                  ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                                      $cq->where('agent_id', $user->id)
-                                         ->where('status', 'open');
-                                  });
-                        });
-                    });
-                })->exists();
+            $isAgentOfClient  = $client->agent_id === $user->id;
+            $hasOpenConversation = $client->whatsappConversations()
+                ->where('agent_id', $user->id)
+                ->where('status', 'open')
+                ->exists();
 
-            if (!$hasAccess) {
+            if (!$isAgentOfClient && !$hasOpenConversation) {
                 return response()->json(['message' => 'No tienes permiso para enviar mensajes a este cliente.'], 403);
             }
         }
