@@ -84,20 +84,19 @@ class WhatsappConversationController extends Controller
         }
 
         // 6. Ordenar
+        $query->withCount(['whatsappMessages as unread_count' => function ($q) {
+            $q->where('is_from_client', true)->where('status', '!=', 'read');
+        }]);
+
         if ($sortBy === 'messages_count') {
-            // Ordenar por cantidad de mensajes que ha enviado el cliente
-            $query->withCount(['whatsappMessages as client_messages_count' => function($q) {
-                $q->where('is_from_client', true);
-            }])->orderBy('client_messages_count', 'desc');
+            // Ordenar por cantidad de mensajes SIN LEER (Urgencia)
+            $query->orderBy('unread_count', 'desc');
         } else {
             // Ordenar por orden de llegada (último mensaje)
             $query->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC');
         }
 
         $paginator = $query
-            ->withCount(['whatsappMessages as unread_count' => function ($q) {
-                $q->where('is_from_client', true)->where('status', '!=', 'read');
-            }])
             ->with(['agent', 'latestOrder.agent', 'latestOrder.status', 'latestOrder.products.product', 'whatsappConversations'])
             ->with('latestWhatsappMessage')
             ->paginate(50);
