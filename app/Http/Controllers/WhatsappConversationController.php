@@ -152,26 +152,17 @@ class WhatsappConversationController extends Controller
 
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                $q->whereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
-                       ->whereHas('status', function($sq) {
-                           $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                       });
+                // Caso 1: Es la vendedora asignada al cliente
+                $q->where('agent_id', $user->id)
+                // Caso 2: Tiene una conversación abierta con el cliente
+                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)
+                       ->where('status', 'open');
                 })
-                ->orWhere(function($sub) use ($user) {
-                    $sub->whereDoesntHave('orders', function($oq) {
-                        $oq->whereHas('status', function($sq) {
-                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                        });
-                    })
-                    ->where(function($inner) use ($user) {
-                        $inner->where('agent_id', $user->id)
-                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                                  $cq->where('agent_id', $user->id)
-                                     ->where('status', 'open');
-                              });
-                    });
+                // Caso 3: Es la vendedora de la ÚLTIMA orden (vigente o no)
+                ->orWhereHas('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)
+                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)');
                 });
             });
         }
@@ -454,26 +445,14 @@ class WhatsappConversationController extends Controller
         $query = Client::where('id', $clientId);
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                $q->whereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
-                       ->whereHas('status', function($sq) {
-                           $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                       });
+                $q->where('agent_id', $user->id)
+                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)
+                       ->where('status', 'open');
                 })
-                ->orWhere(function($sub) use ($user) {
-                    $sub->whereDoesntHave('orders', function($oq) {
-                        $oq->whereHas('status', function($sq) {
-                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                        });
-                    })
-                    ->where(function($inner) use ($user) {
-                        $inner->where('agent_id', $user->id)
-                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                                  $cq->where('agent_id', $user->id)
-                                     ->where('status', 'open');
-                              });
-                    });
+                ->orWhereHas('orders', function ($oq) use ($user) {
+                    $oq->where('agent_id', $user->id)
+                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)');
                 });
             });
         }
