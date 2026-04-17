@@ -26,9 +26,13 @@ class WhatsappConversationController extends Controller
         $roleName = $user->role->description ?? '';
 
         // Admin, Gerente y Master ven TODOS los chats.
-        // Vendedor solo ve los suyos. Igual que en OrderController.
-        $isAdmin  = in_array($roleName, ['Admin', 'Gerente', 'Master']);
+        // Vendedor solo ve los suyos.
+        $isAdmin  = in_array($roleName, ['Admin', 'Manager', 'Gerente', 'Master']);
         $search   = $request->query('search');
+        $agentId  = $request->query('agent_id');
+        $startDate = $request->query('start_date');
+        $endDate   = $request->query('end_date');
+        $sortBy    = $request->query('sort_by', 'latency'); // 'latency' o 'messages_count'
 
         $query = Client::query();
 
@@ -44,109 +48,58 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar por bucket (nuevo sistema)
         $bucket = $request->query('bucket', 'all');
         if ($bucket && $bucket !== 'all') {
-            // Filtrar por bucket — busca la conversación más reciente del cliente
-            // sin importar el status de la conversación
-            $query->where(function($q) use ($bucket) {
-                $q->whereHas('whatsappConversations', function ($cq) use ($bucket) {
-                    $cq->whereRaw("COALESCE(conversation_bucket, 'follow_up') = ?", [$bucket]);
-                });
-
-                // Si el bucket es 'follow_up', también incluir clientes que tienen mensajes
-                // pero no tienen conversación registrada todavía
-                if ($bucket === 'follow_up') {
-                    $q->orWhere(function($sub) {
-                        $sub->whereHas('whatsappMessages')
-                            ->whereDoesntHave('whatsappConversations');
-                    });
-                }
-
-                // Si el bucket es 'requires_attention', también incluir clientes
-                // cuyo último mensaje es del cliente pero no tienen conversación
-                if ($bucket === 'requires_attention') {
-                    $q->orWhere(function($sub) {
-                        $sub->whereHas('whatsappMessages', function($mq) {
-                            // El mensaje más reciente es del cliente
-                            $mq->where('is_from_client', true)
-                               ->whereRaw('sent_at = (SELECT MAX(sent_at) FROM whatsapp_messages wm2 WHERE wm2.client_id = whatsapp_messages.client_id)');
-                        })->whereDoesntHave('whatsappConversations');
-                    });
-                }
+            $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
+                $cq->where('conversation_bucket', $bucket);
             });
         } else {
             // 'all': mostrar todos los clientes que tienen al menos un mensaje de WhatsApp
             $query->whereHas('whatsappMessages');
         }
 
-        // 3. Compatibilidad legacy: filtro por estado de lectura
-        $filter = $request->query('filter', 'all');
-        if ($filter === 'unread') {
-            $query->whereHas('whatsappMessages', function ($q) {
-                $q->where('is_from_client', true)->where('status', '!=', 'read');
+        // 3. Filtro por Vendedora (agent_id)
+        if ($isAdmin && $agentId) {
+            $query->where('agent_id', $agentId);
+        }
+
+        // 4. Filtro por Rango de Fecha (last_interaction_at o last_message_at de la conversación)
+        if ($startDate) {
+            $query->whereHas('whatsappConversations', function($cq) use ($startDate) {
+                $cq->where('last_message_at', '>=', $startDate . ' 00:00:00');
             });
-        } elseif ($filter === 'read') {
-            $query->whereDoesntHave('whatsappMessages', function ($q) {
-                $q->where('is_from_client', true)->where('status', '!=', 'read');
+        }
+        if ($endDate) {
+            $query->whereHas('whatsappConversations', function($cq) use ($endDate) {
+                $cq->where('last_message_at', '<=', $endDate . ' 23:59:59');
             });
         }
 
-        // 4. Filtrar visibilidad según rol
+        // 5. Filtrar visibilidad según rol (si no es admin)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                $q->whereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
-                       ->whereHas('status', function($sq) {
-                           $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                       });
-                })
-                ->orWhere(function($sub) use ($user) {
-                    $sub->whereDoesntHave('orders', function($oq) {
-                        $oq->whereHas('status', function($sq) {
-                            $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                        });
-                    })
-                    ->where(function($inner) use ($user) {
-                        $inner->where('agent_id', $user->id)
-                              ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                                  $cq->where('agent_id', $user->id)
-                                     ->where('status', 'open');
-                              });
-                    });
-                });
+                $q->where('agent_id', $user->id)
+                  ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                      $cq->where('agent_id', $user->id);
+                  });
             });
         }
 
-        // 5. Ordenar por: bucket_priority ASC → unread DESC → last_message_at DESC
-        //    COALESCE maneja NULLs y clientes sin conversación (prioridad 2 = follow_up)
+        // 6. Ordenar
+        if ($sortBy === 'messages_count') {
+            // Ordenar por cantidad de mensajes que ha enviado el cliente
+            $query->withCount(['whatsappMessages as client_messages_count' => function($q) {
+                $q->where('is_from_client', true);
+            }])->orderBy('client_messages_count', 'desc');
+        } else {
+            // Ordenar por orden de llegada (último mensaje)
+            $query->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC');
+        }
+
         $paginator = $query
             ->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
-            ->with(['agent', 'latestOrder.agent', 'whatsappConversations' => function ($q) {
-                $q->where('status', 'open');
-            }])
+            ->with(['agent', 'latestOrder.agent', 'latestOrder.status', 'latestOrder.products.product', 'whatsappConversations'])
             ->with('latestWhatsappMessage')
-            ->orderByRaw("
-                COALESCE((
-                    SELECT CASE COALESCE(conversation_bucket, 'follow_up')
-                        WHEN 'requires_attention' THEN 1
-                        WHEN 'follow_up' THEN 2
-                        WHEN 'closed' THEN 3
-                        ELSE 2
-                    END
-                    FROM whatsapp_conversations
-                    WHERE whatsapp_conversations.client_id = clients.id
-                      AND whatsapp_conversations.status = 'open'
-                    LIMIT 1
-                ), 2) ASC
-            ")
-            ->orderByRaw("
-                (SELECT COUNT(*) FROM whatsapp_messages
-                 WHERE whatsapp_messages.client_id = clients.id
-                   AND whatsapp_messages.is_from_client = 1
-                   AND whatsapp_messages.status != 'read') DESC
-            ")
-            ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC')
             ->paginate(50);
 
         $paginator->getCollection()->transform(function ($client) {
@@ -154,6 +107,14 @@ class WhatsappConversationController extends Controller
             $conversation   = $client->whatsappConversations->first();
             $bucket         = $conversation?->conversation_bucket ?? 'follow_up';
             
+            $order = $client->latestOrder;
+            $productsTitle = "";
+            if ($order && $order->products) {
+                $productsTitle = $order->products->map(function($p) {
+                    return ($p->product->name ?? 'Producto') . " (x" . $p->quantity . ")";
+                })->implode(', ');
+            }
+
             return [
                 'id'                  => $client->id,
                 'name'                => $client->first_name . ' ' . $client->last_name,
@@ -164,15 +125,16 @@ class WhatsappConversationController extends Controller
                 'last_message_date'   => $latestMessage ? $latestMessage->sent_at : $client->created_at,
                 'last_message_type'   => $latestMessage?->message_type ?? 'outgoing_agent_message',
                 'conversation_bucket' => $bucket,
+                'products_summary'    => $productsTitle,
+                'total_ves'           => $order ? $order->ves_price : 0,
                 'context'             => [
-                    'order'        => $client->latestOrder,
+                    'order'        => $order,
                     'agent'        => $client->agent,
                     'conversation' => $conversation,
                 ]
             ];
         });
 
-        return response()->json($paginator);
     }
 
     /**
@@ -184,7 +146,7 @@ class WhatsappConversationController extends Controller
         if (!$user->relationLoaded('role')) {
             $user->load('role');
         }
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
         $query = Client::where('id', $clientId);
 
@@ -233,7 +195,7 @@ class WhatsappConversationController extends Controller
     {
         $user = Auth::user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
         $client = Client::findOrFail($clientId);
 
@@ -375,7 +337,7 @@ class WhatsappConversationController extends Controller
         
         $user = Auth::user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
         $client = Client::findOrFail($clientId);
 
@@ -486,7 +448,7 @@ class WhatsappConversationController extends Controller
         if (!$user->relationLoaded('role')) {
             $user->load('role');
         }
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Gerente', 'Master']);
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
         // PRIVACY CHECK (same as show)
         $query = Client::where('id', $clientId);
@@ -535,5 +497,29 @@ class WhatsappConversationController extends Controller
         ));
 
         return response()->json(['status' => true, 'message' => 'Mensajes marcados como leídos']);
+    }
+
+    /**
+     * Mueve un chat a un bucket específico manualmente.
+     */
+    public function moveToBucket(Request $request, $clientId)
+    {
+        $request->validate(['bucket' => 'required|in:requires_attention,follow_up,closed']);
+        
+        $conv = WhatsappConversation::firstOrCreate(
+            ['client_id' => $clientId, 'status' => 'open'],
+            ['conversation_bucket' => $request->bucket]
+        );
+
+        $conv->update([
+            'conversation_bucket' => $request->bucket,
+            'is_manual_bucket'     => true
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Chat movido a ' . $request->bucket,
+            'conversation' => $conv
+        ]);
     }
 }

@@ -53,7 +53,7 @@ Route::post('whatsapp/webhook', [WhatsAppWebhookController::class, 'handle']);
 Route::middleware('api_key')->prefix('external/whatsapp')->group(function () {
     Route::get('templates', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'index']);
     Route::post('send', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'send']);
-    Route::get('check-window', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'checkWindow']);
+    Route::match(['get', 'post'], 'check-window', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'checkWindow']);
     Route::get('media-library', [\App\Http\Controllers\External\ExternalWhatsAppController::class, 'listMedia']);
 });
 
@@ -305,6 +305,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/whatsapp-conversations/{client}/messages', [\App\Http\Controllers\WhatsappConversationController::class, 'store']);
     Route::post('/whatsapp-conversations/{client}/media', [\App\Http\Controllers\WhatsappConversationController::class, 'sendMedia']);
     Route::post('/whatsapp-conversations/{client}/read', [\App\Http\Controllers\WhatsappConversationController::class, 'markAsRead']);
+    Route::post('/whatsapp-conversations/{client}/move', [\App\Http\Controllers\WhatsappConversationController::class, 'moveToBucket']);
     Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
 
     // --- Media Explorer (Filesystem) ---

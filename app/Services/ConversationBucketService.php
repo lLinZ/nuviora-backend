@@ -33,15 +33,12 @@ class ConversationBucketService
     public static function recalculate(int $clientId): string
     {
         // CRÍTICO: Si no existe conversación abierta, crearla.
-        // Sin esto, los clientes de webhook/External nunca aparecen en la sidebar.
         $conv = WhatsappConversation::firstOrCreate(
             ['client_id' => $clientId, 'status' => 'open'],
             ['conversation_bucket' => WhatsappConversation::BUCKET_FOLLOW_UP]
         );
 
-        $bucket = self::calculateBucket($conv);
-
-        // Obtener el último mensaje relevante para actualizar last_message_at
+        // Obtener el último mensaje relevante
         $lastRelevant = WhatsappMessage::where('client_id', $clientId)
             ->whereIn('message_type', [
                 WhatsappMessage::TYPE_INCOMING,
@@ -51,9 +48,18 @@ class ConversationBucketService
             ->latest('sent_at')
             ->first();
 
+        // Si el último mensaje es del cliente, se pierde el override manual
+        // (por si el vendedor lo movió a seguimiento pero el cliente volvió a escribir)
+        if ($lastRelevant && $lastRelevant->message_type === WhatsappMessage::TYPE_INCOMING) {
+            $conv->is_manual_bucket = false;
+        }
+
+        $bucket = self::calculateBucket($conv);
+
         $conv->update([
             'conversation_bucket' => $bucket,
             'last_message_at'     => $lastRelevant?->sent_at ?? now(),
+            'is_manual_bucket'     => $conv->is_manual_bucket // Asegurar que se persiste el reset si ocurrió
         ]);
 
         return $bucket;
@@ -72,7 +78,26 @@ class ConversationBucketService
             return WhatsappConversation::BUCKET_CLOSED;
         }
 
-        // 2. Buscar el último mensaje RELEVANTE (excluir system_event)
+        // 2. Cerrado: Por estatus de pedido (Entregado o Cancelado)
+        $latestOrder = \App\Models\Order::where('client_id', $conv->client_id)
+            ->orderBy('created_at', 'desc')
+            ->with('status')
+            ->first();
+
+        if ($latestOrder && $latestOrder->status) {
+            $desc = $latestOrder->status->description;
+            if (in_array($desc, [\App\Constants\OrderStatus::ENTREGADO, \App\Constants\OrderStatus::CANCELADO])) {
+                return WhatsappConversation::BUCKET_CLOSED;
+            }
+        }
+
+        // 3. Si fue movido MANUALMENTE por la vendedora, se respeta 
+        // (a menos que el cliente haya vuelto a escribir, lo cual se maneja en recalculate)
+        if ($conv->is_manual_bucket) {
+            return $conv->conversation_bucket;
+        }
+
+        // 4. Buscar el último mensaje RELEVANTE (excluir system_event)
         $lastRelevant = WhatsappMessage::where('client_id', $conv->client_id)
             ->whereIn('message_type', [
                 WhatsappMessage::TYPE_INCOMING,
@@ -87,21 +112,18 @@ class ConversationBucketService
             return WhatsappConversation::BUCKET_FOLLOW_UP;
         }
 
-        // 3. Si el último mensaje relevante es del cliente → requiere atención
+        // 5. Si el último mensaje relevante es del cliente → requiere atención
         if ($lastRelevant->message_type === WhatsappMessage::TYPE_INCOMING) {
             return WhatsappConversation::BUCKET_ATTENTION;
         }
 
-        // 4. Si el último mensaje es automatización, revisar si hay cliente
+        // 6. Si el último mensaje es automatización, revisar si hay cliente
         //    respondiendo DESPUÉS de una automatización sin atender
         if ($lastRelevant->message_type === WhatsappMessage::TYPE_AUTOMATED) {
-            // Buscar si hay un incoming_message POSTERIOR a la última automatización
-            // En este punto el último mensaje es la automatización, así que no hay
-            // incoming_message posterior → sigue en follow_up (automatización envió, cliente no respondió aún)
             return WhatsappConversation::BUCKET_FOLLOW_UP;
         }
 
-        // 5. Último mensaje es del agente humano → en seguimiento
+        // 7. Último mensaje es del agente humano → en seguimiento
         if ($lastRelevant->message_type === WhatsappMessage::TYPE_AGENT) {
             return WhatsappConversation::BUCKET_FOLLOW_UP;
         }

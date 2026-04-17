@@ -10,6 +10,7 @@ use App\Models\Client;
 use App\Models\Order;
 use App\Services\WhatsAppService;
 use App\Services\ConversationBucketService;
+use App\Models\Setting;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -257,34 +258,32 @@ class ExternalWhatsAppController extends Controller
      */
     public function checkWindow(Request $request)
     {
-        $phone    = $request->query('phone');
-        $orderId  = $request->query('order_id');
-        $clientId = $request->query('client_id');
+        $phone    = $request->input('phone');
+        $orderId  = $request->input('order_id');
+        $clientId = $request->input('client_id');
 
         $client = null;
         $order  = null;
 
-        // 1. HIGHEST PRIORITY: Find directly by client_id
-        if ($clientId && is_numeric($clientId)) {
-            $client = Client::find((int) $clientId);
-        }
-
-        // 2. Find by Order ID (numeric or Shopify string)
-        if (!$client && $orderId) {
+        // 1. Priority: Find by Order ID if provided (it identifies the client too)
+        if ($orderId) {
             $order = Order::where('order_id', $orderId)
-                ->orWhere('id', $orderId)
+                ->orWhere('id', is_numeric($orderId) ? $orderId : null)
                 ->first();
             if ($order) {
                 $client = $order->client;
             }
         }
 
+        // 2. If client still not found, try directly by client_id
+        if (!$client && $clientId && is_numeric($clientId)) {
+            $client = Client::find((int) $clientId);
+        }
+
         // 3. Fallback: Find by Phone (last 10 digits)
-        //    NOTE: Multiple clients may share the same phone — this returns
-        //    the first match only. Always prefer sending client_id from n8n.
         if (!$client && $phone) {
-            $phone  = preg_replace('/[^0-9]/', '', $phone);
-            $last10 = substr($phone, -10);
+            $phoneClean  = preg_replace('/[^0-9]/', '', $phone);
+            $last10 = substr($phoneClean, -10);
             $client = Client::where('phone', 'like', "%{$last10}")->first();
         }
 
@@ -300,11 +299,23 @@ class ExternalWhatsAppController extends Controller
         // 4. Products Formatting
         $products = [];
         if ($order) {
-            $products = $order->products->map(function($op) {
+            $rateBinance = (float) Setting::get('rate_binance_usd', 0);
+            $rateBcv     = (float) Setting::get('rate_bcv_usd', 0);
+            $rateEur     = (float) Setting::get('rate_bcv_eur', 0);
+
+            $products = $order->products->map(function($op) use ($rateBinance, $rateBcv, $rateEur) {
+                $priceUsd = (float) ($op->price ?? 0);
+                $priceVesBinance = round($priceUsd * $rateBinance, 2);
+                
                 return [
-                    'name' => $op->name ?? $op->title,
-                    'qty'  => $op->quantity,
-                    'price'=> $op->price
+                    'name'              => $op->showable_name ?: ($op->name ?: $op->title),
+                    'qty'               => $op->quantity,
+                    'price_usd'         => $priceUsd,
+                    'price_ves'         => $priceVesBinance, // Default VES (Binance)
+                    'price_ves_binance' => $priceVesBinance,
+                    'price_ves_bcv'     => round($priceUsd * $rateBcv, 2),
+                    'price_eur'         => $rateEur > 0 ? round($priceVesBinance / $rateEur, 2) : 0,
+                    'price'             => $priceUsd // Legacy support
                 ];
             });
         }
@@ -325,6 +336,9 @@ class ExternalWhatsAppController extends Controller
 
         return response()->json([
             'success' => true,
+            'client_id' => $client->id,
+            'order_id' => $order ? $order->order_id : null,
+            'phone' => $client->phone,
             'client' => [
                 'id' => $client->id,
                 'name' => "{$client->first_name} {$client->last_name}",
@@ -336,10 +350,22 @@ class ExternalWhatsAppController extends Controller
                 'order_id' => $order->order_id,
                 'status' => $order->status ? $order->status->description : 'N/A',
                 'status_id' => $order->status_id,
-                'total' => $order->current_total_price,
+                'total' => (float) $order->current_total_price,
+                'total_usd' => (float) $order->current_total_price,
+                'total_ves' => (float) $order->ves_price, // ves_price is binance
+                'total_ves_binance' => (float) $order->ves_price,
+                'total_ves_bcv' => round($order->current_total_price * (float) Setting::get('rate_bcv_usd', 0), 2),
+                'total_eur' => ((float) Setting::get('rate_bcv_eur', 0) > 0) 
+                                ? round($order->ves_price / (float) Setting::get('rate_bcv_eur', 0), 2) 
+                                : 0,
                 'items' => $products,
                 'store_is_open' => $order->is_store_open,
             ] : null,
+            'rates' => [
+                'binance_usd' => (float) Setting::get('rate_binance_usd', 0),
+                'bcv_usd'     => (float) Setting::get('rate_bcv_usd', 0),
+                'bcv_eur'     => (float) Setting::get('rate_bcv_eur', 0),
+            ],
             'latest_messages' => $messages,
             'timestamp' => now()->toDateTimeString()
         ]);
