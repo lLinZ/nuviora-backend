@@ -78,7 +78,8 @@ class WhatsappConversationController extends Controller
             $query->where(function ($q) use ($user) {
                 $q->where('agent_id', $user->id)
                   ->orWhereHas('whatsappConversations', function($cq) use ($user) {
-                      $cq->where('agent_id', $user->id);
+                      $cq->where('agent_id', $user->id)
+                         ->where('status', 'open');
                   });
             });
         }
