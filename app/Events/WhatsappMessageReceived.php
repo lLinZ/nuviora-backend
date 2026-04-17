@@ -23,23 +23,36 @@ class WhatsappMessageReceived implements ShouldBroadcast
         if (!$this->message->relationLoaded('order')) {
             $this->message->load('order');
         }
+        // Cargar el cliente para que el frontend pueda mostrar su nombre en notificaciones
+        if (!$this->message->relationLoaded('client')) {
+            $this->message->load('client');
+        }
     }
 
     public function broadcastWith(): array
     {
-        // Read bucket directly from DB — always correct because ConversationBucketService
-        // updates the record BEFORE this event is fired/queued.
         $conv = \App\Models\WhatsappConversation::where('client_id', $this->message->client_id)
             ->orderByDesc('updated_at')
             ->first();
         $bucket = $conv?->conversation_bucket ?? 'follow_up';
 
+        $client = $this->message->client;
+        $clientId = $this->message->client_id ?? $this->message->order?->client_id;
+
         return [
             'message' => array_merge($this->message->toArray(), [
-                'client_id'           => $this->message->client_id ?? $this->message->order?->client_id,
-                'agent_id'            => $this->message->client?->agent_id ?? $this->message->order?->agent_id,
+                'client_id'           => $clientId,
+                'agent_id'            => $client?->agent_id ?? $this->message->order?->agent_id,
                 'agency_id'           => $this->message->order?->agency_id,
                 'conversation_bucket' => $bucket,
+                // Incluir datos del cliente para el toast de notificacion y para identificar el contacto
+                'client' => $client ? [
+                    'id'    => $client->id,
+                    'names' => trim(($client->first_name ?? '') . ' ' . ($client->last_name ?? '')),
+                    'first_name' => $client->first_name,
+                    'last_name'  => $client->last_name,
+                    'phone'      => $client->phone,
+                ] : null,
             ])
         ];
     }
