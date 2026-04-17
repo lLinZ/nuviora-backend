@@ -41,7 +41,12 @@ class WhatsappConversationController extends Controller
             $query->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
                   ->orWhere('first_name', 'like', "%{$search}%")
-                  ->orWhere('last_name', 'like', "%{$search}%");
+                  ->orWhere('last_name', 'like', "%{$search}%")
+                  ->orWhere('id', $search)
+                  ->orWhereHas('orders', function ($oq) use ($search) {
+                      $oq->where('name', 'like', "%{$search}%")
+                         ->orWhere('id', 'like', "%{$search}%");
+                  });
             });
         }
 
