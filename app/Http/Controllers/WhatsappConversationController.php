@@ -134,7 +134,31 @@ class WhatsappConversationController extends Controller
             ];
         });
 
-        return response()->json($paginator);
+        // ── Contadores globales (para los badges del sidebar, no dependen de paginacion) ──
+        // Usamos la misma query base pero sin paginar y sin el filtro de bucket
+        $globalCountQuery = clone $baseQuery;
+        $bucketCounts = \App\Models\WhatsappConversation::selectRaw('conversation_bucket, COUNT(*) as cnt')
+            ->where('status', 'open')
+            ->whereIn('client_id', $globalCountQuery->select('clients.id'))
+            ->groupBy('conversation_bucket')
+            ->pluck('cnt', 'conversation_bucket');
+
+        $criticalThreshold = now()->subMinutes(30);
+        $criticalCount = \App\Models\WhatsappConversation::where('status', 'open')
+            ->where('conversation_bucket', 'requires_attention')
+            ->whereIn('client_id', $globalCountQuery->select('clients.id'))
+            ->whereHas('client', function($q) use ($criticalThreshold) {
+                $q->whereHas('whatsappMessages', function($mq) use ($criticalThreshold) {
+                    $mq->where('is_from_client', true)
+                       ->where('status', '!=', 'read')
+                       ->where('sent_at', '<', $criticalThreshold);
+                });
+            })->count();
+
+        return response()->json(array_merge($paginator->toArray(), [
+            'bucket_counts'  => $bucketCounts,
+            'critical_count' => $criticalCount,
+        ]));
     }
 
     /**
