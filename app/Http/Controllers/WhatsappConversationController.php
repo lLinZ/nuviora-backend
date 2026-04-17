@@ -135,6 +135,7 @@ class WhatsappConversationController extends Controller
             ];
         });
 
+        return response()->json($paginator);
     }
 
     /**
