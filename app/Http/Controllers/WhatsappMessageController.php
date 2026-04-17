@@ -18,7 +18,7 @@ class WhatsappMessageController extends Controller
         
         $user = auth()->user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
         // Permission check
         if (!$isAdmin) {
@@ -58,10 +58,22 @@ class WhatsappMessageController extends Controller
         
         $user = auth()->user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
-        if (!$isAdmin && $order->agent_id !== $user->id) {
-            return response()->json(['message' => 'No tienes permiso para enviar mensajes en esta orden.'], 403);
+        if (!$isAdmin) {
+            $isOrderAgent = (int)$order->agent_id === (int)$user->id;
+            $isClientAgent = \App\Models\Client::where('id', $order->client_id)
+                ->where(function ($q) use ($user) {
+                    $q->where('agent_id', $user->id)
+                      ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                          $cq->where('agent_id', $user->id)
+                             ->where('status', 'open');
+                      });
+                })->exists();
+
+            if (!$isOrderAgent && !$isClientAgent) {
+                return response()->json(['message' => 'No tienes permiso para enviar mensajes en esta orden.'], 403);
+            }
         }
 
         $renderedBody = $request->body;
@@ -150,10 +162,22 @@ class WhatsappMessageController extends Controller
 
         $user = auth()->user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
-        if (!$isAdmin && $order->agent_id !== $user->id) {
-            return response()->json(['message' => 'No tienes permiso para enviar multimedia en esta orden.'], 403);
+        if (!$isAdmin) {
+            $isOrderAgent = (int)$order->agent_id === (int)$user->id;
+            $isClientAgent = \App\Models\Client::where('id', $order->client_id)
+                ->where(function ($q) use ($user) {
+                    $q->where('agent_id', $user->id)
+                      ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                          $cq->where('agent_id', $user->id)
+                             ->where('status', 'open');
+                      });
+                })->exists();
+
+            if (!$isOrderAgent && !$isClientAgent) {
+                return response()->json(['message' => 'No tienes permiso para enviar multimedia en esta orden.'], 403);
+            }
         }
         $file = $request->file('file');
         $path = $file->store('whatsapp_media', 'public');
@@ -191,10 +215,22 @@ class WhatsappMessageController extends Controller
         
         $user = auth()->user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = strtolower($user->role->description ?? '') === 'admin';
+        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
 
-        if (!$isAdmin && $order->agent_id !== $user->id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+        if (!$isAdmin) {
+            $isOrderAgent = (int)$order->agent_id === (int)$user->id;
+            $isClientAgent = \App\Models\Client::where('id', $order->client_id)
+                ->where(function ($q) use ($user) {
+                    $q->where('agent_id', $user->id)
+                      ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                          $cq->where('agent_id', $user->id)
+                             ->where('status', 'open');
+                      });
+                })->exists();
+
+            if (!$isOrderAgent && !$isClientAgent) {
+                return response()->json(['message' => 'Unauthorized'], 403);
+            }
         }
 
         WhatsappMessage::where('order_id', $orderId)->where('is_from_client', true)->update(['status' => 'read']);
