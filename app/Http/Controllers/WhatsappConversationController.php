@@ -134,19 +134,34 @@ class WhatsappConversationController extends Controller
             ];
         });
 
-        // ── Contadores globales (para los badges del sidebar, no dependen de paginacion) ──
-        // Usamos la misma query base pero sin paginar y sin el filtro de bucket
-        $globalCountQuery = clone $baseQuery;
-        $bucketCounts = \App\Models\WhatsappConversation::selectRaw('conversation_bucket, COUNT(*) as cnt')
-            ->where('status', 'open')
-            ->whereIn('client_id', $globalCountQuery->select('clients.id'))
+        // ── Contadores globales por bucket (para los badges del sidebar) ──
+        // Consulta directa de conversaciones con los mismos filtros de visibilidad
+        $convQuery = \App\Models\WhatsappConversation::query()->where('status', 'open');
+
+        if (!$isAdmin) {
+            // Solo contar conversaciones del cliente asignado a esta vendedora
+            $convQuery->whereHas('client', function($cq) use ($user) {
+                $cq->where('agent_id', $user->id)
+                   ->orWhereHas('whatsappConversations', function($ccq) use ($user) {
+                       $ccq->where('agent_id', $user->id)->where('status', 'open');
+                   });
+            });
+        }
+
+        if ($isAdmin && $agentId) {
+            $convQuery->whereHas('client', function($cq) use ($agentId) {
+                $cq->where('agent_id', $agentId);
+            });
+        }
+
+        $bucketCounts = (clone $convQuery)
+            ->selectRaw('conversation_bucket, COUNT(*) as cnt')
             ->groupBy('conversation_bucket')
             ->pluck('cnt', 'conversation_bucket');
 
         $criticalThreshold = now()->subMinutes(30);
-        $criticalCount = \App\Models\WhatsappConversation::where('status', 'open')
+        $criticalCount = (clone $convQuery)
             ->where('conversation_bucket', 'requires_attention')
-            ->whereIn('client_id', $globalCountQuery->select('clients.id'))
             ->whereHas('client', function($q) use ($criticalThreshold) {
                 $q->whereHas('whatsappMessages', function($mq) use ($criticalThreshold) {
                     $mq->where('is_from_client', true)
