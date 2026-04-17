@@ -20,22 +20,20 @@ class WhatsappMessageController extends Controller
         if (!$user->relationLoaded('role')) $user->load('role');
         $isAdmin = strtolower($user->role->description ?? '') === 'admin';
 
-        // Permission check (same as WhatsappConversationController)
+        // Permission check
         if (!$isAdmin) {
-            $hasAccess = \App\Models\Client::where('id', $order->client_id)
+            $isOrderAgent = (int)$order->agent_id === (int)$user->id;
+            
+            $isClientAgent = \App\Models\Client::where('id', $order->client_id)
                 ->where(function ($q) use ($user) {
                     $q->where('agent_id', $user->id)
-                    ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                        $cq->where('agent_id', $user->id)
-                           ->where('status', 'open');
-                    })
-                    ->orWhere('id', '>', 0) // Fallback: if they are the agent of the current order they also have access
-                    ->where(function($fallback) use ($user, $order) {
-                        $fallback->whereRaw("? = ?", [$order->agent_id, $user->id]);
-                    });
+                      ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
+                          $cq->where('agent_id', $user->id)
+                             ->where('status', 'open');
+                      });
                 })->exists();
 
-            if (!$hasAccess && $order->agent_id !== $user->id) {
+            if (!$isOrderAgent && !$isClientAgent) {
                 return response()->json(['message' => 'No tienes permiso para ver los mensajes de esta orden.'], 403);
             }
         }
