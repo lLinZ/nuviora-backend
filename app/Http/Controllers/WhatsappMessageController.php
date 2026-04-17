@@ -69,6 +69,7 @@ class WhatsappMessageController extends Controller
             'client_id' => $order->client_id,
             'body' => $renderedBody,
             'is_from_client' => $request->input('is_from_client', false),
+            'message_type'   => $request->input('is_from_client', false) ? WhatsappMessage::TYPE_INCOMING : WhatsappMessage::TYPE_AGENT,
             'status' => 'sending',
             'sent_at' => now(),
         ]);
@@ -122,6 +123,7 @@ class WhatsappMessageController extends Controller
         }
 
         $message->refresh();
+        \App\Services\ConversationBucketService::recalculate($order->client_id);
         event(new \App\Events\WhatsappMessageReceived($message));
 
         return response()->json($message, 201);
@@ -154,12 +156,14 @@ class WhatsappMessageController extends Controller
                     'order_id' => $order->id,
                     'client_id' => $order->client_id,
                     'is_from_client' => false,
+                    'message_type'   => WhatsappMessage::TYPE_AGENT,
                     'body' => $request->caption ?? "Archivo {$type}",
                     'media' => asset('storage/' . $path),
                     'status' => 'sent',
                     'message_id' => $result['messages'][0]['id'],
                     'sent_at' => now(),
                 ]);
+                \App\Services\ConversationBucketService::recalculate($order->client_id);
                 event(new \App\Events\WhatsappMessageReceived($msg));
                 return response()->json($msg, 201);
             }
@@ -180,6 +184,7 @@ class WhatsappMessageController extends Controller
         }
 
         WhatsappMessage::where('order_id', $orderId)->where('is_from_client', true)->update(['status' => 'read']);
+        \App\Services\ConversationBucketService::recalculate($order->client_id);
         event(new \App\Events\OrderUpdated($order));
         return response()->json(['status' => 'success']);
     }
