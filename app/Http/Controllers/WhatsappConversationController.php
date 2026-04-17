@@ -76,22 +76,20 @@ class WhatsappConversationController extends Controller
         // 5. Filtrar visibilidad según rol (si no es admin)
         if (!$isAdmin) {
             $query->where(function ($q) use ($user) {
-                // A. Tienes el chat activo a tu nombre
+                // A. Eres el dueño de la conversación abierta
                 $q->whereHas('whatsappConversations', function($cq) use ($user) {
                     $cq->where('agent_id', $user->id)->where('status', 'open');
                 })
-                // B. Tienes una orden reciente a tu nombre (eres el vendedor actual asignado a la venta)
-                ->orWhereHas('orders', function($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)->where('created_at', '>=', now()->subDays(45));
+                // B. O eres el dueño de la ÚLTIMA orden (El "Presente" absoluto de la venta)
+                ->orWhereHas('latestOrder', function($oq) use ($user) {
+                    $oq->where('agent_id', $user->id);
                 })
-                // C. Eres el dueño originario del cliente Y nadie más le ha sacado una orden recientemente
-                ->orWhere(function ($subQ) use ($user) {
-                    $subQ->where('agent_id', $user->id)
-                         ->whereDoesntHave('orders', function($oq) use ($user) {
-                             $oq->whereNotNull('agent_id')
-                                ->where('agent_id', '!=', $user->id)
-                                ->where('created_at', '>=', now()->subDays(45));
-                         });
+                // C. O eres el dueño del cliente pero SOLO SI no hay una orden asignada a otro recientemente
+                ->orWhere(function ($sub) use ($user) {
+                    $sub->where('agent_id', $user->id)
+                        ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                            $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
+                        });
                 });
             });
         }
@@ -152,25 +150,23 @@ class WhatsappConversationController extends Controller
         $convQuery = \App\Models\WhatsappConversation::query()->where('status', 'open');
 
         if (!$isAdmin) {
-            // Contar chats basados en la misma lógica blindada
+            // Contar chats basados en la misma lógica blindada del PRESENTE
             $convQuery->whereHas('client', function($cq) use ($user) {
                 $cq->where(function ($q) use ($user) {
-                    // A. Tienes el chat activo a tu nombre
+                    // A. Eres dueño del chat activo
                     $q->whereHas('whatsappConversations', function($subcq) use ($user) {
                         $subcq->where('agent_id', $user->id)->where('status', 'open');
                     })
-                    // B. Tienes una orden reciente a tu nombre
-                    ->orWhereHas('orders', function($oq) use ($user) {
-                        $oq->where('agent_id', $user->id)->where('created_at', '>=', now()->subDays(45));
+                    // B. Eres dueño de la última orden
+                    ->orWhereHas('latestOrder', function($lo) use ($user) {
+                        $lo->where('agent_id', $user->id);
                     })
-                    // C. Eres el dueño originario del cliente Y nadie más le ha sacado una orden recientemente
-                    ->orWhere(function ($subQ) use ($user) {
-                        $subQ->where('agent_id', $user->id)
-                             ->whereDoesntHave('orders', function($oq) use ($user) {
-                                 $oq->whereNotNull('agent_id')
-                                    ->where('agent_id', '!=', $user->id)
-                                    ->where('created_at', '>=', now()->subDays(45));
-                             });
+                    // C. Eres dueño del cliente y no hay orden de otro
+                    ->orWhere(function ($sub) use ($user) {
+                        $sub->where('agent_id', $user->id)
+                            ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                                $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
+                            });
                     });
                 });
             });
