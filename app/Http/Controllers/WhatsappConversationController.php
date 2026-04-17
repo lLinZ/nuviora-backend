@@ -53,9 +53,20 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar por bucket (nuevo sistema)
         $bucket = $request->query('bucket', 'all');
         if ($bucket && $bucket !== 'all') {
-            $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
-                $cq->where('conversation_bucket', $bucket);
-            });
+            if ($bucket === 'requires_attention') {
+                $query->where(function ($q) {
+                    $q->whereHas('whatsappConversations', function ($cq) {
+                        $cq->where('conversation_bucket', 'requires_attention');
+                    })
+                    ->orWhereHas('whatsappMessages', function ($mq) {
+                        $mq->where('is_from_client', true)->where('status', '!=', 'read');
+                    });
+                });
+            } else {
+                $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
+                    $cq->where('conversation_bucket', $bucket);
+                });
+            }
         } else {
             // 'all': mostrar todos los clientes que tienen al menos un mensaje de WhatsApp
             $query->whereHas('whatsappMessages');
@@ -113,14 +124,16 @@ class WhatsappConversationController extends Controller
         }
 
         $paginator = $query
-            ->with(['agent', 'latestOrder.agent', 'latestOrder.status', 'latestOrder.products.product', 'whatsappConversations'])
+            ->with(['agent', 'latestOrder.agent', 'latestOrder.status', 'latestOrder.products.product', 'latestWhatsappConversation'])
             ->with('latestWhatsappMessage')
             ->paginate(50);
 
         $paginator->getCollection()->transform(function ($client) {
             $latestMessage  = $client->latestWhatsappMessage;
-            $conversation   = $client->whatsappConversations->first();
-            $bucket         = $conversation?->conversation_bucket ?? 'follow_up';
+            $conversation   = $client->latestWhatsappConversation;
+            
+            // Si tiene mensajes sin leer, forzar bucket 'requires_attention' en la UI (Sincronización total)
+            $bucket = ($client->unread_count > 0) ? 'requires_attention' : ($conversation?->conversation_bucket ?? 'follow_up');
             
             $order = $client->latestOrder;
             $productsTitle = "";
@@ -151,53 +164,74 @@ class WhatsappConversationController extends Controller
         });
 
         // ── Contadores globales por bucket (para los badges del sidebar) ──
-        // Consulta directa de conversaciones con los mismos filtros de visibilidad
-        $convQuery = \App\Models\WhatsappConversation::query()->where('status', 'open');
+        // Usamos el mismo query base para que los números coincidan con lo que ve el venedor
+        $baseCountsQuery = clone $query;
+        
+        // El query de base ya tiene los filtros de búsqueda, fechas, vendedora y visibilidad aplicados.
+        // Solo necesitamos remover el filtro de bucket actual para contar todos.
+        // Pero como $query ya tiene el bucket aplicado si se seleccionó uno, usamos una versión limpia:
+        
+        $statsQuery = Client::query();
+        if ($search) {
+            // Re-aplicar filtros de búsqueda y visibilidad al statsQuery
+            $statsQuery->where(function ($q) use ($search) {
+                $q->where('phone', 'like', "%{$search}%")
+                  ->orWhere('first_name', 'like', "%{$search}%")
+                  ->orWhere('last_name', 'like', "%{$search}%")
+                  ->orWhere('id', $search)
+                  ->orWhereHas('orders', function ($oq) use ($search) {
+                      $oq->where('name', 'like', "%{$search}%")
+                         ->orWhere('id', 'like', "%{$search}%");
+                  });
+            });
+        }
 
         if (!$isAdmin) {
-            // Contar chats basados en la misma lógica blindada del PRESENTE
-            $convQuery->whereHas('client', function($cq) use ($user) {
-                $cq->where(function ($q) use ($user) {
-                    // A. Eres dueño del chat activo
-                    $q->whereHas('whatsappConversations', function($subcq) use ($user) {
-                        $subcq->where('agent_id', $user->id)->where('status', 'open');
-                    })
-                    // B. Eres dueño de la última orden
-                    ->orWhereHas('latestOrder', function($lo) use ($user) {
-                        $lo->where('agent_id', $user->id);
-                    })
-                    // C. Eres dueño del cliente y no hay orden de otro
-                    ->orWhere(function ($sub) use ($user) {
-                        $sub->where('agent_id', $user->id)
-                            ->whereDoesntHave('latestOrder', function($lo) use ($user) {
-                                $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
-                            });
-                    });
+             // Re-aplicar visibilidad (exactamente igual que arriba)
+             $statsQuery->where(function ($q) use ($user) {
+                $q->whereHas('whatsappConversations', function($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)->where('status', 'open');
+                })
+                ->orWhereHas('latestOrder', function($oq) use ($user) {
+                    $oq->where('agent_id', $user->id);
+                })
+                ->orWhere(function ($sub) use ($user) {
+                    $sub->where('agent_id', $user->id)
+                        ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                            $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
+                        });
                 });
             });
         }
-
+        
         if ($isAdmin && $agentId) {
-            $convQuery->whereHas('client', function($cq) use ($agentId) {
-                $cq->where('agent_id', $agentId);
-            });
+            $statsQuery->where('agent_id', $agentId);
         }
 
-        $bucketCounts = (clone $convQuery)
-            ->selectRaw('conversation_bucket, COUNT(*) as cnt')
-            ->groupBy('conversation_bucket')
-            ->pluck('cnt', 'conversation_bucket');
+        // Obtener buckets de todos los clientes visibles
+        $visibleClients = $statsQuery->with('latestWhatsappConversation')
+            ->withCount(['whatsappMessages as has_unread' => function ($q) {
+                $q->where('is_from_client', true)->where('status', '!=', 'read');
+            }])
+            ->get(['id', 'agent_id']);
+
+        $bucketCounts = [
+            'requires_attention' => 0,
+            'follow_up'          => 0,
+            'closed'             => 0,
+        ];
+
+        foreach ($visibleClients as $vc) {
+            $b = ($vc->has_unread > 0) ? 'requires_attention' : ($vc->latestWhatsappConversation?->conversation_bucket ?? 'follow_up');
+            if (isset($bucketCounts[$b])) $bucketCounts[$b]++;
+        }
 
         $criticalThreshold = now()->subMinutes(30);
-        $criticalCount = (clone $convQuery)
-            ->where('conversation_bucket', 'requires_attention')
-            ->whereHas('client', function($q) use ($criticalThreshold) {
-                $q->whereHas('whatsappMessages', function($mq) use ($criticalThreshold) {
-                    $mq->where('is_from_client', true)
-                       ->where('status', '!=', 'read')
-                       ->where('sent_at', '<', $criticalThreshold);
-                });
-            })->count();
+        $criticalCount = $statsQuery->whereHas('whatsappMessages', function($mq) use ($criticalThreshold) {
+            $mq->where('is_from_client', true)
+               ->where('status', '!=', 'read')
+               ->where('sent_at', '<', $criticalThreshold);
+        })->count();
 
         return response()->json(array_merge($paginator->toArray(), [
             'bucket_counts'  => $bucketCounts,
