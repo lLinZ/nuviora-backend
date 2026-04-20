@@ -124,4 +124,139 @@ class OrderTrackingComprehensiveController extends Controller
             'statuses' => Status::select('id', 'description')->get(),
         ]);
     }
+
+    public function cohortMetrics(Request $request)
+    {
+        $startDate = $request->input('start_date', now()->format('Y-m-d')) . ' 00:00:00';
+        $endDate = $request->input('end_date', now()->format('Y-m-d')) . ' 23:59:59';
+
+        $statusEntregadoId = Status::where('description', 'Entregado')->value('id');
+        $statusCanceladoId = Status::where('description', 'Cancelado')->value('id');
+        $statusReprogramadoId = Status::where('description', 'Reprogramado para hoy')->value('id');
+
+        // Cohort 1: Nuevos de verdad (creados en el periodo)
+        $newOrdersQuery = \App\Models\Order::with(['agent', 'shop', 'agency', 'products.product'])
+            ->whereBetween('created_at', [$startDate, $endDate]);
+            
+        // 🛡️ SECURITY: Role-based filtering
+        $user = auth()->user();
+        if ($user->role?->description === 'Agencia') {
+            $newOrdersQuery->where('agency_id', $user->id);
+        } elseif ($user->role?->description === 'Vendedor') {
+            $newOrdersQuery->where('agent_id', $user->id);
+        }
+
+        $newOrders = $newOrdersQuery->get();
+
+        // Cohort 2: Reprogramados para hoy (tuvieron log de paso a reprogramado para hoy en el periodo)
+        $rescheduledOrderIdsQuery = \App\Models\OrderTrackingComprehensiveLog::where('to_status_id', $statusReprogramadoId)
+            ->whereBetween('updated_at', [$startDate, $endDate]);
+            
+        if ($user->role?->description === 'Agencia') {
+            $rescheduledOrderIdsQuery->whereHas('order', function($q) use ($user) {
+                $q->where('agency_id', $user->id);
+            });
+        } elseif ($user->role?->description === 'Vendedor') {
+            $rescheduledOrderIdsQuery->where(function($q) use ($user) {
+                $q->where('seller_id', $user->id)
+                  ->orWhere('user_id', $user->id);
+            });
+        }
+        
+        $rescheduledOrderIds = $rescheduledOrderIdsQuery->pluck('order_id')->unique();
+
+        $rescheduledOrders = \App\Models\Order::with(['agent', 'shop', 'agency', 'products.product'])
+            ->whereIn('id', $rescheduledOrderIds)
+            ->get();
+
+        // Helpers to process metrics
+        $processCohort = function ($orders) use ($statusEntregadoId, $statusCanceladoId) {
+            $total = $orders->count();
+            $delivered = $orders->where('status_id', $statusEntregadoId)->count();
+            $canceled = $orders->where('status_id', $statusCanceladoId)->count();
+
+            $byAgent = [];
+            $byShop = [];
+            $byAgency = [];
+            $byProduct = [];
+
+            foreach ($orders as $order) {
+                $isDelivered = $order->status_id === $statusEntregadoId;
+                $isCanceled = $order->status_id === $statusCanceladoId;
+
+                // Agent
+                $agentName = $order->agent ? $order->agent->names : 'Sin Asignar';
+                if (!isset($byAgent[$agentName])) $byAgent[$agentName] = ['total' => 0, 'delivered' => 0, 'canceled' => 0];
+                $byAgent[$agentName]['total']++;
+                if ($isDelivered) $byAgent[$agentName]['delivered']++;
+                if ($isCanceled) $byAgent[$agentName]['canceled']++;
+
+                // Shop
+                $shopName = $order->shop ? $order->shop->name : 'Sin Tienda';
+                if (!isset($byShop[$shopName])) $byShop[$shopName] = ['total' => 0, 'delivered' => 0, 'canceled' => 0];
+                $byShop[$shopName]['total']++;
+                if ($isDelivered) $byShop[$shopName]['delivered']++;
+                if ($isCanceled) $byShop[$shopName]['canceled']++;
+
+                // Agency
+                $agencyName = $order->agency ? $order->agency->names : 'Sin Agencia';
+                if (!isset($byAgency[$agencyName])) $byAgency[$agencyName] = ['total' => 0, 'delivered' => 0, 'canceled' => 0];
+                $byAgency[$agencyName]['total']++;
+                if ($isDelivered) $byAgency[$agencyName]['delivered']++;
+                if ($isCanceled) $byAgency[$agencyName]['canceled']++;
+
+                // Products
+                if ($order->products) {
+                    foreach ($order->products as $op) {
+                        $prodName = $op->product ? $op->product->name : ($op->title ?: 'Desconocido');
+                        if (!isset($byProduct[$prodName])) $byProduct[$prodName] = ['total_orders' => 0, 'delivered' => 0, 'canceled' => 0];
+                        // Solo sumamos 1 por orden, sin importar la cantidad (quantity) del producto, ya que se habla de "pedidos"
+                        $byProduct[$prodName]['total_orders']++;
+                        if ($isDelivered) $byProduct[$prodName]['delivered']++;
+                        if ($isCanceled) $byProduct[$prodName]['canceled']++;
+                    }
+                }
+            }
+
+            // Calculate percentages
+            $formatStats = function ($array, $nameKey) {
+                $result = [];
+                foreach ($array as $name => $data) {
+                    $t = $data['total'] ?? $data['total_orders'];
+                    $result[] = [
+                        $nameKey => $name,
+                        'total' => $t,
+                        'delivered' => $data['delivered'],
+                        'canceled' => $data['canceled'],
+                        'delivered_rate' => $t > 0 ? round(($data['delivered'] / $t) * 100, 2) : 0,
+                        'canceled_rate' => $t > 0 ? round(($data['canceled'] / $t) * 100, 2) : 0,
+                    ];
+                }
+                usort($result, fn($a, $b) => $b['total'] <=> $a['total']);
+                return $result;
+            };
+
+            return [
+                'general' => [
+                    'total' => $total,
+                    'delivered' => $delivered,
+                    'canceled' => $canceled,
+                    'delivered_rate' => $total > 0 ? round(($delivered / $total) * 100, 2) : 0,
+                    'canceled_rate' => $total > 0 ? round(($canceled / $total) * 100, 2) : 0,
+                ],
+                'by_agent'  => $formatStats($byAgent, 'agent'),
+                'by_shop'   => $formatStats($byShop, 'shop'),
+                'by_agency' => $formatStats($byAgency, 'agency'),
+                'by_product'=> $formatStats($byProduct, 'product')
+            ];
+        };
+
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'new_orders' => $processCohort($newOrders),
+                'rescheduled' => $processCohort($rescheduledOrders),
+            ]
+        ]);
+    }
 }

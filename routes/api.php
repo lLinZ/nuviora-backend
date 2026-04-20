@@ -82,6 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Comprehensive Tracking Report
     Route::get('/reports/tracking-comprehensive', [OrderTrackingComprehensiveController::class, 'index']);
     Route::get('/reports/tracking-comprehensive/filters', [OrderTrackingComprehensiveController::class, 'getFilters']);
+    Route::get('/reports/tracking-comprehensive/cohort-metrics', [OrderTrackingComprehensiveController::class, 'cohortMetrics']);
 
     // Statuses
     Route::get('/statuses', [StatusController::class, 'index']);
