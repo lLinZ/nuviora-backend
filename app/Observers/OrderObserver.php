@@ -88,7 +88,7 @@ class OrderObserver
 
                 // --- Automatización del Embudo de WhatsApp ---
                 // Si la orden llegó a su punto final, cerramos el chat para liberar la pestaña "Seguimiento".
-                if (in_array($newStatusDesc, [\App\Constants\OrderStatus::ENTREGADO, \App\Constants\OrderStatus::CANCELADO])) {
+                if (in_array($newStatusDesc, [\App\Constants\OrderStatus::ENTREGADO, \App\Constants\OrderStatus::CANCELADO, \App\Constants\OrderStatus::RECHAZADO])) {
                     if ($order->client_id) {
                         \App\Services\ConversationBucketService::closeBucket($order->client_id);
                         
