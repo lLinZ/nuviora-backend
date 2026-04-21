@@ -23,11 +23,11 @@ class WhatsappConversationController extends Controller
             $user->load('role');
         }
         
-        $roleName = $user->role->description ?? '';
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $superRoles = ['admin', 'manager', 'gerente', 'master'];
+        $isAdmin  = in_array($roleName, $superRoles);
+        $isAgent  = str_contains($roleName, 'vende');
 
-        // Admin, Gerente y Master ven TODOS los chats.
-        // Vendedor solo ve los suyos.
-        $isAdmin  = in_array($roleName, ['Admin', 'Manager', 'Gerente', 'Master']);
         $search   = $request->query('search');
         $agentId  = $request->query('agent_id');
         $startDate = $request->query('start_date');
@@ -72,7 +72,7 @@ class WhatsappConversationController extends Controller
             $query->whereHas('whatsappMessages');
         }
 
-        // 3. Filtro por Vendedora (agent_id)
+        // 3. Filtro por Vendedora (agent_id) - Solo admin puede forzar este filtro para ver a otros
         if ($isAdmin && $agentId) {
             $query->where('agent_id', $agentId);
         }
@@ -89,8 +89,8 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        // 5. Filtrar visibilidad según rol (si no es admin)
-        if (!$isAdmin) {
+        // 5. Filtrar visibilidad según rol (si es vendedora o no es admin)
+        if (!$isAdmin || $isAgent) {
             $query->where(function ($q) use ($user) {
                 // A. Eres el dueño de la conversación abierta
                 $q->whereHas('whatsappConversations', function($cq) use ($user) {
@@ -164,16 +164,9 @@ class WhatsappConversationController extends Controller
         });
 
         // ── Contadores globales por bucket (para los badges del sidebar) ──
-        // Usamos el mismo query base para que los números coincidan con lo que ve el venedor
-        $baseCountsQuery = clone $query;
-        
         // El query de base ya tiene los filtros de búsqueda, fechas, vendedora y visibilidad aplicados.
-        // Solo necesitamos remover el filtro de bucket actual para contar todos.
-        // Pero como $query ya tiene el bucket aplicado si se seleccionó uno, usamos una versión limpia:
-        
         $statsQuery = Client::query();
         if ($search) {
-            // Re-aplicar filtros de búsqueda y visibilidad al statsQuery
             $statsQuery->where(function ($q) use ($search) {
                 $q->where('phone', 'like', "%{$search}%")
                   ->orWhere('first_name', 'like', "%{$search}%")
@@ -186,8 +179,7 @@ class WhatsappConversationController extends Controller
             });
         }
 
-        if (!$isAdmin) {
-             // Re-aplicar visibilidad (exactamente igual que arriba)
+        if (!$isAdmin || $isAgent) {
              $statsQuery->where(function ($q) use ($user) {
                 $q->whereHas('whatsappConversations', function($cq) use ($user) {
                     $cq->where('agent_id', $user->id)->where('status', 'open');
@@ -248,11 +240,13 @@ class WhatsappConversationController extends Controller
         if (!$user->relationLoaded('role')) {
             $user->load('role');
         }
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $isAdmin = in_array($roleName, ['admin', 'manager', 'gerente', 'master']);
+        $isAgent = str_contains($roleName, 'vende');
 
         $query = Client::where('id', $clientId);
 
-        if (!$isAdmin) {
+        if (!$isAdmin || $isAgent) {
             $query->where(function ($q) use ($user) {
                 // Caso 1: Es la vendedora asignada al cliente
                 $q->where('agent_id', $user->id)
@@ -288,12 +282,15 @@ class WhatsappConversationController extends Controller
     {
         $user = Auth::user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
+        
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $isAdmin = in_array($roleName, ['admin', 'manager', 'gerente', 'master']);
+        $isAgent = str_contains($roleName, 'vende');
 
         $client = Client::findOrFail($clientId);
 
         // PRIVACY CHECK — misma logica que show()
-        if (!$isAdmin) {
+        if (!$isAdmin || $isAgent) {
             $isAgentOfClient  = $client->agent_id === $user->id;
             $hasOpenConversation = $client->whatsappConversations()
                 ->where('agent_id', $user->id)
@@ -411,12 +408,15 @@ class WhatsappConversationController extends Controller
         
         $user = Auth::user();
         if (!$user->relationLoaded('role')) $user->load('role');
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
+
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $isAdmin = in_array($roleName, ['admin', 'manager', 'gerente', 'master']);
+        $isAgent = str_contains($roleName, 'vende');
 
         $client = Client::findOrFail($clientId);
 
         // PRIVACY CHECK
-        if (!$isAdmin) {
+        if (!$isAdmin || $isAgent) {
             $hasAccess = Client::where('id', $clientId)
                 ->where(function ($q) use ($user) {
                     $q->whereHas('orders', function ($oq) use ($user) {
@@ -522,11 +522,14 @@ class WhatsappConversationController extends Controller
         if (!$user->relationLoaded('role')) {
             $user->load('role');
         }
-        $isAdmin = in_array($user->role->description ?? '', ['Admin', 'Manager', 'Gerente', 'Master']);
+
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $isAdmin = in_array($roleName, ['admin', 'manager', 'gerente', 'master']);
+        $isAgent = str_contains($roleName, 'vende');
 
         // PRIVACY CHECK (same as show)
         $query = Client::where('id', $clientId);
-        if (!$isAdmin) {
+        if (!$isAdmin || $isAgent) {
             $query->where(function ($q) use ($user) {
                 $q->where('agent_id', $user->id)
                 ->orWhereHas('whatsappConversations', function ($cq) use ($user) {

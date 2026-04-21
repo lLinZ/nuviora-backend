@@ -970,20 +970,22 @@ class OrderController extends Controller
             ->orderBy('updated_at', 'desc')
             ->orderBy('id', 'desc');
 
-        // 🔒 Reglas por rol (Case insensitive & trimmed)
+        // 🔒 Reglas por rol (Dinámico: Vendedor/Vendedora detectado por texto)
         $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $superRoles = ['admin', 'manager', 'gerente', 'master'];
+        
+        // Detectar si es vendedor/vendedora de forma dinámica (case-insensitive ya por strtolower)
+        $isAgent = str_contains($roleName, 'vende');
 
-        if ($roleName === 'vendedor') {
-            // Un Vendedor SOLO ve lo que tiene asignado
+        if ($isAgent) {
+            // Un Agente/Vendedor SOLO ve lo que tiene asignado
             $query->where('agent_id', $user->id);
             
-            // Restricción: Si es Entregado, solo mostrar de hoy
+            // Restricción: Si es Entregado, mostrar de hoy (opcional, manteniendo lógica previa si existía)
             $query->where(function($q) {
-                // Mostrar si NO es Entregado
                 $q->whereDoesntHave('status', function($sq) {
                     $sq->where('description', 'Entregado');
                 })
-                // O si ES Entregado, mostrar todos (sin restricción de fecha)
                 ->orWhere(function($q2) {
                     $q2->whereHas('status', function($sq) {
                         $sq->where('description', 'Entregado');
@@ -1135,12 +1137,15 @@ class OrderController extends Controller
         $baseQuery = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])
             ->withCount('updates');
 
-        // 🔒 Reglas por rol (Case insensitive & trimmed)
+        // 🔒 Reglas por rol (Dinámico: Vendedor/Vendedora detectado por texto)
         $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $superRoles = ['admin', 'manager', 'gerente', 'master'];
+        
+        // Detectar si es vendedor/vendedora de forma dinámica
+        $isAgent = str_contains($roleName, 'vende');
 
-        if ($roleName === 'vendedor') {
+        if ($isAgent) {
             $baseQuery->where('agent_id', $user->id);
-            // Mostrar todos (sin restricción de fecha para vendedores en Kanban)
         } elseif ($roleName === 'repartidor') {
             $baseQuery->where('deliverer_id', $user->id)
                       ->whereDate('updated_at', now());
