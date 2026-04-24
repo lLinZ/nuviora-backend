@@ -92,20 +92,21 @@ class WhatsappConversationController extends Controller
         // 5. Filtrar visibilidad según rol (si es vendedora o no es admin)
         if (!$isAdmin || $isAgent) {
             $query->where(function ($q) use ($user) {
-                // A. Eres el dueño de la conversación abierta
-                $q->whereHas('whatsappConversations', function($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)->where('status', 'open');
-                })
-                // B. O eres el dueño de la ÚLTIMA orden (El "Presente" absoluto de la venta)
-                ->orWhereHas('latestOrder', function($oq) use ($user) {
+                // A. Eres el dueño de la ÚLTIMA orden (campo agent_id en orders)
+                $q->whereHas('latestOrder', function($oq) use ($user) {
                     $oq->where('agent_id', $user->id);
                 })
-                // C. O eres el dueño del cliente pero SOLO SI no hay una orden asignada a otro recientemente
+                // B. O eres el dueño del cliente (campo agent_id en clients)
+                // Pero si hay una orden reciente de otra persona, el chat le pertenece a ella
                 ->orWhere(function ($sub) use ($user) {
                     $sub->where('agent_id', $user->id)
                         ->whereDoesntHave('latestOrder', function($lo) use ($user) {
                             $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
                         });
+                })
+                // C. O tienes la conversación abierta a tu nombre específicamente
+                ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)->where('status', 'open');
                 });
             });
         }
@@ -181,10 +182,7 @@ class WhatsappConversationController extends Controller
 
         if (!$isAdmin || $isAgent) {
              $statsQuery->where(function ($q) use ($user) {
-                $q->whereHas('whatsappConversations', function($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)->where('status', 'open');
-                })
-                ->orWhereHas('latestOrder', function($oq) use ($user) {
+                $q->whereHas('latestOrder', function($oq) use ($user) {
                     $oq->where('agent_id', $user->id);
                 })
                 ->orWhere(function ($sub) use ($user) {
@@ -192,6 +190,9 @@ class WhatsappConversationController extends Controller
                         ->whereDoesntHave('latestOrder', function($lo) use ($user) {
                             $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
                         });
+                })
+                ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)->where('status', 'open');
                 });
             });
         }
@@ -248,17 +249,17 @@ class WhatsappConversationController extends Controller
 
         if (!$isAdmin || $isAgent) {
             $query->where(function ($q) use ($user) {
-                // Caso 1: Es la vendedora asignada al cliente
-                $q->where('agent_id', $user->id)
-                // Caso 2: Tiene una conversación abierta con el cliente
-                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)
-                       ->where('status', 'open');
+                $q->whereHas('latestOrder', function($oq) use ($user) {
+                    $oq->where('agent_id', $user->id);
                 })
-                // Caso 3: Es la vendedora de la ÚLTIMA orden (vigente o no)
-                ->orWhereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)');
+                ->orWhere(function ($sub) use ($user) {
+                    $sub->where('agent_id', $user->id)
+                        ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                            $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
+                        });
+                })
+                ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)->where('status', 'open');
                 });
             });
         }
@@ -291,13 +292,23 @@ class WhatsappConversationController extends Controller
 
         // PRIVACY CHECK — misma logica que show()
         if (!$isAdmin || $isAgent) {
-            $isAgentOfClient  = $client->agent_id === $user->id;
-            $hasOpenConversation = $client->whatsappConversations()
-                ->where('agent_id', $user->id)
-                ->where('status', 'open')
-                ->exists();
+            $hasAccess = Client::where('id', $clientId)
+                ->where(function ($q) use ($user) {
+                    $q->whereHas('latestOrder', function($oq) use ($user) {
+                        $oq->where('agent_id', $user->id);
+                    })
+                    ->orWhere(function ($sub) use ($user) {
+                        $sub->where('agent_id', $user->id)
+                            ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                                $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
+                            });
+                    })
+                    ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                        $cq->where('agent_id', $user->id)->where('status', 'open');
+                    });
+                })->exists();
 
-            if (!$isAgentOfClient && !$hasOpenConversation) {
+            if (!$hasAccess) {
                 return response()->json(['message' => 'No tienes permiso para enviar mensajes a este cliente.'], 403);
             }
         }
@@ -419,26 +430,17 @@ class WhatsappConversationController extends Controller
         if (!$isAdmin || $isAgent) {
             $hasAccess = Client::where('id', $clientId)
                 ->where(function ($q) use ($user) {
-                    $q->whereHas('orders', function ($oq) use ($user) {
-                        $oq->where('agent_id', $user->id)
-                           ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)')
-                           ->whereHas('status', function($sq) {
-                               $sq->where('description', '!=', OrderStatus::SIN_STOCK);
-                           });
+                    $q->whereHas('latestOrder', function($oq) use ($user) {
+                        $oq->where('agent_id', $user->id);
                     })
-                    ->orWhere(function($sub) use ($user) {
-                        $sub->whereDoesntHave('orders', function($oq) {
-                            $oq->whereHas('status', function($sq) {
-                                $sq->where('description', '!=', OrderStatus::SIN_STOCK);
+                    ->orWhere(function ($sub) use ($user) {
+                        $sub->where('agent_id', $user->id)
+                            ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                                $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
                             });
-                        })
-                        ->where(function($inner) use ($user) {
-                            $inner->where('agent_id', $user->id)
-                                  ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                                      $cq->where('agent_id', $user->id)
-                                         ->where('status', 'open');
-                                  });
-                        });
+                    })
+                    ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                        $cq->where('agent_id', $user->id)->where('status', 'open');
                     });
                 })->exists();
 
@@ -527,18 +529,21 @@ class WhatsappConversationController extends Controller
         $isAdmin = in_array($roleName, ['admin', 'manager', 'gerente', 'master']);
         $isAgent = str_contains($roleName, 'vende');
 
-        // PRIVACY CHECK (same as show)
+        // PRIVACY CHECK (same as index/show)
         $query = Client::where('id', $clientId);
         if (!$isAdmin || $isAgent) {
             $query->where(function ($q) use ($user) {
-                $q->where('agent_id', $user->id)
-                ->orWhereHas('whatsappConversations', function ($cq) use ($user) {
-                    $cq->where('agent_id', $user->id)
-                       ->where('status', 'open');
+                $q->whereHas('latestOrder', function($oq) use ($user) {
+                    $oq->where('agent_id', $user->id);
                 })
-                ->orWhereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT id FROM orders o2 WHERE o2.client_id = orders.client_id ORDER BY created_at DESC LIMIT 1)');
+                ->orWhere(function ($sub) use ($user) {
+                    $sub->where('agent_id', $user->id)
+                        ->whereDoesntHave('latestOrder', function($lo) use ($user) {
+                            $lo->whereNotNull('agent_id')->where('agent_id', '!=', $user->id);
+                        });
+                })
+                ->orWhereHas('whatsappConversations', function($cq) use ($user) {
+                    $cq->where('agent_id', $user->id)->where('status', 'open');
                 });
             });
         }
