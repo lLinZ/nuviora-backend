@@ -309,6 +309,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/whatsapp-conversations/{client}/move', [\App\Http\Controllers\WhatsappConversationController::class, 'moveToBucket']);
     Route::post('/whatsapp-conversations/{conversation}/assign', [\App\Http\Controllers\WhatsappConversationController::class, 'assignAgent']);
 
+    // --- WHATSAPP CRM v2 (Lógica de permisos nueva — simple y robusta) ---
+    Route::prefix('whatsapp-crm')->group(function () {
+        Route::get('/conversations',                          [\App\Http\Controllers\WhatsappCrmController::class, 'index']);
+        Route::get('/conversations/{clientId}/messages',      [\App\Http\Controllers\WhatsappCrmController::class, 'show']);
+        Route::post('/conversations/{clientId}/messages',     [\App\Http\Controllers\WhatsappCrmController::class, 'store']);
+        Route::post('/conversations/{clientId}/media',        [\App\Http\Controllers\WhatsappCrmController::class, 'sendMedia']);
+        Route::post('/conversations/{clientId}/read',         [\App\Http\Controllers\WhatsappCrmController::class, 'markAsRead']);
+        Route::post('/conversations/{clientId}/move',         [\App\Http\Controllers\WhatsappCrmController::class, 'moveToBucket']);
+    });
+
     // --- Media Explorer (Filesystem) ---
     Route::get('/media-explorer', [\App\Http\Controllers\MediaExplorerController::class, 'index']);
     Route::post('/media-explorer/mkdir', [\App\Http\Controllers\MediaExplorerController::class, 'mkdir']);
