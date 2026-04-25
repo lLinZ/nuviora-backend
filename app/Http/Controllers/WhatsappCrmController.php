@@ -145,32 +145,56 @@ class WhatsappCrmController extends Controller
 
         // 4. Filtro por bucket
         if ($bucket && $bucket !== 'all') {
-            if ($bucket === 'closed') {
-                // Cerrado = conversation_bucket 'closed' OR orden Entregada/Cancelada/Rechazada
-                $query->where(function ($q) {
-                    $q->whereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'closed');
-                    })
-                    ->orWhereHas('orders', function ($oq) {
-                        $oq->whereHas('status', function ($sq) {
-                            $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                        })
-                        ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                    });
-                });
-            } elseif ($bucket === 'requires_attention') {
-                // Atención = tiene no-leídos OR conversation_bucket = requires_attention
+            if ($bucket === 'requires_attention') {
+                // Atención = tiene no-leídos OR (conversation_bucket = requires_attention AND NO tiene orden terminal)
                 $query->where(function ($q) {
                     $q->whereHas('whatsappMessages', function ($mq) {
                         $mq->where('is_from_client', true)->where('status', '!=', 'read');
                     })
-                    ->orWhereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'requires_attention');
+                    ->orWhere(function ($sub) {
+                        $sub->whereHas('whatsappConversations', function ($cq) {
+                            $cq->where('conversation_bucket', 'requires_attention');
+                        })
+                        ->whereDoesntHave('orders', function ($oq) {
+                            $oq->whereHas('status', function ($sq) {
+                                $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                            })
+                            ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
+                        });
                     });
                 });
-            } else {
-                $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
-                    $cq->where('conversation_bucket', $bucket);
+            } elseif ($bucket === 'closed') {
+                // Cerrado = (NO tiene no-leídos) AND (orden Terminal OR conversation_bucket = closed)
+                $query->whereDoesntHave('whatsappMessages', function ($mq) {
+                    $mq->where('is_from_client', true)->where('status', '!=', 'read');
+                })
+                ->where(function ($q) {
+                    $q->whereHas('orders', function ($oq) {
+                        $oq->whereHas('status', function ($sq) {
+                            $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                        })
+                        ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
+                    })
+                    ->orWhereHas('whatsappConversations', function ($cq) {
+                        $cq->where('conversation_bucket', 'closed');
+                    });
+                });
+            } elseif ($bucket === 'follow_up') {
+                // Seguimiento = (NO tiene no-leídos) AND (NO tiene orden Terminal) AND (conversation_bucket = follow_up OR no tiene conversacion)
+                $query->whereDoesntHave('whatsappMessages', function ($mq) {
+                    $mq->where('is_from_client', true)->where('status', '!=', 'read');
+                })
+                ->whereDoesntHave('orders', function ($oq) {
+                    $oq->whereHas('status', function ($sq) {
+                        $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                    })
+                    ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
+                })
+                ->where(function ($q) {
+                    $q->whereHas('whatsappConversations', function ($cq) {
+                        $cq->where('conversation_bucket', 'follow_up');
+                    })
+                    ->orWhereDoesntHave('whatsappConversations');
                 });
             }
         }
