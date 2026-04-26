@@ -15,7 +15,8 @@ class RoundRobinStrategy implements AssignmentStrategy
         // ordenamos por id para tener consistencia
         $sorted = $agents->sortBy('id')->values();
 
-        $last = Setting::get('round_robin_pointer', null); // puede ser agent_id
+        $pointerKey = 'round_robin_pointer_' . ($order->shop_id ?: 'global');
+        $last = Setting::get($pointerKey, null); // puede ser agent_id
         $idx = 0;
 
         if ($last) {
@@ -25,7 +26,7 @@ class RoundRobinStrategy implements AssignmentStrategy
 
         $picked = $sorted[$idx];
         // actualizamos el puntero
-        Setting::set('round_robin_pointer', (string) $picked->id);
+        Setting::set($pointerKey, (string) $picked->id);
 
         return $picked->id;
     }

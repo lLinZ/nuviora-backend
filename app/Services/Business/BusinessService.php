@@ -40,7 +40,7 @@ class BusinessService
         Setting::set('business_is_open', true);
         Setting::set('business_open_dt', $now->toDateTimeString());
         Setting::set('business_last_open_dt', $now->toDateTimeString());
-        Setting::set('round_robin_pointer', null);
+        Setting::set('round_robin_pointer_' . $shopId, null);
 
         // 3. 🔥 CLIENT REQUEST: Detectar órdenes programadas para hoy
         $this->processScheduledOrders($shopId);

@@ -21,7 +21,7 @@ try {
     Schedule::command('shops:check-schedule')->everyMinute();
 
     Schedule::call(function () {
-        Setting::set('round_robin_pointer', null);
+        \App\Models\Setting::where('key', 'like', 'round_robin_pointer_%')->delete();
     })->dailyAt($open);
 
 } catch (\Throwable $e) {
