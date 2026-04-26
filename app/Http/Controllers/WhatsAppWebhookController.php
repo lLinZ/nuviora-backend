@@ -139,7 +139,11 @@ class WhatsAppWebhookController extends Controller
                 if ($token && $stickerId) {
                     $response = \Illuminate\Support\Facades\Http::withToken($token)->get("https://graph.facebook.com/v21.0/{$stickerId}");
                     if ($response->successful() && isset($response['url'])) {
-                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)->withHeaders(['User-Agent' => 'Mozilla/5.0'])->followRedirects()->timeout(60)->get($response['url']);
+                        $mediaResponse = \Illuminate\Support\Facades\Http::withToken($token)
+                            ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
+                            ->withOptions(['allow_redirects' => true])
+                            ->timeout(60)
+                            ->get($response['url']);
                         if ($mediaResponse->successful()) {
                             $prefix = $isAnimated ? 'wa_sticker_anim_' : 'wa_sticker_';
                             $filename = 'whatsapp_media/' . uniqid($prefix) . '.webp';
