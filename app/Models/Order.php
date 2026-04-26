@@ -112,9 +112,8 @@ class Order extends Model
 
     public function getBcvEquivalenceAttribute()
     {
-        $ves = $this->ves_price;
         $rateBcv = (float) Setting::get('rate_bcv_usd', 0);
-        return $rateBcv > 0 ? $ves / $rateBcv : 0;
+        return $this->current_total_price * $rateBcv;
     }
 
     protected $fillable = [
