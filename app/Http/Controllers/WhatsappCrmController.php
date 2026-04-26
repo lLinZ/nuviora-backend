@@ -213,6 +213,8 @@ class WhatsappCrmController extends Controller
                 'latestOrder.status',
                 'latestOrder.agent',
                 'latestOrder.products.product',
+                'latestOrder.city',
+                'latestOrder.province',
                 'agent',
             ])
             ->paginate(50);
@@ -264,13 +266,17 @@ class WhatsappCrmController extends Controller
                 // Datos de la orden para el botón "Ver Orden"
                 'order'               => $order ? [
                     'id'              => $order->id,
-                    'order_number'    => $order->order_number,
+                    'order_number'    => $order->order_number ?? $order->name,
                     'status'          => $order->status?->description,
                     'status_id'       => $order->status_id,
                     'products_summary'=> $productsTitle,
                     'total_usd'       => $order->current_total_price,
                     'total_ves'       => $order->ves_price,
+                    'bcv_equivalence' => $order->bcv_equivalence,
                     'agent_name'      => $order->agent?->names,
+                    'created_at'      => $order->created_at,
+                    'reset_count'     => $order->reset_count ?? 0,
+                    'location'        => trim(($order->city?->name ?? '') . ', ' . ($order->province?->name ?? ''), ', '),
                 ] : null,
             ];
         });
