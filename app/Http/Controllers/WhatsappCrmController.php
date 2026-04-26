@@ -43,21 +43,29 @@ class WhatsappCrmController extends Controller
      * Aplica el filtro de visibilidad al query de Client.
      * Centralizado para ser reutilizado en todos los métodos.
      */
-    private function applyVisibilityScope($query, $user): void
+    private function applyVisibilityScope($query, $userOrId): void
     {
-        // ── REGLA SIMPLE ────────────────────────────────────────────────────
-        // A) Tiene órdenes → la última orden debe ser de este agente
-        // B) No tiene órdenes (lead) → el cliente.agent_id debe ser este agente
-        $query->where(function ($q) use ($user) {
-            // A. Clientes con órdenes: la orden más reciente pertenece al agente
-            $q->whereHas('orders', function ($oq) use ($user) {
-                $oq->where('agent_id', $user->id)
+        $userId = is_object($userOrId) ? $userOrId->id : $userOrId;
+        
+        // ── REGLA SIMPLE Y A PRUEBA DE FALLOS ───────────────────────────────
+        $query->where(function ($q) use ($userId) {
+            // A. Clientes con órdenes: la orden más reciente pertenece al agente explícitamente
+            $q->whereHas('orders', function ($oq) use ($userId) {
+                $oq->where('agent_id', $userId)
                    ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
             })
-            // B. Leads sin órdenes asignados directamente al agente
-            ->orWhere(function ($sub) use ($user) {
-                $sub->where('agent_id', $user->id)
-                    ->doesntHave('orders');
+            // B. Clientes donde el agente es el dueño original del Lead,
+            //    Y la última orden (si existe) NO le pertenece a otro agente.
+            // Esto cubre:
+            // 1. Leads puros (sin órdenes)
+            // 2. Clientes con órdenes donde la última orden NO tiene un vendedor asignado aún (agent_id IS NULL)
+            ->orWhere(function ($sub) use ($userId) {
+                $sub->where('agent_id', $userId)
+                    ->whereDoesntHave('orders', function ($oq) use ($userId) {
+                        $oq->whereNotNull('agent_id')
+                           ->where('agent_id', '!=', $userId)
+                           ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
+                    });
             });
         });
     }
@@ -72,20 +80,10 @@ class WhatsappCrmController extends Controller
             return Client::where('id', $clientId)->exists();
         }
 
-        return Client::where('id', $clientId)
-            ->where(function ($q) use ($user) {
-                // A. La orden más reciente es del agente
-                $q->whereHas('orders', function ($oq) use ($user) {
-                    $oq->where('agent_id', $user->id)
-                       ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                })
-                // B. Lead sin órdenes asignado al agente
-                ->orWhere(function ($sub) use ($user) {
-                    $sub->where('agent_id', $user->id)
-                        ->doesntHave('orders');
-                });
-            })
-            ->exists();
+        $query = Client::where('id', $clientId);
+        $this->applyVisibilityScope($query, $user);
+        
+        return $query->exists();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -117,16 +115,7 @@ class WhatsappCrmController extends Controller
         } else {
             // Admin puede filtrar por agente específico
             if ($agentId) {
-                // Ver clientes cuya última orden pertenece a ese agente
-                $query->where(function ($q) use ($agentId) {
-                    $q->whereHas('orders', function ($oq) use ($agentId) {
-                        $oq->where('agent_id', $agentId)
-                           ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                    })
-                    ->orWhere(function ($sub) use ($agentId) {
-                        $sub->where('agent_id', $agentId)->doesntHave('orders');
-                    });
-                });
+                $this->applyVisibilityScope($query, $agentId);
             }
         }
 
@@ -293,15 +282,7 @@ class WhatsappCrmController extends Controller
         if (!$isAdmin) {
             $this->applyVisibilityScope($statsBaseQuery, $user);
         } elseif ($agentId) {
-            $statsBaseQuery->where(function ($q) use ($agentId) {
-                $q->whereHas('orders', function ($oq) use ($agentId) {
-                    $oq->where('agent_id', $agentId)
-                       ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                })
-                ->orWhere(function ($sub) use ($agentId) {
-                    $sub->where('agent_id', $agentId)->doesntHave('orders');
-                });
-            });
+            $this->applyVisibilityScope($statsBaseQuery, $agentId);
         }
 
         $allClients = $statsBaseQuery
