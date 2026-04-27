@@ -276,7 +276,7 @@ class WhatsappCrmController extends Controller
                     'agent_name'      => $order->agent?->names,
                     'created_at'      => $order->created_at,
                     'reset_count'     => $order->reset_count ?? 0,
-                    'location'        => trim(($order->city?->name ?? '') . ', ' . ($order->province?->name ?? ''), ', '),
+                    'location'        => $order->city?->name ?? '-',
                 ] : null,
             ];
         });
