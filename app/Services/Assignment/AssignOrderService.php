@@ -158,6 +158,11 @@ class AssignOrderService
                 continue; 
             }
 
+            // 🛑 CHECK BUSINESS HOURS: Solo asignar si la tienda está abierta en este momento.
+            if (!$this->isBusinessOpen($targetShopId)) {
+                continue;
+            }
+
             $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
             if ($agentsForShop->isEmpty()) continue;
 
@@ -245,6 +250,12 @@ class AssignOrderService
 
         if ($shopId) {
             $query->where('shop_id', $shopId);
+        } else {
+            $openShopIds = BusinessDay::where('date', $date)
+                ->whereNotNull('open_at')
+                ->whereNull('close_at')
+                ->pluck('shop_id');
+            $query->whereIn('shop_id', $openShopIds);
         }
 
         $rows = $query->get();
@@ -268,13 +279,15 @@ class AssignOrderService
     }
 
 
-    protected function isBusinessOpen(?int $shopId = null): bool
+    public function isBusinessOpen(?int $shopId = null): bool
     {
-        $query = BusinessDay::where('date', '=', now()->toDateString());
+        $query = BusinessDay::where('date', '=', now()->toDateString())
+                            ->whereNotNull('open_at')
+                            ->whereNull('close_at');
         if ($shopId) {
             $query->where('shop_id', '=', $shopId);
         }
-        $day = $query->first(['*']);
-        return $day && $day->open_at && is_null($day->close_at);
+        
+        return $query->exists();
     }
 }
