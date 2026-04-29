@@ -330,10 +330,12 @@ class WhatsappConversationController extends Controller
             }
         }
 
+        $messageBody = $renderedBody ?? $request->body;
+
         $message = WhatsappMessage::create([
             'order_id'     => $latestOrder ? $latestOrder->id : null,
             'client_id'    => $client->id,
-            'body'         => $renderedBody,
+            'body'         => $messageBody,
             'is_from_client' => $request->input('is_from_client', false),
             'message_type' => $request->input('is_from_client', false)
                 ? WhatsappMessage::TYPE_INCOMING

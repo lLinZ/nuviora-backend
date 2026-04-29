@@ -32,7 +32,8 @@ class WhatsappMessageReceived implements ShouldBroadcast
     public function broadcastWith(): array
     {
         $conv = \App\Models\WhatsappConversation::where('client_id', $this->message->client_id)
-            ->orderByDesc('updated_at')
+            ->where('status', 'open')
+            ->orderByDesc('id')
             ->first();
         $bucket = $conv?->conversation_bucket ?? 'follow_up';
 

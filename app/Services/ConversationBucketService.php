@@ -45,12 +45,12 @@ class ConversationBucketService
                 WhatsappMessage::TYPE_AGENT,
                 WhatsappMessage::TYPE_AUTOMATED,
             ])
-            ->latest('sent_at')
+            ->latest('id')
             ->first();
 
-        // Si el último mensaje es del cliente, se pierde el override manual
-        // (por si el vendedor lo movió a seguimiento pero el cliente volvió a escribir)
-        if ($lastRelevant && $lastRelevant->message_type === WhatsappMessage::TYPE_INCOMING) {
+        // Si hay un mensaje nuevo (cliente o agente), el sistema retoma el control automático
+        // Esto evita que chats se queden "pegados" en Atención después de responder
+        if ($lastRelevant) {
             $conv->is_manual_bucket = false;
         }
 
@@ -86,7 +86,7 @@ class ConversationBucketService
                 WhatsappMessage::TYPE_AGENT,
                 WhatsappMessage::TYPE_AUTOMATED,
             ])
-            ->latest('sent_at')
+            ->latest('id')
             ->first();
 
         // 3. PRIORIDAD MÁXIMA: Si el último mensaje relevante es del cliente → requiere atención
