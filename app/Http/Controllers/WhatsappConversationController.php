@@ -53,13 +53,14 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar por bucket (nuevo sistema)
         $bucket = $request->query('bucket', 'all');
         if ($bucket && $bucket !== 'all') {
-            if ($bucket === 'requires_attention') {
                 $query->whereHas('whatsappConversations', function ($cq) {
-                    $cq->where('conversation_bucket', 'requires_attention');
+                    $cq->where('conversation_bucket', 'requires_attention')
+                       ->where('status', 'open');
                 });
             } else {
                 $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
-                    $cq->where('conversation_bucket', $bucket);
+                    $cq->where('conversation_bucket', $bucket)
+                       ->where('status', 'open');
                 });
             }
         } else {
@@ -120,7 +121,7 @@ class WhatsappConversationController extends Controller
         }
 
         $paginator = $query
-            ->with(['agent', 'latestOrder.agent', 'latestOrder.status', 'latestOrder.products.product', 'latestWhatsappConversation'])
+            ->with(['agent', 'latestOrder.agent', 'latestOrder.status', 'latestOrder.products.product', 'activeWhatsappConversation'])
             ->with('latestWhatsappMessage')
             ->paginate(50);
 
@@ -129,7 +130,7 @@ class WhatsappConversationController extends Controller
             $conversation   = $client->latestWhatsappConversation;
             
             // Si tiene mensajes sin leer, forzar bucket 'requires_attention' en la UI (Sincronización total)
-            $bucket = $conversation?->conversation_bucket ?? 'follow_up';
+            $bucket = $client->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
             
             $order = $client->latestOrder;
             $productsTitle = "";
@@ -197,7 +198,7 @@ class WhatsappConversationController extends Controller
         }
 
         // Obtener buckets de todos los clientes visibles
-        $visibleClients = $statsQuery->with('latestWhatsappConversation')
+        $visibleClients = $statsQuery->with('activeWhatsappConversation')
             ->withCount(['whatsappMessages as has_unread' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
@@ -210,7 +211,7 @@ class WhatsappConversationController extends Controller
         ];
 
         foreach ($visibleClients as $vc) {
-            $b = $vc->latestWhatsappConversation?->conversation_bucket ?? 'follow_up';
+            $b = $vc->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
             if (isset($bucketCounts[$b])) $bucketCounts[$b]++;
         }
 

@@ -88,4 +88,9 @@ class Client extends Model
     {
         return $this->hasOne(WhatsappConversation::class)->latestOfMany();
     }
+
+    public function activeWhatsappConversation()
+    {
+        return $this->hasOne(WhatsappConversation::class)->where('status', 'open')->latestOfMany();
+    }
 }
