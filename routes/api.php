@@ -317,6 +317,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/conversations/{clientId}/media',        [\App\Http\Controllers\WhatsappCrmController::class, 'sendMedia']);
         Route::post('/conversations/{clientId}/read',         [\App\Http\Controllers\WhatsappCrmController::class, 'markAsRead']);
         Route::post('/conversations/{clientId}/move',         [\App\Http\Controllers\WhatsappCrmController::class, 'moveToBucket']);
+        Route::post('/conversations/{clientId}/assign',       [\App\Http\Controllers\WhatsappCrmController::class, 'assignAgent']);
     });
 
     // --- Media Explorer (Filesystem) ---

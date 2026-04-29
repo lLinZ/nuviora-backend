@@ -200,10 +200,15 @@ class WhatsappCrmController extends Controller
         $query->withCount(['whatsappMessages as unread_count' => function ($q) {
             $q->where('is_from_client', true)->where('status', '!=', 'read');
         }]);
+        
+        $sortBy = $request->query('sort_by', 'latency');
 
-        // 7. Orden: primero los con no leídos, luego por interacción más reciente
-        $query->orderByRaw('unread_count DESC')
-              ->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC');
+        // 7. Orden dinámico
+        if ($sortBy === 'unread') {
+            $query->orderBy('unread_count', 'desc');
+        }
+        
+        $query->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC');
 
         // 8. Eager load relaciones necesarias
         $paginator = $query
@@ -539,6 +544,48 @@ class WhatsappCrmController extends Controller
             'status'       => true,
             'message'      => 'Chat movido a ' . $request->bucket,
             'conversation' => $conv,
+        ]);
+    }
+
+    /**
+     * Reasignar una conversación específica (y opcionalmente el cliente/orden).
+     */
+    public function assignAgent(Request $request, $clientId)
+    {
+        if (!$this->isAdmin()) {
+            return response()->json(['message' => 'No tienes permiso para reasignar chats.'], 403);
+        }
+
+        $request->validate(['agent_id' => 'required|exists:users,id']);
+        
+        $conv = WhatsappConversation::firstOrCreate(
+            ['client_id' => $clientId, 'status' => 'open'],
+            ['agent_id' => $request->agent_id]
+        );
+
+        $conv->update(['agent_id' => $request->agent_id]);
+
+        // Sync client
+        $client = $conv->client;
+        if ($client) {
+            $client->update(['agent_id' => $request->agent_id]);
+            
+            // Sync latest active order
+            $latestOrder = Order::where('client_id', $client->id)->orderBy('created_at', 'desc')->first();
+            if ($latestOrder) {
+                $latestOrder->load('status');
+                $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado'];
+                if (!$latestOrder->status || !in_array($latestOrder->status->description, $terminalStatuses)) {
+                    $latestOrder->update(['agent_id' => $request->agent_id]);
+                    event(new \App\Events\OrderUpdated($latestOrder));
+                }
+            }
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Chat reasignado exitosamente',
+            'conversation' => $conv->load('agent')
         ]);
     }
 }
