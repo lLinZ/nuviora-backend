@@ -117,6 +117,7 @@ class SupplyChainEngine
         // Agrupamos ventas por fecha usando order_products + orders
         $salesByDay = OrderProduct::where('product_id', $productId)
             ->join('orders', 'order_products.order_id', '=', 'orders.id')
+            ->where('orders.status_id', 15) // SOLO VENTAS ENTREGADAS
             ->whereNotNull('orders.processed_at')
             ->where('orders.processed_at', '>=', now()->subDays(60))
             ->selectRaw('DATE(orders.processed_at) as sale_date, SUM(order_products.quantity) as total_sold')
