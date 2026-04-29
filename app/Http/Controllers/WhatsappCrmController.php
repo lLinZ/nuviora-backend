@@ -202,12 +202,28 @@ class WhatsappCrmController extends Controller
             ->paginate(50);
 
         // 9. Transformar la respuesta
-        $paginator->getCollection()->transform(function ($client) {
-            $conversation = $client->latestWhatsappConversation;
+        $bucketCounts = ['requires_attention' => 0, 'follow_up' => 0, 'closed' => 0];
+
+        $paginator->getCollection()->transform(function ($client) use (&$bucketCounts) {
+            $conversation = $client->activeWhatsappConversation;
             $latestMsg    = $client->latestWhatsappMessage;
             $order        = $client->latestOrder;
 
-            $bucketName = $client->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
+            // Lógica ESTRICTA solicitada por el usuario
+            if ($client->unread_count > 0 || ($latestMsg && $latestMsg->is_from_client)) {
+                $bucketName = 'requires_attention';
+            } else {
+                $bucketName = $conversation?->conversation_bucket ?? 'follow_up';
+            }
+
+            // Si el pedido está entregado/cancelado y NO hay mensajes nuevos del cliente -> Cerrado
+            if ($bucketName === 'follow_up' && $order && $order->status) {
+                if (in_array($order->status->description, ['Entregado', 'Cancelado', 'Rechazado'])) {
+                    $bucketName = 'closed';
+                }
+            }
+
+            if (isset($bucketCounts[$bucketName])) $bucketCounts[$bucketName]++;
 
             $productsTitle = '';
             if ($order && $order->products) {
@@ -227,10 +243,9 @@ class WhatsappCrmController extends Controller
                 'unread_count'        => $client->unread_count,
                 'last_message'        => $latestMsg?->body ?? 'Sin mensajes',
                 'last_message_at'     => $latestMsg?->sent_at ?? $client->created_at,
-                'last_message_type'   => $latestMsg?->message_type ?? 'outgoing_agent_message',
+                'last_message_type'   => $latestMsg && $latestMsg->is_from_client ? 'incoming_message' : 'outgoing_agent_message',
                 'conversation_bucket' => $bucketName,
                 'conversation_id'     => $conversation?->id,
-                // Datos de la orden para el botón "Ver Orden"
                 'order'               => $order ? [
                     'id'              => $order->id,
                     'order_number'    => $order->order_number ?? $order->name,
@@ -248,31 +263,31 @@ class WhatsappCrmController extends Controller
             ];
         });
 
-        // ── Contadores de buckets para los badges del header ─────────────────
-        // Usamos el mismo query base (con visibilidad) pero sin el filtro de bucket
-        $statsBaseQuery = Client::whereHas('whatsappMessages');
+        // ── Contadores de buckets GLOBALES (para los badges del header) ─────────────────
+        $statsQuery = Client::whereHas('whatsappMessages');
+        if (!$isAdmin) { $this->applyVisibilityScope($statsQuery, $user); }
+        elseif ($agentId) { $this->applyVisibilityScope($statsQuery, $agentId); }
 
-        if (!$isAdmin) {
-            $this->applyVisibilityScope($statsBaseQuery, $user);
-        } elseif ($agentId) {
-            $this->applyVisibilityScope($statsBaseQuery, $agentId);
-        }
-
-        $allClients = $statsBaseQuery
-            ->with(['latestWhatsappConversation', 'latestOrder.status'])
-            ->withCount(['whatsappMessages as has_unread' => function ($q) {
+        $allStats = $statsQuery->with(['activeWhatsappConversation', 'latestWhatsappMessage'])
+            ->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
-            ->get(['id']);
+            ->get(['id', 'agent_id']);
+        $totalCounts = ['requires_attention' => 0, 'follow_up' => 0, 'closed' => 0];
 
-        $bucketCounts = ['requires_attention' => 0, 'follow_up' => 0, 'closed' => 0];
-        foreach ($allClients as $vc) {
-            $b = $vc->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
-            if (isset($bucketCounts[$b])) $bucketCounts[$b]++;
+        foreach ($allStats as $s) {
+            $latest = $s->latestWhatsappMessage;
+            // Misma lógica estricta
+            if (($s->unread_count ?? 0) > 0 || ($latest && $latest->is_from_client)) {
+                $b = 'requires_attention';
+            } else {
+                $b = $s->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
+            }
+            if (isset($totalCounts[$b])) $totalCounts[$b]++;
         }
 
         return response()->json(array_merge($paginator->toArray(), [
-            'bucket_counts' => $bucketCounts,
+            'bucket_counts' => $totalCounts,
         ]));
     }
 
