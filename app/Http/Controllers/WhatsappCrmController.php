@@ -209,17 +209,19 @@ class WhatsappCrmController extends Controller
             $latestMsg    = $client->latestWhatsappMessage;
             $order        = $client->latestOrder;
 
-            // Lógica ESTRICTA solicitada por el usuario
-            if ($client->unread_count > 0 || ($latestMsg && $latestMsg->is_from_client)) {
+            // Lógica CENTRALIZADA Y ESTRICTA
+            $isTerminalOrder = $order && $order->status && in_array($order->status->description, ['Entregado', 'Cancelado', 'Rechazado']);
+            $hasUnread = ($client->unread_count ?? 0) > 0;
+            $lastIsClient = $latestMsg && $latestMsg->is_from_client;
+
+            if ($hasUnread || $lastIsClient) {
                 $bucketName = 'requires_attention';
+            } elseif ($isTerminalOrder) {
+                $bucketName = 'closed';
             } else {
                 $bucketName = $conversation?->conversation_bucket ?? 'follow_up';
-            }
-
-            // Si el pedido está entregado/cancelado y NO hay mensajes nuevos del cliente -> Cerrado
-            if ($bucketName === 'follow_up' && $order && $order->status) {
-                if (in_array($order->status->description, ['Entregado', 'Cancelado', 'Rechazado'])) {
-                    $bucketName = 'closed';
+                if ($bucketName === 'requires_attention' && $latestMsg && !$latestMsg->is_from_client) {
+                    $bucketName = 'follow_up';
                 }
             }
 
@@ -268,7 +270,7 @@ class WhatsappCrmController extends Controller
         if (!$isAdmin) { $this->applyVisibilityScope($statsQuery, $user); }
         elseif ($agentId) { $this->applyVisibilityScope($statsQuery, $agentId); }
 
-        $allStats = $statsQuery->with(['activeWhatsappConversation', 'latestWhatsappMessage'])
+        $allStats = $statsQuery->with(['activeWhatsappConversation', 'latestWhatsappMessage', 'latestOrder.status'])
             ->withCount(['whatsappMessages as unread_count' => function ($q) {
                 $q->where('is_from_client', true)->where('status', '!=', 'read');
             }])
@@ -277,11 +279,21 @@ class WhatsappCrmController extends Controller
 
         foreach ($allStats as $s) {
             $latest = $s->latestWhatsappMessage;
-            // Misma lógica estricta
-            if (($s->unread_count ?? 0) > 0 || ($latest && $latest->is_from_client)) {
+            $order  = $s->latestOrder;
+            
+            $isTerminal = $order && $order->status && in_array($order->status->description, ['Entregado', 'Cancelado', 'Rechazado']);
+            $hasUnread = ($s->unread_count ?? 0) > 0;
+            $lastIsClient = $latest && $latest->is_from_client;
+
+            if ($hasUnread || $lastIsClient) {
                 $b = 'requires_attention';
+            } elseif ($isTerminal) {
+                $b = 'closed';
             } else {
                 $b = $s->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
+                if ($b === 'requires_attention' && $latest && !$latest->is_from_client) {
+                    $b = 'follow_up';
+                }
             }
             if (isset($totalCounts[$b])) $totalCounts[$b]++;
         }
@@ -396,6 +408,12 @@ class WhatsappCrmController extends Controller
             Log::error('WHATSAPP_CRM_SEND_ERROR: ' . json_encode($result));
         }
 
+        // Marcar como leídos todos los mensajes del cliente al responder
+        WhatsappMessage::where('client_id', $client->id)
+            ->where('is_from_client', true)
+            ->where('status', '!=', 'read')
+            ->update(['status' => 'read']);
+
         $client->update(['last_interaction_at' => now()]);
         $message->refresh();
 
@@ -446,6 +464,12 @@ class WhatsappCrmController extends Controller
                     'sent_at'        => now(),
                     'media'          => asset('storage/' . $path),
                 ]);
+
+                // Marcar como leídos todos los mensajes del cliente al responder
+                WhatsappMessage::where('client_id', $client->id)
+                    ->where('is_from_client', true)
+                    ->where('status', '!=', 'read')
+                    ->update(['status' => 'read']);
 
                 ConversationBucketService::recalculate($client->id);
                 event(new \App\Events\WhatsappMessageReceived($msg));
