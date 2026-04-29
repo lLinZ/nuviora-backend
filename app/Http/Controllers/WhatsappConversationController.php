@@ -405,7 +405,10 @@ class WhatsappConversationController extends Controller
         $message->refresh();
 
         // Recalculate bucket — agent reply moves conversation to follow_up
-        ConversationBucketService::recalculate($client->id);
+        $newBucket = ConversationBucketService::recalculate($client->id);
+        
+        // Inyectar el bucket actualizado en el mensaje para que el WebSocket lo lleve al frontend
+        $message->conversation_bucket = $newBucket;
 
         event(new \App\Events\WhatsappMessageReceived($message));
 
@@ -480,7 +483,8 @@ class WhatsappConversationController extends Controller
                     ->where('status', '!=', 'read')
                     ->update(['status' => 'read']);
 
-                ConversationBucketService::recalculate($client->id);
+                $newBucket = ConversationBucketService::recalculate($client->id);
+                $msg->conversation_bucket = $newBucket;
 
                 event(new \App\Events\WhatsappMessageReceived($msg));
                 return response()->json($msg, 201);
