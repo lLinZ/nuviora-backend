@@ -448,11 +448,15 @@ class WhatsappCrmController extends Controller
 
         // Recalcular bucket: al leer, si la vendedora ya respondió antes → follow_up
         // Si la orden está Entregada/Cancelada → closed
-        ConversationBucketService::recalculate($clientId);
+        $newBucket = ConversationBucketService::recalculate($clientId);
 
         event(new \App\Events\WhatsappChatRead((int)$clientId, $client->agent_id));
 
-        return response()->json(['status' => true, 'message' => 'Mensajes marcados como leídos']);
+        return response()->json([
+            'status' => true, 
+            'message' => 'Mensajes marcados como leídos',
+            'conversation_bucket' => $newBucket
+        ]);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
