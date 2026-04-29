@@ -54,13 +54,8 @@ class WhatsappConversationController extends Controller
         $bucket = $request->query('bucket', 'all');
         if ($bucket && $bucket !== 'all') {
             if ($bucket === 'requires_attention') {
-                $query->where(function ($q) {
-                    $q->whereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'requires_attention');
-                    })
-                    ->orWhereHas('whatsappMessages', function ($mq) {
-                        $mq->where('is_from_client', true)->where('status', '!=', 'read');
-                    });
+                $query->whereHas('whatsappConversations', function ($cq) {
+                    $cq->where('conversation_bucket', 'requires_attention');
                 });
             } else {
                 $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
@@ -134,7 +129,7 @@ class WhatsappConversationController extends Controller
             $conversation   = $client->latestWhatsappConversation;
             
             // Si tiene mensajes sin leer, forzar bucket 'requires_attention' en la UI (Sincronización total)
-            $bucket = ($client->unread_count > 0) ? 'requires_attention' : ($conversation?->conversation_bucket ?? 'follow_up');
+            $bucket = $conversation?->conversation_bucket ?? 'follow_up';
             
             $order = $client->latestOrder;
             $productsTitle = "";
@@ -215,7 +210,7 @@ class WhatsappConversationController extends Controller
         ];
 
         foreach ($visibleClients as $vc) {
-            $b = ($vc->has_unread > 0) ? 'requires_attention' : ($vc->latestWhatsappConversation?->conversation_bucket ?? 'follow_up');
+            $b = $vc->latestWhatsappConversation?->conversation_bucket ?? 'follow_up';
             if (isset($bucketCounts[$b])) $bucketCounts[$b]++;
         }
 
@@ -400,6 +395,13 @@ class WhatsappConversationController extends Controller
         }
 
         $client->update(['last_interaction_at' => now()]);
+        
+        // Al responder, marcar automáticamente todo lo anterior como leído
+        WhatsappMessage::where('client_id', $client->id)
+            ->where('is_from_client', true)
+            ->where('status', '!=', 'read')
+            ->update(['status' => 'read']);
+
         $message->refresh();
 
         // Recalculate bucket — agent reply moves conversation to follow_up
@@ -471,6 +473,12 @@ class WhatsappConversationController extends Controller
                     'sent_at'        => now(),
                     'media'          => asset('storage/' . $path)
                 ]);
+
+                // Marcar como leído al enviar multimedia también
+                WhatsappMessage::where('client_id', $client->id)
+                    ->where('is_from_client', true)
+                    ->where('status', '!=', 'read')
+                    ->update(['status' => 'read']);
 
                 ConversationBucketService::recalculate($client->id);
 
