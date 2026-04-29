@@ -10,97 +10,59 @@ use Illuminate\Support\Facades\Log;
  * ConversationBucketService
  *
  * Única fuente de verdad para calcular y persistir el conversation_bucket.
- *
- * Reglas (de más prioritaria a menos):
- * 1. closed       → conversación tiene status closed/resolved, OR pedido Entregado/Cancelado
- * 2. requires_attention → último mensaje relevante es incoming_message
- * 3. requires_attention → cliente respondió después de una automatización
- * 4. follow_up    → último mensaje relevante es outgoing_agent_message o outgoing_automated_message
- * 5. follow_up    → default
- *
- * CRÍTICO: system_event y outgoing_automated_message NO cuentan como "respuesta"
- * del agente y NO cambian el bucket a follow_up si hay un mensaje del cliente sin responder.
+ * Basado en la columna is_from_client (ya que message_type no existe en DB).
  */
 class ConversationBucketService
 {
     /**
      * Recalcula y persiste el conversation_bucket para un cliente dado.
-     * Llama esto cada vez que se crea un mensaje nuevo.
-     *
-     * @param int $clientId
-     * @return string El bucket resultante
      */
     public static function recalculate(int $clientId): string
     {
-        // CRÍTICO: Si no existe conversación abierta, crearla.
         $conv = WhatsappConversation::firstOrCreate(
             ['client_id' => $clientId, 'status' => 'open'],
             ['conversation_bucket' => WhatsappConversation::BUCKET_FOLLOW_UP]
         );
 
-        // Obtener el último mensaje relevante
-        $lastRelevant = WhatsappMessage::where('client_id', $clientId)
-            ->whereIn('message_type', [
-                WhatsappMessage::TYPE_INCOMING,
-                WhatsappMessage::TYPE_AGENT,
-                WhatsappMessage::TYPE_AUTOMATED,
-            ])
+        // 1. Obtener el último mensaje
+        $lastMessage = WhatsappMessage::where('client_id', $clientId)
             ->latest('id')
             ->first();
 
-        // Si hay un mensaje nuevo (cliente o agente), el sistema retoma el control automático
-        // Esto evita que chats se queden "pegados" en Atención después de responder
-        if ($lastRelevant) {
+        // 2. Si el cliente escribe, SIEMPRE se rompe el bloqueo manual y pasa a Atención
+        if ($lastMessage && $lastMessage->is_from_client) {
             $conv->is_manual_bucket = false;
+            $bucket = WhatsappConversation::BUCKET_ATTENTION;
+        } else {
+            // Si el último mensaje es de la vendedora/sistema o no hay mensajes, calculamos normal
+            $bucket = self::calculateBucket($conv, $lastMessage);
         }
-
-        $bucket = self::calculateBucket($conv);
 
         $conv->update([
             'conversation_bucket' => $bucket,
-            'last_message_at'     => $lastRelevant?->sent_at ?? now(),
-            'is_manual_bucket'     => $conv->is_manual_bucket // Asegurar que se persiste el reset si ocurrió
+            'last_message_at'     => $lastMessage?->sent_at ?? now(),
+            'is_manual_bucket'    => $conv->is_manual_bucket
         ]);
 
         return $bucket;
     }
 
     /**
-     * Implementación del pseudocódigo del spec.
-     *
-     * @param WhatsappConversation $conv
-     * @return string
+     * Lógica central de cálculo.
      */
-    public static function calculateBucket(WhatsappConversation $conv): string
+    public static function calculateBucket(WhatsappConversation $conv, ?WhatsappMessage $lastMessage): string
     {
-        // 1. Si fue movido MANUALMENTE por la vendedora, se respeta 
-        // (A menos que el cliente haya vuelto a escribir, lo cual se maneja en recalculate)
+        // 1. Si es manual y no ha escrito el cliente después (manejado en recalculate), respetamos
         if ($conv->is_manual_bucket) {
             return $conv->conversation_bucket;
         }
 
-        // 2. Buscar el último mensaje RELEVANTE (excluir system_event)
-        $lastRelevant = WhatsappMessage::where('client_id', $conv->client_id)
-            ->whereIn('message_type', [
-                WhatsappMessage::TYPE_INCOMING,
-                WhatsappMessage::TYPE_AGENT,
-                WhatsappMessage::TYPE_AUTOMATED,
-            ])
-            ->latest('id')
-            ->first();
-
-        // 3. PRIORIDAD MÁXIMA: Si el último mensaje relevante es del cliente → requiere atención
-        // Esto evita que si un pedido se entregó pero el cliente escribió después, el chat se quede en "Cerrados"
-        if ($lastRelevant && $lastRelevant->message_type === WhatsappMessage::TYPE_INCOMING) {
+        // 2. Prioridad: Si el último mensaje es del cliente -> ATENCIÓN
+        if ($lastMessage && $lastMessage->is_from_client) {
             return WhatsappConversation::BUCKET_ATTENTION;
         }
 
-        // 4. Cerrado: estado explícito de la conversación (botón Limpiar/Cerrar)
-        if (in_array($conv->status, ['closed', 'resolved'])) {
-            return WhatsappConversation::BUCKET_CLOSED;
-        }
-
-        // 5. Cerrado: Por estatus de pedido (Entregado, Cancelado o Rechazado)
+        // 3. Cerrado: Por estatus de pedido terminal
         $latestOrder = \App\Models\Order::where('client_id', $conv->client_id)
             ->orderBy('created_at', 'desc')
             ->with('status')
@@ -108,40 +70,19 @@ class ConversationBucketService
 
         if ($latestOrder && $latestOrder->status) {
             $desc = $latestOrder->status->description;
-            if (in_array($desc, [
-                \App\Constants\OrderStatus::ENTREGADO, 
-                \App\Constants\OrderStatus::CANCELADO,
-                \App\Constants\OrderStatus::RECHAZADO
-            ])) {
+            if (in_array($desc, ['Entregado', 'Cancelado', 'Rechazado'])) {
                 return WhatsappConversation::BUCKET_CLOSED;
             }
         }
 
-        if (!$lastRelevant) {
-            // Sin mensajes → en seguimiento por defecto
-            return WhatsappConversation::BUCKET_FOLLOW_UP;
-        }
-
-        // 6. Si el último mensaje es automatización, revisar si hay cliente
-        //    respondiendo DESPUÉS de una automatización sin atender
-        if ($lastRelevant->message_type === WhatsappMessage::TYPE_AUTOMATED) {
-            return WhatsappConversation::BUCKET_FOLLOW_UP;
-        }
-
-        // 7. Último mensaje es del agente humano → en seguimiento
-        if ($lastRelevant->message_type === WhatsappMessage::TYPE_AGENT) {
+        // 4. Si la última interacción fue de la vendedora (is_from_client = false) -> SEGUIMIENTO
+        if ($lastMessage && !$lastMessage->is_from_client) {
             return WhatsappConversation::BUCKET_FOLLOW_UP;
         }
 
         return WhatsappConversation::BUCKET_FOLLOW_UP;
     }
 
-    /**
-     * Fuerza el bucket a 'closed'. Llamar cuando se cambia status a
-     * Entregado o Cancelado.
-     *
-     * @param int $clientId
-     */
     public static function closeBucket(int $clientId): void
     {
         WhatsappConversation::where('client_id', $clientId)
@@ -149,18 +90,5 @@ class ConversationBucketService
                 'status' => 'closed',
                 'conversation_bucket' => WhatsappConversation::BUCKET_CLOSED
             ]);
-    }
-
-    /**
-     * Prioridad numérica para ordenar en la lista (menor = más urgente).
-     */
-    public static function bucketPriority(string $bucket): int
-    {
-        return match ($bucket) {
-            WhatsappConversation::BUCKET_ATTENTION => 1,
-            WhatsappConversation::BUCKET_FOLLOW_UP => 2,
-            WhatsappConversation::BUCKET_CLOSED    => 3,
-            default                                => 2,
-        };
     }
 }
