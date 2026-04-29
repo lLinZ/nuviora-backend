@@ -135,9 +135,15 @@ class WhatsappCrmController extends Controller
         // 4. Filtro por bucket
         if ($bucket && $bucket !== 'all') {
             if ($bucket === 'requires_attention') {
-                $query->whereHas('whatsappConversations', function ($cq) {
-                    $cq->where('conversation_bucket', 'requires_attention')
-                       ->where('status', 'open');
+                // Atención = tiene mensajes no leídos O la DB dice que requiere atención
+                $query->where(function($q) {
+                    $q->whereHas('whatsappMessages', function ($mq) {
+                        $mq->where('is_from_client', true)->where('status', '!=', 'read');
+                    })
+                    ->orWhereHas('whatsappConversations', function ($cq) {
+                        $cq->where('conversation_bucket', 'requires_attention')
+                           ->where('status', 'open');
+                    });
                 });
             } elseif ($bucket === 'closed') {
                 $query->whereHas('whatsappConversations', function ($cq) {
@@ -145,9 +151,16 @@ class WhatsappCrmController extends Controller
                        ->where('status', 'open');
                 });
             } elseif ($bucket === 'follow_up') {
-                $query->whereHas('whatsappConversations', function ($cq) {
-                    $cq->where('conversation_bucket', 'follow_up')
-                       ->where('status', 'open');
+                // Seguimiento = NO tiene no-leídos Y (DB dice seguimiento O no tiene registro de conversación)
+                $query->whereDoesntHave('whatsappMessages', function ($mq) {
+                    $mq->where('is_from_client', true)->where('status', '!=', 'read');
+                })
+                ->where(function($q) {
+                    $q->whereHas('whatsappConversations', function ($cq) {
+                        $cq->where('conversation_bucket', 'follow_up')
+                           ->where('status', 'open');
+                    })
+                    ->orWhereDoesntHave('whatsappConversations');
                 });
             }
         }
@@ -252,6 +265,7 @@ class WhatsappCrmController extends Controller
             }])
             ->get(['id']);
 
+        $bucketCounts = ['requires_attention' => 0, 'follow_up' => 0, 'closed' => 0];
         foreach ($allClients as $vc) {
             $b = $vc->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
             if (isset($bucketCounts[$b])) $bucketCounts[$b]++;
