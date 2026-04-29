@@ -34,7 +34,7 @@ class WhatsappConversationController extends Controller
         $endDate   = $request->query('end_date');
         $sortBy    = $request->query('sort_by', 'latency'); // 'latency' o 'messages_count'
 
-        $query = Client::query();
+        $query = Client::query()->select('clients.*')->distinct();
 
         // 1. Filtrar por búsqueda
         if ($search) {
