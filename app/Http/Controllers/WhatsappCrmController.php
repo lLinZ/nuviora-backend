@@ -135,55 +135,19 @@ class WhatsappCrmController extends Controller
         // 4. Filtro por bucket
         if ($bucket && $bucket !== 'all') {
             if ($bucket === 'requires_attention') {
-                // Atención = tiene no-leídos OR (conversation_bucket = requires_attention AND NO tiene orden terminal)
-                $query->where(function ($q) {
-                    $q->whereHas('whatsappMessages', function ($mq) {
-                        $mq->where('is_from_client', true)->where('status', '!=', 'read');
-                    })
-                    ->orWhere(function ($sub) {
-                        $sub->whereHas('whatsappConversations', function ($cq) {
-                            $cq->where('conversation_bucket', 'requires_attention');
-                        })
-                        ->whereDoesntHave('orders', function ($oq) {
-                            $oq->whereHas('status', function ($sq) {
-                                $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                            })
-                            ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                        });
-                    });
+                $query->whereHas('whatsappConversations', function ($cq) {
+                    $cq->where('conversation_bucket', 'requires_attention')
+                       ->where('status', 'open');
                 });
             } elseif ($bucket === 'closed') {
-                // Cerrado = (NO tiene no-leídos) AND (orden Terminal OR conversation_bucket = closed)
-                $query->whereDoesntHave('whatsappMessages', function ($mq) {
-                    $mq->where('is_from_client', true)->where('status', '!=', 'read');
-                })
-                ->where(function ($q) {
-                    $q->whereHas('orders', function ($oq) {
-                        $oq->whereHas('status', function ($sq) {
-                            $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                        })
-                        ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                    })
-                    ->orWhereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'closed');
-                    });
+                $query->whereHas('whatsappConversations', function ($cq) {
+                    $cq->where('conversation_bucket', 'closed')
+                       ->where('status', 'open');
                 });
             } elseif ($bucket === 'follow_up') {
-                // Seguimiento = (NO tiene no-leídos) AND (NO tiene orden Terminal) AND (conversation_bucket = follow_up OR no tiene conversacion)
-                $query->whereDoesntHave('whatsappMessages', function ($mq) {
-                    $mq->where('is_from_client', true)->where('status', '!=', 'read');
-                })
-                ->whereDoesntHave('orders', function ($oq) {
-                    $oq->whereHas('status', function ($sq) {
-                        $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                    })
-                    ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
-                })
-                ->where(function ($q) {
-                    $q->whereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'follow_up');
-                    })
-                    ->orWhereDoesntHave('whatsappConversations');
+                $query->whereHas('whatsappConversations', function ($cq) {
+                    $cq->where('conversation_bucket', 'follow_up')
+                       ->where('status', 'open');
                 });
             }
         }
@@ -213,7 +177,7 @@ class WhatsappCrmController extends Controller
         // 8. Eager load relaciones necesarias
         $paginator = $query
             ->with([
-                'latestWhatsappConversation',
+                'activeWhatsappConversation', // Usar la relación activa que creamos
                 'latestWhatsappMessage',
                 'latestOrder.status',
                 'latestOrder.agent',
@@ -230,22 +194,7 @@ class WhatsappCrmController extends Controller
             $latestMsg    = $client->latestWhatsappMessage;
             $order        = $client->latestOrder;
 
-            // ── Calcular bucket con la misma lógica del ConversationBucketService ──
-            // PRIORIDAD:
-            //  1. Mensajes no leídos del cliente  → requires_attention
-            //  2. Orden Entregada/Cancelada/Rechazada → closed (si no hay no-leídos)
-            //  3. Lo que diga la conversación en DB (follow_up por defecto)
-            $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado'];
-            $orderStatus = $order?->status?->description;
-            $isTerminal  = $orderStatus && in_array($orderStatus, $terminalStatuses);
-
-            if ($client->unread_count > 0) {
-                $bucketName = 'requires_attention';
-            } elseif ($isTerminal) {
-                $bucketName = 'closed';
-            } else {
-                $bucketName = $conversation?->conversation_bucket ?? 'follow_up';
-            }
+            $bucketName = $client->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
 
             $productsTitle = '';
             if ($order && $order->products) {
@@ -303,19 +252,8 @@ class WhatsappCrmController extends Controller
             }])
             ->get(['id']);
 
-        $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado'];
-        $bucketCounts = ['requires_attention' => 0, 'follow_up' => 0, 'closed' => 0];
         foreach ($allClients as $vc) {
-            $orderStatus = $vc->latestOrder?->status?->description;
-            $isTerminal  = $orderStatus && in_array($orderStatus, $terminalStatuses);
-
-            if ($vc->has_unread > 0) {
-                $b = 'requires_attention';
-            } elseif ($isTerminal) {
-                $b = 'closed';
-            } else {
-                $b = $vc->latestWhatsappConversation?->conversation_bucket ?? 'follow_up';
-            }
+            $b = $vc->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
             if (isset($bucketCounts[$b])) $bucketCounts[$b]++;
         }
 
