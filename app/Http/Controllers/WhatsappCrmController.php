@@ -135,22 +135,27 @@ class WhatsappCrmController extends Controller
         // 4. Filtro por bucket (BASADO EN ÚLTIMA INTERACCIÓN + MANUAL)
         if ($bucket && $bucket !== 'all') {
             $query->where(function($q) use ($bucket) {
-                // CASO A: El bucket está forzado manualmente
-                $q->whereHas('activeWhatsappConversation', function($cq) use ($bucket) {
-                    $cq->where('is_manual_bucket', true)
-                       ->where('conversation_bucket', $bucket);
+                // CASO A: El bucket está forzado manualmente en la tabla whatsapp_conversations
+                $q->whereExists(function ($sub) use ($bucket) {
+                    $sub->select(DB::raw(1))
+                        ->from('whatsapp_conversations')
+                        ->whereColumn('whatsapp_conversations.client_id', 'clients.id')
+                        ->where('whatsapp_conversations.status', 'open')
+                        ->where('whatsapp_conversations.is_manual_bucket', true)
+                        ->where('whatsapp_conversations.conversation_bucket', $bucket);
                 })
-                // CASO B: No es manual, seguimos la lógica de última interacción
+                // CASO B: No es manual (o no tiene registro manual), seguimos la lógica automática
                 ->orWhere(function($sq) use ($bucket) {
-                    // Primero asegurar que NO sea manual
-                    $sq->where(function($sub) {
-                        $sub->whereDoesntHave('activeWhatsappConversation')
-                            ->orWhereHas('activeWhatsappConversation', function($cq) {
-                                $cq->where('is_manual_bucket', false);
-                            });
+                    // Asegurar que NO haya un bloqueo manual de OTRO bucket
+                    $sq->whereNotExists(function ($sub) {
+                        $sub->select(DB::raw(1))
+                            ->from('whatsapp_conversations')
+                            ->whereColumn('whatsapp_conversations.client_id', 'clients.id')
+                            ->where('whatsapp_conversations.status', 'open')
+                            ->where('whatsapp_conversations.is_manual_bucket', true);
                     });
 
-                    // Luego aplicar la lógica de bucket correspondiente
+                    // Lógica automática según el bucket solicitado
                     if ($bucket === 'requires_attention') {
                         $sq->whereRaw('1 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)');
                     } elseif ($bucket === 'closed') {
@@ -159,10 +164,16 @@ class WhatsappCrmController extends Controller
                                $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
                            });
                     } elseif ($bucket === 'follow_up') {
-                        $sq->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
-                           ->whereDoesntHave('latestOrder.status', function($osq) {
-                               $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                           });
+                        $sq->where(function($fsq) {
+                            // Respuesta nuestra
+                            $fsq->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
+                                // O no tiene mensajes
+                                ->orWhereDoesntHave('whatsappMessages');
+                        })
+                        // Y NO debe ser un pedido cerrado (porque cerrado gana a seguimiento)
+                        ->whereDoesntHave('latestOrder.status', function($osq) {
+                            $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                        });
                     }
                 });
             });
