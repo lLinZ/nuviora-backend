@@ -43,13 +43,19 @@ class CheckShopSchedule extends Command
     protected function checkOpen(Shop $shop, string $nowTime, string $today, BusinessService $service)
     {
         if (!$shop->auto_open_at) return;
-        // Check if time is right (simple check: now >= open_at)
-        // Note: we should avoid re-opening if already open, but service handles exception.
-        // Better to check state first to avoid exception logs.
-        
+
         // Trim seconds from DB time if present "08:00:00" -> "08:00"
-        $openTime = substr($shop->auto_open_at, 0, 5);
+        $openTime  = substr($shop->auto_open_at, 0, 5);
+        $closeTime = $shop->auto_close_at ? substr($shop->auto_close_at, 0, 5) : null;
+
         if ($nowTime < $openTime) return;
+
+        // 🛑 NUEVO: No abrir si ya pasó la hora de cierre.
+        // Esto evita que el scheduler abra tiendas a medianoche porque "perdió" la apertura de la mañana.
+        if ($closeTime && $openTime < $closeTime && $nowTime >= $closeTime) {
+            $this->info("[CheckShopSchedule] Shop {$shop->name}: Hora de apertura pasada Y ya es después del cierre. Omitiendo apertura.");
+            return;
+        }
 
         // Check if already open today
         $day = BusinessDay::where('date', $today)->where('shop_id', $shop->id)->first();
@@ -84,7 +90,14 @@ class CheckShopSchedule extends Command
         try {
             $this->info("Closing shop {$shop->name}...");
             $service->closeShop($shop->id);
-            Log::info("Auto-closed shop {$shop->id}: {$shop->name}");
+
+            // 🛑 NUEVO: Desactivar el roster al cerrar para que no haya agentes "activos"
+            // en el Round Robin si llegan mensajes/órdenes fuera de horario.
+            \App\Models\DailyAgentRoster::where('date', $today)
+                ->where('shop_id', $shop->id)
+                ->update(['is_active' => false]);
+
+            Log::info("Auto-closed shop {$shop->id}: {$shop->name}. Roster deactivated.");
         } catch (\Exception $e) {
             Log::error("Failed to auto-close shop {$shop->id}: " . $e->getMessage());
         }

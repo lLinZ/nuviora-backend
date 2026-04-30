@@ -3,20 +3,35 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Models\BusinessDay;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class CrmAssignmentService
 {
     /**
-     * Assigns the next available agent in the rotation to a client.
-     * Uses a round-robin approach stored in Cache.
+     * Returns true if at least one shop has an open BusinessDay record today.
      */
+    public static function isAnyShopOpen(): bool
+    {
+        return BusinessDay::where('date', now()->toDateString())
+            ->whereNotNull('open_at')
+            ->whereNull('close_at')
+            ->exists();
+    }
+
     public static function assignNextAgent($client)
     {
         // If already assigned, do nothing
         if ($client->agent_id) {
             return User::find($client->agent_id);
+        }
+
+        // 🛑 NO ASIGNAR SI TODAS LAS TIENDAS ESTÁN CERRADAS
+        // Esto previene asignaciones por mensajes de WhatsApp fuera de horario.
+        if (!self::isAnyShopOpen()) {
+            Log::info("CrmAssignmentService: Todas las tiendas están cerradas. Lead #{$client->id} ({$client->phone}) no se asigna fuera de horario.");
+            return null;
         }
 
         // Obtener vendedores que estén activos HOY en cualquier tienda, basándonos en el Roster Oficial

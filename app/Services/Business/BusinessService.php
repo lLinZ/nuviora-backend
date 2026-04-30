@@ -99,6 +99,13 @@ class BusinessService
         Setting::set('business_close_dt', $now->toDateTimeString());
         Setting::set('business_last_close_dt', $now->toDateTimeString());
 
+        // 🛑 Desactivar roster: Ningún agente debe quedar activo al cerrar la tienda.
+        // Esto bloquea asignaciones de WhatsApp CRM y backlog fuera de horario.
+        DailyAgentRoster::where('date', $today)
+            ->where('shop_id', $shopId)
+            ->update(['is_active' => false]);
+        Log::info("Shop $shopId: Roster desactivado al cerrar la jornada.");
+
         // Reset Orders Logic
         $this->resetOrdersForShop($shopId);
 

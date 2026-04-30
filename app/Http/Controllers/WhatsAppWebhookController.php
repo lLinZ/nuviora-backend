@@ -177,7 +177,8 @@ class WhatsAppWebhookController extends Controller
             }
 
             // REGLA DE ASIGNACIÓN POR NÚMERO DE ORDEN EN EL MENSAJE
-            if (!empty($body)) {
+            // 🛑 Solo reasignar si hay alguna tienda abierta ahora mismo.
+            if (!empty($body) && \App\Services\CrmAssignmentService::isAnyShopOpen()) {
                 // Buscar patrón #1234 o solo 1234 (mínimo 4 dígitos)
                 if (preg_match('/#?(\d{4,10})/', $body, $matches)) {
                     $orderNum = $matches[1];
@@ -198,6 +199,7 @@ class WhatsAppWebhookController extends Controller
                 }
             }
 
+            // assignNextAgent() internamente también verifica si hay tiendas abiertas.
             if (!$client->agent_id) { 
                 \App\Services\CrmAssignmentService::assignNextAgent($client); 
             }
