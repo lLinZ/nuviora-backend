@@ -57,12 +57,14 @@ class ConversationBucketService
             return $conv->conversation_bucket;
         }
 
-        // 2. Prioridad: Si el último mensaje es del cliente -> ATENCIÓN
+        // 2. Prioridad MÁXIMA: Si el último mensaje es del cliente -> ATENCIÓN
+        // Esto rompe cualquier estado "Cerrado" anterior.
         if ($lastMessage && $lastMessage->is_from_client) {
             return WhatsappConversation::BUCKET_ATTENTION;
         }
 
-        // 3. Cerrado: Por estatus de pedido terminal
+        // 3. Prioridad MEDIA: Cerrado por estatus de pedido terminal
+        // Solo si el cliente NO ha escrito recientemente (verificado arriba).
         $latestOrder = \App\Models\Order::where('client_id', $conv->client_id)
             ->orderBy('created_at', 'desc')
             ->with('status')
@@ -75,7 +77,7 @@ class ConversationBucketService
             }
         }
 
-        // 4. Si la última interacción fue de la vendedora (is_from_client = false) -> SEGUIMIENTO
+        // 4. Prioridad BAJA: Si la última interacción fue de la vendedora -> SEGUIMIENTO
         if ($lastMessage && !$lastMessage->is_from_client) {
             return WhatsappConversation::BUCKET_FOLLOW_UP;
         }

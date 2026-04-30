@@ -209,21 +209,11 @@ class WhatsappCrmController extends Controller
             $latestMsg    = $client->latestWhatsappMessage;
             $order        = $client->latestOrder;
 
-            // Lógica CENTRALIZADA Y ESTRICTA
-            $isTerminalOrder = $order && $order->status && in_array($order->status->description, ['Entregado', 'Cancelado', 'Rechazado']);
-            $hasUnread = ($client->unread_count ?? 0) > 0;
-            $lastIsClient = $latestMsg && $latestMsg->is_from_client;
-
-            if ($hasUnread || $lastIsClient) {
-                $bucketName = 'requires_attention';
-            } elseif ($isTerminalOrder) {
-                $bucketName = 'closed';
-            } else {
-                $bucketName = $conversation?->conversation_bucket ?? 'follow_up';
-                if ($bucketName === 'requires_attention' && $latestMsg && !$latestMsg->is_from_client) {
-                    $bucketName = 'follow_up';
-                }
-            }
+            // Lógica CENTRALIZADA Y ESTRICTA (Vía Service)
+            $bucketName = ConversationBucketService::calculateBucket(
+                $conversation ?? new WhatsappConversation(['client_id' => $client->id]), 
+                $latestMsg
+            );
 
             if (isset($bucketCounts[$bucketName])) $bucketCounts[$bucketName]++;
 
@@ -281,20 +271,11 @@ class WhatsappCrmController extends Controller
             $latest = $s->latestWhatsappMessage;
             $order  = $s->latestOrder;
             
-            $isTerminal = $order && $order->status && in_array($order->status->description, ['Entregado', 'Cancelado', 'Rechazado']);
-            $hasUnread = ($s->unread_count ?? 0) > 0;
-            $lastIsClient = $latest && $latest->is_from_client;
-
-            if ($hasUnread || $lastIsClient) {
-                $b = 'requires_attention';
-            } elseif ($isTerminal) {
-                $b = 'closed';
-            } else {
-                $b = $s->activeWhatsappConversation?->conversation_bucket ?? 'follow_up';
-                if ($b === 'requires_attention' && $latest && !$latest->is_from_client) {
-                    $b = 'follow_up';
-                }
-            }
+            $b = ConversationBucketService::calculateBucket(
+                $s->activeWhatsappConversation ?? new WhatsappConversation(['client_id' => $s->id]), 
+                $latest
+            );
+            
             if (isset($totalCounts[$b])) $totalCounts[$b]++;
         }
 
@@ -503,7 +484,7 @@ class WhatsappCrmController extends Controller
         // Si la orden está Entregada/Cancelada → closed
         $newBucket = ConversationBucketService::recalculate($clientId);
 
-        event(new \App\Events\WhatsappChatRead((int)$clientId, $client->agent_id));
+        event(new \App\Events\WhatsappChatRead((int)$clientId, $client->agent_id, $newBucket));
 
         return response()->json([
             'status' => true, 
@@ -534,6 +515,8 @@ class WhatsappCrmController extends Controller
             'conversation_bucket' => $request->bucket,
             'is_manual_bucket'    => true,
         ]);
+
+        event(new \App\Events\WhatsappChatRead((int)$clientId, $user->id, $request->bucket));
 
         return response()->json([
             'status'       => true,
