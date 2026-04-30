@@ -132,36 +132,46 @@ class WhatsappCrmController extends Controller
             });
         }
 
-        // 4. Filtro por bucket
+        // 4. Filtro por bucket (BASADO EN ÚLTIMA INTERACCIÓN)
         if ($bucket && $bucket !== 'all') {
             if ($bucket === 'requires_attention') {
-                // Atención = tiene mensajes no leídos O la DB dice que requiere atención
                 $query->where(function($q) {
-                    $q->whereHas('whatsappMessages', function ($mq) {
-                        $mq->where('is_from_client', true)->where('status', '!=', 'read');
-                    })
-                    ->orWhereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'requires_attention')
-                           ->where('status', 'open');
+                    // A. El ÚLTIMO mensaje (por fecha e ID) es del cliente
+                    $q->whereRaw('1 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
+                    // B. O el bucket está forzado manualmente en la conversación
+                    ->orWhereHas('activeWhatsappConversation', function($cq) {
+                        $cq->where('conversation_bucket', 'requires_attention');
                     });
                 });
             } elseif ($bucket === 'closed') {
-                $query->whereHas('whatsappConversations', function ($cq) {
-                    $cq->where('conversation_bucket', 'closed')
-                       ->where('status', 'open');
-                });
-            } elseif ($bucket === 'follow_up') {
-                // Seguimiento = NO tiene no-leídos Y (DB dice seguimiento O no tiene registro de conversación)
-                $query->whereDoesntHave('whatsappMessages', function ($mq) {
-                    $mq->where('is_from_client', true)->where('status', '!=', 'read');
-                })
-                ->where(function($q) {
-                    $q->whereHas('whatsappConversations', function ($cq) {
-                        $cq->where('conversation_bucket', 'follow_up')
-                           ->where('status', 'open');
+                $query->where(function($q) {
+                    // Prioridad a estados terminales
+                    $q->whereHas('latestOrder.status', function($sq) {
+                        $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
                     })
-                    ->orWhereDoesntHave('whatsappConversations');
-                });
+                    ->orWhereHas('activeWhatsappConversation', function($cq) {
+                        $cq->where('conversation_bucket', 'closed');
+                    });
+                })
+                // Pero si el último mensaje es del cliente, NO puede estar cerrado (soporte)
+                ->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)');
+            } elseif ($bucket === 'follow_up') {
+                $query->where(function($q) {
+                    // A. El último mensaje es nuestro (vendedora/sistema)
+                    $q->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
+                    // B. O no tiene mensajes (fallback)
+                    ->orWhereDoesntHave('whatsappMessages')
+                    // C. O el bucket está forzado manualmente
+                    ->orWhereHas('activeWhatsappConversation', function($cq) {
+                        $cq->where('conversation_bucket', 'follow_up');
+                    });
+                })
+                // Y NO debe ser un pedido cerrado (porque cerrado tiene prioridad sobre seguimiento)
+                ->whereDoesntHave('latestOrder.status', function($sq) {
+                    $sq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                })
+                // Y el último mensaje NO debe ser del cliente (doble check)
+                ->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)');
             }
         }
 
