@@ -10,6 +10,7 @@ use App\Models\WhatsappMessage;
 use App\Services\ConversationBucketService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 /**
  * WhatsApp CRM v2 — Lógica de permisos simplificada y robusta.
