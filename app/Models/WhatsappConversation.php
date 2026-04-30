@@ -21,6 +21,7 @@ class WhatsappConversation extends Model
         'status',
         'conversation_bucket',
         'last_message_at',
+        'is_manual_bucket',
     ];
 
     public function client()
