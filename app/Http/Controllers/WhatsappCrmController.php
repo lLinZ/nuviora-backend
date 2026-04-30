@@ -197,7 +197,28 @@ class WhatsappCrmController extends Controller
 
         // 7. Orden dinámico
         if ($sortBy === 'unread') {
-            $query->orderBy('unread_count', 'desc');
+            $query->orderByRaw("CASE 
+                /* PRIORIDAD 1: Atención (Manual o Automático) */
+                WHEN (
+                    EXISTS (SELECT 1 FROM whatsapp_conversations WHERE client_id = clients.id AND status = 'open' AND is_manual_bucket = 1 AND conversation_bucket = 'requires_attention')
+                    OR (
+                        NOT EXISTS (SELECT 1 FROM whatsapp_conversations WHERE client_id = clients.id AND status = 'open' AND is_manual_bucket = 1)
+                        AND 1 = (SELECT is_from_client FROM whatsapp_messages WHERE client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)
+                    )
+                ) THEN 1
+                /* PRIORIDAD 2: Seguimiento (Manual o Automático) */
+                WHEN (
+                    EXISTS (SELECT 1 FROM whatsapp_conversations WHERE client_id = clients.id AND status = 'open' AND is_manual_bucket = 1 AND conversation_bucket = 'follow_up')
+                    OR (
+                        NOT EXISTS (SELECT 1 FROM whatsapp_conversations WHERE client_id = clients.id AND status = 'open' AND is_manual_bucket = 1)
+                        AND (
+                            0 = (SELECT is_from_client FROM whatsapp_messages WHERE client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)
+                            OR NOT EXISTS (SELECT 1 FROM whatsapp_messages WHERE client_id = clients.id)
+                        )
+                    )
+                ) THEN 2
+                ELSE 3 END")
+                ->orderBy('unread_count', 'desc');
         }
         
         $query->orderByRaw('COALESCE(last_interaction_at, last_whatsapp_received_at, created_at) DESC');
