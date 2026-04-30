@@ -29,12 +29,12 @@ class ConversationBucketService
             ->latest('id')
             ->first();
 
-        // 2. Si el cliente escribe, SIEMPRE se rompe el bloqueo manual y pasa a Atención
-        if ($lastMessage && $lastMessage->is_from_client) {
+        // 2. Si hay interaccion (cliente o vendedora), se rompe el bloqueo manual y recalcula
+        if ($lastMessage) {
             $conv->is_manual_bucket = false;
-            $bucket = WhatsappConversation::BUCKET_ATTENTION;
+            $bucket = self::calculateBucket($conv, $lastMessage);
         } else {
-            // Si el último mensaje es de la vendedora/sistema o no hay mensajes, calculamos normal
+            // Si no hay mensajes, calculamos normal según el estado actual
             $bucket = self::calculateBucket($conv, $lastMessage);
         }
 
