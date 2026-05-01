@@ -78,17 +78,14 @@ class InventoryMovementController extends Controller
             });
         }
 
-        // Filter by movement type
-        if ($request->has('movement_type')) {
-            $query->where('movement_type', $request->movement_type);
-        }
-
-        // Filter by date range
-        if ($request->has('from_date')) {
-            $query->whereDate('created_at', '>=', $request->from_date);
-        }
+        // Filter by status
         if ($request->has('to_date')) {
             $query->whereDate('created_at', '<=', $request->to_date);
+        }
+
+        // Filter by status (Fase 4)
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
         }
 
         // Order by most recent
@@ -320,6 +317,50 @@ class InventoryMovementController extends Controller
                 'success' => false,
                 'message' => $e->getMessage(),
             ], 400);
+        }
+    }
+
+    /**
+     * Confirm a pending transfer (Admin Only)
+     */
+    public function confirm($id)
+    {
+        $user = \Illuminate\Support\Facades\Auth::user();
+        if (!in_array($user->role?->description, ['Admin', 'Gerente', 'Master'])) {
+            return response()->json(['success' => false, 'message' => 'Solo administradores pueden confirmar transferencias.'], 403);
+        }
+
+        try {
+            $movement = $this->inventoryService->confirmTransfer($id, auth()->id());
+            return response()->json([
+                'success' => true,
+                'message' => 'Transfer confirmed and stock added to destination.',
+                'data' => $movement->load(['product', 'fromWarehouse', 'toWarehouse']),
+            ]);
+        } catch (Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Reject a pending transfer (Admin Only)
+     */
+    public function reject($id)
+    {
+        $user = \Illuminate\Support\Facades\Auth::user();
+        if (!in_array($user->role?->description, ['Admin', 'Gerente', 'Master'])) {
+            return response()->json(['success' => false, 'message' => 'Solo administradores pueden rechazar transferencias.'], 403);
+        }
+
+        try {
+            $movement = $this->inventoryService->rejectTransfer($id, auth()->id());
+            return response()->json([
+                'success' => true,
+                'message' => 'Transfer rejected and stock returned to source.',
+                'data' => $movement->load(['product', 'fromWarehouse', 'toWarehouse']),
+            ]);
+        } catch (Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
     }
 }

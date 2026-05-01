@@ -376,6 +376,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/in', [InventoryMovementController::class, 'stockIn']);
         Route::post('/out', [InventoryMovementController::class, 'stockOut']);
         Route::post('/adjust', [InventoryMovementController::class, 'adjust']);
+        Route::post('/{id}/confirm', [InventoryMovementController::class, 'confirm']);
+        Route::post('/{id}/reject', [InventoryMovementController::class, 'reject']);
     });
 
     /**---------------------

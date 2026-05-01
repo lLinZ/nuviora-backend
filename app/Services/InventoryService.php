@@ -39,24 +39,14 @@ class InventoryService
             $fromInventory->quantity -= $quantity;
             $fromInventory->save();
 
-            // Increase in destination (create if doesn't exist)
-            $toInventory = Inventory::firstOrCreate(
-                [
-                    'warehouse_id' => $toWarehouseId,
-                    'product_id' => $productId,
-                ],
-                ['quantity' => 0]
-            );
-            $toInventory->quantity += $quantity;
-            $toInventory->save();
-
-            // Record movement
+            // Record movement as PENDING (Fase 4: Formalización)
             $movement = InventoryMovement::create([
                 'product_id' => $productId,
                 'from_warehouse_id' => $fromWarehouseId,
                 'to_warehouse_id' => $toWarehouseId,
                 'quantity' => $quantity,
                 'movement_type' => 'transfer',
+                'status' => 'pending',
                 'user_id' => $userId,
                 'notes' => $notes,
             ]);
@@ -64,8 +54,72 @@ class InventoryService
             // 📦 Check for orders that now have insufficient stock
             $this->checkAndHandleStockShortage($productId, $fromWarehouseId);
             
-            // 📦 Check for orders that now have stock recovered
-            $this->checkAndHandleStockRecovery($productId, $toWarehouseId);
+            // NOTE: Stock recovery at destination is handled upon confirmation
+
+            return $movement;
+        });
+    }
+
+    /**
+     * Confirm a pending transfer and increase stock in destination
+     */
+    public function confirmTransfer(int $movementId, ?int $userId = null)
+    {
+        return DB::transaction(function () use ($movementId, $userId) {
+            $movement = InventoryMovement::where('status', 'pending')
+                ->where('movement_type', 'transfer')
+                ->findOrFail($movementId);
+
+            // Increase in destination (create if doesn't exist)
+            $toInventory = Inventory::firstOrCreate(
+                [
+                    'warehouse_id' => $movement->to_warehouse_id,
+                    'product_id' => $movement->product_id,
+                ],
+                ['quantity' => 0]
+            );
+            $toInventory->quantity += $movement->quantity;
+            $toInventory->save();
+
+            // Mark as completed
+            $movement->status = 'completed';
+            if ($userId) $movement->notes .= " (Confirmado por ID: {$userId})";
+            $movement->save();
+
+            // 📦 Check for orders that now have stock recovered at destination
+            $this->checkAndHandleStockRecovery($movement->product_id, $movement->to_warehouse_id);
+
+            return $movement;
+        });
+    }
+
+    /**
+     * Reject a pending transfer and return stock to source
+     */
+    public function rejectTransfer(int $movementId, ?int $userId = null)
+    {
+        return DB::transaction(function () use ($movementId, $userId) {
+            $movement = InventoryMovement::where('status', 'pending')
+                ->where('movement_type', 'transfer')
+                ->findOrFail($movementId);
+
+            // Return stock to source
+            $fromInventory = Inventory::where('warehouse_id', $movement->from_warehouse_id)
+                ->where('product_id', $movement->product_id)
+                ->first();
+
+            if ($fromInventory) {
+                $fromInventory->quantity += $movement->quantity;
+                $fromInventory->save();
+            }
+
+            // Mark as cancelled
+            $movement->status = 'cancelled';
+            if ($userId) $movement->notes .= " (Rechazado por ID: {$userId})";
+            $movement->save();
+
+            // 📦 Check for orders that now have stock recovered at source
+            $this->checkAndHandleStockRecovery($movement->product_id, $movement->from_warehouse_id);
 
             return $movement;
         });

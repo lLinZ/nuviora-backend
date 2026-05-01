@@ -19,6 +19,7 @@ class InventoryMovement extends Model
         'reference_id',
         'user_id',
         'notes',
+        'status',
     ];
 
     protected $casts = [
