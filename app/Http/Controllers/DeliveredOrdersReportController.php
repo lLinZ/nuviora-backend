@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\Status;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -31,6 +32,14 @@ class DeliveredOrdersReportController extends Controller
                     ? trim(($order->client->first_name ?? '') . ' ' . ($order->client->last_name ?? ''))
                     : 'Sin cliente';
 
+                // Parse safely to Carbon regardless of whether Eloquent cast them or not
+                $createdAt   = $order->created_at  ? Carbon::parse($order->created_at)  : null;
+                $processedAt = $order->processed_at ? Carbon::parse($order->processed_at) : null;
+
+                $durationHours = ($createdAt && $processedAt)
+                    ? round($createdAt->diffInMinutes($processedAt) / 60, 2)
+                    : null;
+
                 return [
                     'id'             => $order->id,
                     'order_number'   => $order->name ?? $order->order_number,
@@ -40,11 +49,9 @@ class DeliveredOrdersReportController extends Controller
                     'agency_name'    => $order->agency?->names ?? 'Sin agencia',
                     'total'          => $order->current_total_price,
                     'currency'       => $order->currency ?? 'USD',
-                    'created_at'     => $order->created_at?->format('Y-m-d H:i:s'),  // Fecha y hora del pedido
-                    'processed_at'   => $order->processed_at?->format('Y-m-d H:i:s'), // Fecha y hora de entrega
-                    'duration_hours' => $order->created_at && $order->processed_at
-                        ? round($order->created_at->diffInMinutes($order->processed_at) / 60, 2)
-                        : null,
+                    'created_at'     => $createdAt?->format('Y-m-d H:i:s'),   // Fecha y hora del pedido
+                    'processed_at'   => $processedAt?->format('Y-m-d H:i:s'), // Fecha y hora de entrega
+                    'duration_hours' => $durationHours,
                 ];
             });
 
@@ -55,3 +62,4 @@ class DeliveredOrdersReportController extends Controller
         ]);
     }
 }
+
