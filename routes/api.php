@@ -79,6 +79,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // 🔥 CLIENT REQUEST: Payment reports by method
     Route::get('/reports/payments-by-method', [\App\Http\Controllers\PaymentReportController::class, 'paymentsByMethod']);
 
+    // ⏱️ Delivered Orders Hours Report (Admin only, temporary)
+    Route::get('/reports/delivered-hours', [\App\Http\Controllers\DeliveredOrdersReportController::class, 'index']);
+
     // Comprehensive Tracking Report
     Route::get('/reports/tracking-comprehensive', [OrderTrackingComprehensiveController::class, 'index']);
     Route::get('/reports/tracking-comprehensive/filters', [OrderTrackingComprehensiveController::class, 'getFilters']);
