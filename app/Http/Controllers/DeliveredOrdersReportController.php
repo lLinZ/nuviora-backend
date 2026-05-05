@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
-use App\Models\Status;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,22 +17,15 @@ class DeliveredOrdersReportController extends Controller
             return response()->json(['status' => false, 'message' => 'No autorizado.'], 403);
         }
 
-        $entregadoStatus = Status::where('description', 'Entregado')->first();
-        if (!$entregadoStatus) {
-            return response()->json(['status' => false, 'message' => 'Estado "Entregado" no encontrado.'], 404);
-        }
-
-        $orders = Order::where('status_id', $entregadoStatus->id)
-            ->with(['client', 'agent', 'agency'])
-            ->orderBy('processed_at', 'desc')
+        $orders = Order::with(['client', 'agent', 'agency', 'status'])
+            ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($order) {
                 $clientName = $order->client
                     ? trim(($order->client->first_name ?? '') . ' ' . ($order->client->last_name ?? ''))
                     : 'Sin cliente';
 
-                // Parse safely to Carbon regardless of whether Eloquent cast them or not
-                $createdAt   = $order->created_at  ? Carbon::parse($order->created_at)  : null;
+                $createdAt   = $order->created_at   ? Carbon::parse($order->created_at)   : null;
                 $processedAt = $order->processed_at ? Carbon::parse($order->processed_at) : null;
 
                 $durationHours = ($createdAt && $processedAt)
@@ -43,14 +35,15 @@ class DeliveredOrdersReportController extends Controller
                 return [
                     'id'             => $order->id,
                     'order_number'   => $order->name ?? $order->order_number,
+                    'status'         => $order->status?->description ?? 'Sin estatus',
                     'client_name'    => $clientName,
                     'client_phone'   => $order->client?->phone ?? '',
                     'agent_name'     => $order->agent?->names ?? 'Sin vendedora',
                     'agency_name'    => $order->agency?->names ?? 'Sin agencia',
                     'total'          => $order->current_total_price,
                     'currency'       => $order->currency ?? 'USD',
-                    'created_at'     => $createdAt?->format('Y-m-d H:i:s'),   // Fecha y hora del pedido
-                    'processed_at'   => $processedAt?->format('Y-m-d H:i:s'), // Fecha y hora de entrega
+                    'created_at'     => $createdAt?->format('Y-m-d H:i:s'),
+                    'processed_at'   => $processedAt?->format('Y-m-d H:i:s'),
                     'duration_hours' => $durationHours,
                 ];
             });
