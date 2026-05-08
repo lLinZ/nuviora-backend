@@ -32,29 +32,40 @@ class InventoryService
                 ->first();
 
             if (!$fromInventory || $fromInventory->quantity < $quantity) {
-                throw new Exception('Insufficient stock in source warehouse');
+                throw new Exception('Stock insuficiente en el almacén de origen');
             }
 
             // Decrease from source
             $fromInventory->quantity -= $quantity;
             $fromInventory->save();
 
-            // Record movement as PENDING (Fase 4: Formalización)
+            // Increase at destination (immediate — no 2-step confirmation needed)
+            $toInventory = Inventory::firstOrCreate(
+                [
+                    'warehouse_id' => $toWarehouseId,
+                    'product_id'   => $productId,
+                ],
+                ['quantity' => 0]
+            );
+            $toInventory->quantity += $quantity;
+            $toInventory->save();
+
+            // Record movement as COMPLETED (immediate transfer)
             $movement = InventoryMovement::create([
-                'product_id' => $productId,
+                'product_id'        => $productId,
                 'from_warehouse_id' => $fromWarehouseId,
-                'to_warehouse_id' => $toWarehouseId,
-                'quantity' => $quantity,
-                'movement_type' => 'transfer',
-                'status' => 'pending',
-                'user_id' => $userId,
-                'notes' => $notes,
+                'to_warehouse_id'   => $toWarehouseId,
+                'quantity'          => $quantity,
+                'movement_type'     => 'transfer',
+                'status'            => 'completed',
+                'user_id'           => $userId,
+                'notes'             => $notes,
             ]);
 
-            // 📦 Check for orders that now have insufficient stock
+            // Check for orders affected by the stock change at source
             $this->checkAndHandleStockShortage($productId, $fromWarehouseId);
-            
-            // NOTE: Stock recovery at destination is handled upon confirmation
+            // Check for orders that can now be fulfilled at destination
+            $this->checkAndHandleStockRecovery($productId, $toWarehouseId);
 
             return $movement;
         });

@@ -78,7 +78,10 @@ class InventoryMovementController extends Controller
             });
         }
 
-        // Filter by status
+        // Filter by date range
+        if ($request->has('from_date')) {
+            $query->whereDate('created_at', '>=', $request->from_date);
+        }
         if ($request->has('to_date')) {
             $query->whereDate('created_at', '<=', $request->to_date);
         }
@@ -86,6 +89,11 @@ class InventoryMovementController extends Controller
         // Filter by status (Fase 4)
         if ($request->has('status')) {
             $query->where('status', $request->status);
+        }
+
+        // Filter by movement_type
+        if ($request->has('movement_type')) {
+            $query->where('movement_type', $request->movement_type);
         }
 
         // Order by most recent
