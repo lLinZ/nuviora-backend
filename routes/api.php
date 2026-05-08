@@ -87,6 +87,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/tracking-comprehensive/filters', [OrderTrackingComprehensiveController::class, 'getFilters']);
     Route::get('/reports/tracking-comprehensive/cohort-metrics', [OrderTrackingComprehensiveController::class, 'cohortMetrics']);
 
+    // ── Fase 6: Valoración de Inventario ─────────────────────────────────────
+    Route::get('/reports/inventory-valuation', [\App\Http\Controllers\InventoryValuationController::class, 'valuation']);
+    Route::get('/reports/profitability', [\App\Http\Controllers\InventoryValuationController::class, 'profitability']);
+
     // Statuses
     Route::get('/statuses', [StatusController::class, 'index']);
 
