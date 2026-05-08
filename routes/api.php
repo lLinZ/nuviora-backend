@@ -254,6 +254,20 @@ Route::middleware('auth:sanctum')->group(function () {
     });
     Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']);
     Route::post('/deliverer/stock/open', [DelivererStockController::class, 'open']); // abre jornada y asigna items
+
+    // ─── FASE 5: Proveedores y Órdenes de Compra ──────────────────────────────
+    Route::apiResource('suppliers', \App\Http\Controllers\SupplierController::class);
+
+    Route::prefix('purchase-orders')->group(function () {
+        Route::get('/',              [\App\Http\Controllers\PurchaseOrderController::class, 'index']);
+        Route::post('/',             [\App\Http\Controllers\PurchaseOrderController::class, 'store']);
+        Route::get('/{id}',          [\App\Http\Controllers\PurchaseOrderController::class, 'show']);
+        Route::put('/{id}',          [\App\Http\Controllers\PurchaseOrderController::class, 'update']);
+        Route::post('/{id}/status',  [\App\Http\Controllers\PurchaseOrderController::class, 'updateStatus']);
+        Route::post('/{id}/receive', [\App\Http\Controllers\PurchaseOrderController::class, 'receive']);
+        Route::post('/{id}/cancel',  [\App\Http\Controllers\PurchaseOrderController::class, 'cancel']);
+    });
+
     Route::post('/deliverer/stock/add-items', [DelivererStockController::class, 'addItems']); // agrega más durante el día
     Route::post('/deliverer/stock/deliver', [DelivererStockController::class, 'registerDeliver']); // marcar entregado por producto
     Route::post('/deliverer/stock/close', [DelivererStockController::class, 'close']); // devolver sobrante y cerrar
