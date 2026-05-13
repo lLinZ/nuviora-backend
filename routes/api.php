@@ -91,6 +91,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/inventory-valuation', [\App\Http\Controllers\InventoryValuationController::class, 'valuation']);
     Route::get('/reports/profitability', [\App\Http\Controllers\InventoryValuationController::class, 'profitability']);
 
+    // ── Exportaciones ─────────────────────────────────────────────────────────
+    // Órdenes por rango de fechas (?from=YYYY-MM-DD&to=YYYY-MM-DD)
+    Route::get('/reports/orders-export', [\App\Http\Controllers\OrdersExportController::class, 'index']);
+    // Stock actual con lead times
+    Route::get('/reports/stock-export', [\App\Http\Controllers\StockExportController::class, 'stockExport']);
+    // Lead times por producto/almacén
+    Route::get('/product-warehouse-lead-times', [\App\Http\Controllers\StockExportController::class, 'listLeadTimes']);
+    Route::put('/product-warehouse-lead-times', [\App\Http\Controllers\StockExportController::class, 'upsertLeadTime']);
+
     // Statuses
     Route::get('/statuses', [StatusController::class, 'index']);
 
