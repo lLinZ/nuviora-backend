@@ -43,7 +43,7 @@ class EarningsService
             ->get();
 
         // 1. VENDEDORAS
-        $vendors = $this->groupEarningsByRole($allEarnings, 'vendedor', $rate);
+        $vendors = $this->groupEarningsByRole($allEarnings, ['vendedor', 'upsell'], $rate);
 
         // 2. REPARTIDORES
         $deliverers = $this->groupEarningsByRole($allEarnings, 'repartidor', $rate);
@@ -263,20 +263,22 @@ class EarningsService
     /**
      * Agrupa ganancias por usuario para un rol específico
      */
-    private function groupEarningsByRole(Collection $earnings, string $role, float $rate): Collection
+    private function groupEarningsByRole(Collection $earnings, string|array $role, float $rate): Collection
     {
-        return $earnings->filter(function ($e) use ($role) {
-                if ($e->role_type !== $role) return false;
+        $roles = is_array($role) ? $role : [$role];
+
+        return $earnings->filter(function ($e) use ($roles) {
+                if (!in_array($e->role_type, $roles)) return false;
                 // Para agencias, validamos status En Ruta
-                if ($role === 'agencia' && !$e->order?->was_shipped) return false;
+                if (in_array('agencia', $roles) && $e->role_type === 'agencia' && !$e->order?->was_shipped) return false;
                 return true;
             })
             ->groupBy('user_id')
-            ->map(function (Collection $rows) use ($rate) {
+            ->map(function (Collection $rows) use ($rate, $roles) {
                 $user = $rows->first()->user;
                 if (!$user) return null;
-                
-                return [
+
+                $result = [
                     'user_id'      => $user->id,
                     'names'        => $user->names,
                     'surnames'     => $user->surnames,
@@ -286,6 +288,20 @@ class EarningsService
                     'amount_usd'   => (float) $rows->sum('amount_usd'),
                     'amount_local' => (float) $rows->sum('amount_usd') * $rate,
                 ];
+
+                // Incluimos el detalle orden por orden para todos
+                $result['order_details'] = $rows->map(function ($e) use ($rate) {
+                    return [
+                        'order_id'     => $e->order_id,
+                        'order_name'   => $e->order?->name ?? "#{$e->order_id}",
+                        'earning_date' => $e->earning_date,
+                        'role_type'    => $e->role_type,
+                        'amount_usd'   => (float) $e->amount_usd,
+                        'amount_local' => (float) $e->amount_usd * $rate,
+                    ];
+                })->values()->toArray();
+
+                return $result;
             })
             ->filter()
             ->values();
