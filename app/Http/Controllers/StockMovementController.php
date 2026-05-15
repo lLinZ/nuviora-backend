@@ -89,25 +89,28 @@ class StockMovementController extends Controller
 
         // 🔥 Actualizar sizes_stock en la bodega principal si vienen tallas
         if (!empty($data['sizes']) && is_array($data['sizes'])) {
-            $inv = \App\Models\Inventory::whereHas('warehouse', fn($q) => $q->where('is_main', true))
-                ->where('product_id', $product->id)
-                ->first();
+            $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
+            $warehouseId = $mainWarehouse ? $mainWarehouse->id : 1;
 
-            if ($inv) {
-                $sizesStock = $inv->sizes_stock ?? [];
-                if (!is_array($sizesStock)) $sizesStock = [];
+            $inv = \App\Models\Inventory::firstOrCreate(
+                ['product_id' => $product->id, 'warehouse_id' => $warehouseId],
+                ['quantity' => 0, 'sizes_stock' => []]
+            );
 
-                foreach ($data['sizes'] as $size => $qty) {
-                    $qty = (int) $qty;
-                    if ($data['type'] === 'IN') {
-                        $sizesStock[$size] = ($sizesStock[$size] ?? 0) + $qty;
-                    } else {
-                        $sizesStock[$size] = ($sizesStock[$size] ?? 0) - $qty;
-                    }
+            $sizesStock = $inv->sizes_stock ?? [];
+            if (!is_array($sizesStock)) $sizesStock = [];
+
+            foreach ($data['sizes'] as $size => $qty) {
+                $qty = (int) $qty;
+                if ($data['type'] === 'IN') {
+                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) + $qty;
+                } else {
+                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) - $qty;
                 }
-                $inv->sizes_stock = $sizesStock;
-                $inv->save();
             }
+            $inv->sizes_stock = $sizesStock;
+            $inv->quantity = array_sum($sizesStock); // Sincronizar total
+            $inv->save();
         }
 
         $movement = StockMovement::create([
