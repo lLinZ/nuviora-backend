@@ -1360,7 +1360,7 @@ class OrderController extends Controller
     public function assignAgency(Request $request, Order $order)
     {
         $request->validate([
-            'agency_id' => 'required|exists:users,id',
+            'agency_id' => 'required|exists:warehouses,id',
         ]);
 
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
@@ -1368,21 +1368,18 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
 
-        $agency = User::findOrFail($request->agency_id);
+        $agency = Warehouse::findOrFail($request->agency_id);
 
-        if ($agency->role->description !== 'Agencia') {
-            return response()->json([
-                'status' => false,
-                'message' => 'El usuario seleccionado no es una agencia válida'
-            ], 422);
-        }
-
-        // Buscar el status "Asignar a agencia"
+        // Buscar el status "Asignar a agencia" o similar
         $statusId = Status::where('description', '=', 'Asignar a agencia')->first()?->id;
 
-        $order->status_id = $statusId;
+        if ($statusId) {
+            $order->status_id = $statusId;
+        }
+
         $order->agency_id = $agency->id;
-        
+        $order->warehouse_id = $agency->id; // Sincronizar con el nuevo campo si existe
+
         // ⏱️ TIMER: Iniciar cronómetro si no existe
         if (!$order->received_at) {
             $order->received_at = now();
@@ -1391,21 +1388,19 @@ class OrderController extends Controller
         $order->save();
 
         // 📦 Immediately sync stock status after agency assignment
-        $order->syncStockStatus();
-
-        // 🔔 Notify Agency
-        try {
-            $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
-        } catch (\Exception $e) {
-            \Log::error('Error sending notification: ' . $e->getMessage());
+        if (method_exists($order, 'syncStockStatus')) {
+            $order->syncStockStatus();
         }
 
         // 📡 BROADCAST EVENT: Ensure frontend updates for agency
-        event(new \App\Events\OrderUpdated($order));
+        if (class_exists('\App\Events\OrderUpdated')) {
+            event(new \App\Events\OrderUpdated($order));
+        }
 
         return response()->json([
             'status' => true,
-            'order' => $order->load('agency', 'status', 'client'),
+            'message' => 'Orden asignada a la agencia correctamente',
+            'order' => $order->load(['agency', 'warehouse'])
         ]);
     }
     public function addUpsell(Request $request, Order $order)
