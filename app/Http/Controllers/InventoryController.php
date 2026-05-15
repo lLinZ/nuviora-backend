@@ -48,10 +48,12 @@ class InventoryController extends Controller
                 
                 $flattened[] = [
                     'product_id'   => $inv->product_id,
-                    'product'      => $inv->product->toArray(),
+                    'product'      => $inv->product,
                     'warehouse_id' => $inv->warehouse_id,
                     'warehouse'    => $inv->warehouse ? $inv->warehouse->toArray() : null,
-                    'quantity'     => $inv->quantity
+                    'quantity'     => $inv->quantity,
+                    'sizes_stock'  => $inv->sizes_stock ?? [],
+                    'available_sizes' => $inv->product->available_sizes ?? []
                 ];
                 $processedProductIds[] = $inv->product_id;
             }
@@ -62,13 +64,15 @@ class InventoryController extends Controller
                 if (!in_array($p->id, $processedProductIds)) {
                     $flattened[] = [
                         'product_id'   => $p->id,
-                        'product'      => $p->toArray(),
+                        'product'      => $p,
                         'warehouse_id' => 0,
                         'warehouse'    => [
                             'name' => 'Sin Stock (General)',
                             'code' => 'N/A'
                         ],
-                        'quantity'     => 0
+                        'quantity'     => 0,
+                        'sizes_stock'  => [],
+                        'available_sizes' => $p->available_sizes ?? []
                     ];
                 }
             }
@@ -81,14 +85,15 @@ class InventoryController extends Controller
 
         $mappedInventory = $rawInventory->map(function ($inv) {
             return [
-                'id'              => $inv->product_id,
+                'id'              => $inv->id,
                 'inventory_id'    => $inv->id,
                 'product_id'      => $inv->product_id,
-                'name'            => $inv->product->name ?? $inv->product->title,
-                'sku'             => $inv->product->sku,
+                'product'         => $inv->product,
+                'name'            => $inv->product->name ?? $inv->product->title ?? 'Sin nombre',
+                'sku'             => $inv->product->sku ?? 'S/SKU',
                 'stock_available' => $inv->quantity,
-                'sizes_stock'     => $inv->sizes_stock ?? [],          // 🔥 Desglose por talla en este almacén
-                'available_sizes' => $inv->product->available_sizes ?? [], // 🔥 Tallas conocidas del producto
+                'sizes_stock'     => $inv->sizes_stock ?? [],
+                'available_sizes' => $inv->product->available_sizes ?? [],
                 'warehouse_name'  => $inv->warehouse->name ?? 'N/A',
             ];
         });
