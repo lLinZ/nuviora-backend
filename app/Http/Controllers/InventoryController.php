@@ -53,7 +53,7 @@ class InventoryController extends Controller
                     'warehouse'    => $inv->warehouse ? $inv->warehouse->toArray() : null,
                     'quantity'     => $inv->quantity,
                     'sizes_stock'  => $inv->sizes_stock ?? [],
-                    'available_sizes' => $inv->product->available_sizes ?? []
+                    'available_sizes' => $inv->product?->available_sizes ?? []
                 ];
                 $processedProductIds[] = $inv->product_id;
             }
@@ -89,12 +89,12 @@ class InventoryController extends Controller
                 'inventory_id'    => $inv->id,
                 'product_id'      => $inv->product_id,
                 'product'         => $inv->product,
-                'name'            => $inv->product->name ?? $inv->product->title ?? 'Sin nombre',
-                'sku'             => $inv->product->sku ?? 'S/SKU',
+                'name'            => $inv->product?->name ?? $inv->product?->title ?? 'Sin nombre',
+                'sku'             => $inv->product?->sku ?? 'S/SKU',
                 'stock_available' => $inv->quantity,
                 'sizes_stock'     => $inv->sizes_stock ?? [],
-                'available_sizes' => $inv->product->available_sizes ?? [],
-                'warehouse_name'  => $inv->warehouse->name ?? 'N/A',
+                'available_sizes' => $inv->product?->available_sizes ?? [],
+                'warehouse_name'  => $inv->warehouse?->name ?? 'N/A',
             ];
         });
 
