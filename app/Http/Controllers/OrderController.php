@@ -1378,7 +1378,6 @@ class OrderController extends Controller
         }
 
         $order->agency_id = $agency->id;
-        $order->warehouse_id = $agency->id; // Sincronizar con el nuevo campo si existe
 
         // ⏱️ TIMER: Iniciar cronómetro si no existe
         if (!$order->received_at) {
