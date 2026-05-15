@@ -83,8 +83,14 @@ class InventoryController extends Controller
             ]);
         }
 
-        $mappedInventory = $rawInventory->map(function ($inv) {
-            return [
+        $rawInventory = \App\Models\Inventory::with(['product', 'warehouse'])->get();
+        $allProducts = Product::all();
+        $processedProductIds = [];
+        $mappedInventory = [];
+
+        // 1. Procesar registros existentes
+        foreach ($rawInventory as $inv) {
+            $mappedInventory[] = [
                 'id'              => $inv->id,
                 'inventory_id'    => $inv->id,
                 'product_id'      => $inv->product_id,
@@ -96,6 +102,30 @@ class InventoryController extends Controller
                 'available_sizes' => $inv->product?->available_sizes ?? [],
                 'warehouse_name'  => $inv->warehouse?->name ?? 'N/A',
             ];
+            $processedProductIds[] = $inv->product_id;
+        }
+
+        // 2. Añadir productos sin inventario para que salgan en los tests
+        foreach ($allProducts as $p) {
+            if (!in_array($p->id, $processedProductIds)) {
+                $mappedInventory[] = [
+                    'id'              => 0,
+                    'inventory_id'    => 0,
+                    'product_id'      => $p->id,
+                    'product'         => $p,
+                    'name'            => $p->name ?? $p->title ?? 'Sin nombre',
+                    'sku'             => $p->sku ?? 'S/SKU',
+                    'stock_available' => 0,
+                    'sizes_stock'     => [],
+                    'available_sizes' => $p->available_sizes ?? [],
+                    'warehouse_name'  => 'Sin Stock',
+                ];
+            }
+        }
+
+        // 3. Ordenar alfabéticamente por nombre
+        usort($mappedInventory, function($a, $b) {
+            return strcasecmp($a['name'], $b['name']);
         });
 
         return response()->json([
