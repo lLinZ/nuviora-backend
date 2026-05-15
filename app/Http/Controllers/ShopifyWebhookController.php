@@ -73,6 +73,21 @@ class ShopifyWebhookController extends Controller
         // Extraer dirección para ciudad/provincia
         $addressSource = $customerData['default_address'] ?? $shipping ?? $billing ?? [];
 
+        // ⚠️ Fallback para formularios COD personalizados (Releasit, Dropi, etc.) que envían datos en note_attributes
+        $noteAttributes = collect($orderData['note_attributes'] ?? []);
+        
+        $customAddress = $noteAttributes->firstWhere('name', 'Dirección de entrega (sea detallado)')['value']
+            ?? $noteAttributes->firstWhere('name', 'Dirección de envío')['value'] 
+            ?? $noteAttributes->firstWhere('name', 'Dirección')['value'] 
+            ?? $noteAttributes->firstWhere('name', 'address')['value'] 
+            ?? null;
+            
+        $customReference = $noteAttributes->firstWhere('name', 'Puntos de referencia')['value']
+            ?? $noteAttributes->firstWhere('name', 'Punto de referencia')['value'] 
+            ?? $noteAttributes->firstWhere('name', 'Referencia')['value'] 
+            ?? $noteAttributes->firstWhere('name', 'reference')['value'] 
+            ?? null;
+
         $client = Client::updateOrCreate(
             ['customer_id' => $finalCustomerId],
             [
@@ -85,8 +100,8 @@ class ShopifyWebhookController extends Controller
                 'country_code'    => $addressSource['country_code'] ?? null,
                 'province'        => $addressSource['province'] ?? null,
                 'city'            => $addressSource['province'] ?? null,
-                'address1'        => $addressSource['address1'] ?? null,
-                'address2'        => $addressSource['address2'] ?? null,
+                'address1'        => $addressSource['address1'] ?? $customAddress ?? null,
+                'address2'        => $addressSource['address2'] ?? $customReference ?? null,
             ]
         );
 
