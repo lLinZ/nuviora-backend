@@ -186,9 +186,20 @@ class ShopifyWebhookController extends Controller
                 ]);
             }
 
-            // Buscar producto por nombre (case-insensitive)
+            // Buscar producto usando el nombre completo (que incluye la variante/talla) en lugar del título base
+            // Ej: "CircuFlex - S/M" en vez de solo "CircuFlex"
+            $productName = trim($item['name'] ?? $item['title']);
             $productTitle = trim($item['title']);
-            $existingProduct = \App\Models\Product::whereRaw('LOWER(title) = ?', [strtolower($productTitle)])->first();
+            
+            // 1. Intentar buscar por ID de variante exacto
+            $existingProduct = \App\Models\Product::where('product_id', $item['product_id'])
+                ->where('variant_id', $item['variant_id'] ?? null)
+                ->first();
+
+            // 2. Si no existe por ID, buscar por el nombre completo
+            if (!$existingProduct) {
+                $existingProduct = \App\Models\Product::whereRaw('LOWER(name) = ?', [strtolower($productName)])->first();
+            }
 
             // Precio seguro: solo redondear si viene un valor positivo del webhook
             $safePrice = (isset($item['price']) && $item['price'] > 0) ? round($item['price']) : null;
@@ -198,7 +209,8 @@ class ShopifyWebhookController extends Controller
                 $updateData = [
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
-                    'name'       => $item['name'] ?? null,
+                    'title'      => $productTitle,
+                    'name'       => $productName,
                     'sku'        => $item['sku'] ?? null,
                 ];
                 // Solo actualizar precio si viene un valor válido (evita sobreescribir con 0)
@@ -212,12 +224,12 @@ class ShopifyWebhookController extends Controller
                 $existingProduct->update($updateData);
                 $product = $existingProduct;
             } else {
-                // Crear nuevo producto
+                // Crear nuevo producto específico para esta variante/talla
                 $product = \App\Models\Product::create([
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
                     'title'      => $productTitle,
-                    'name'       => $item['name'] ?? null,
+                    'name'       => $productName,
                     'price'      => $safePrice ?? 0,
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
