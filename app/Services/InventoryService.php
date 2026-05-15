@@ -146,9 +146,10 @@ class InventoryService
         ?int $userId = null,
         ?string $notes = null,
         ?string $referenceType = null,
-        ?int $referenceId = null
+        ?int $referenceId = null,
+        ?array $sizes = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId) {
+        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $sizes) {
             // Validate warehouse exists and is active
             $warehouse = Warehouse::active()->findOrFail($warehouseId);
 
@@ -161,6 +162,17 @@ class InventoryService
                 ['quantity' => 0]
             );
             $inventory->quantity += $quantity;
+
+            // 🔥 Actualizar desglose por tallas
+            if (!empty($sizes)) {
+                $sizesStock = $inventory->sizes_stock ?? [];
+                if (!is_array($sizesStock)) $sizesStock = [];
+                foreach ($sizes as $size => $qty) {
+                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) + (int)$qty;
+                }
+                $inventory->sizes_stock = $sizesStock;
+            }
+
             $inventory->save();
 
             // Record movement
@@ -193,9 +205,10 @@ class InventoryService
         ?int $userId = null,
         ?string $notes = null,
         ?string $referenceType = null,
-        ?int $referenceId = null
+        ?int $referenceId = null,
+        ?array $sizes = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId) {
+        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $sizes) {
             // Validate warehouse exists and is active
             $warehouse = Warehouse::active()->findOrFail($warehouseId);
 
@@ -210,6 +223,17 @@ class InventoryService
 
             // Decrease inventory
             $inventory->quantity -= $quantity;
+
+            // 🔥 Actualizar desglose por tallas
+            if (!empty($sizes)) {
+                $sizesStock = $inventory->sizes_stock ?? [];
+                if (!is_array($sizesStock)) $sizesStock = [];
+                foreach ($sizes as $size => $qty) {
+                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) - (int)$qty;
+                }
+                $inventory->sizes_stock = $sizesStock;
+            }
+
             $inventory->save();
 
             // Record movement
@@ -240,9 +264,10 @@ class InventoryService
         int $warehouseId,
         int $newQuantity,
         ?int $userId = null,
-        ?string $notes = null
+        ?string $notes = null,
+        ?array $sizes = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $newQuantity, $userId, $notes) {
+        return DB::transaction(function () use ($productId, $warehouseId, $newQuantity, $userId, $notes, $sizes) {
             // Validate warehouse exists and is active
             $warehouse = Warehouse::active()->findOrFail($warehouseId);
 
@@ -260,6 +285,12 @@ class InventoryService
 
             // Update inventory
             $inventory->quantity = $newQuantity;
+            
+            // 🔥 Ajuste absoluto de tallas (sobrescribe)
+            if (!empty($sizes)) {
+                $inventory->sizes_stock = $sizes;
+            }
+
             $inventory->save();
 
             // Record movement

@@ -34,6 +34,7 @@ class StockMovementController extends Controller
             'quantity'     => ['required', 'integer', 'min:1'],
             'deliverer_id' => ['nullable', 'exists:users,id'],
             'order_id'     => ['nullable', 'exists:orders,id'],
+            'sizes'        => ['nullable', 'array'],   // 🔥 {"S/M": 3, "X/XL": 7}
         ]);
 
         // 🔒 Reglas por tipo y rol
@@ -86,8 +87,28 @@ class StockMovementController extends Controller
         // (Opcional) validar que el producto exista y no se vaya a negativo
         $product = Product::findOrFail($data['product_id']);
 
-        // Aquí podrías chequear stock global / stock de repartidor antes de permitir el movimiento
-        // de momento solo creamos el registro de movimiento.
+        // 🔥 Actualizar sizes_stock en la bodega principal si vienen tallas
+        if (!empty($data['sizes']) && is_array($data['sizes'])) {
+            $inv = \App\Models\Inventory::whereHas('warehouse', fn($q) => $q->where('is_main', true))
+                ->where('product_id', $product->id)
+                ->first();
+
+            if ($inv) {
+                $sizesStock = $inv->sizes_stock ?? [];
+                if (!is_array($sizesStock)) $sizesStock = [];
+
+                foreach ($data['sizes'] as $size => $qty) {
+                    $qty = (int) $qty;
+                    if ($data['type'] === 'IN') {
+                        $sizesStock[$size] = ($sizesStock[$size] ?? 0) + $qty;
+                    } else {
+                        $sizesStock[$size] = ($sizesStock[$size] ?? 0) - $qty;
+                    }
+                }
+                $inv->sizes_stock = $sizesStock;
+                $inv->save();
+            }
+        }
 
         $movement = StockMovement::create([
             'product_id'   => $data['product_id'],

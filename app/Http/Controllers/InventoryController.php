@@ -82,10 +82,13 @@ class InventoryController extends Controller
         $mappedInventory = $rawInventory->map(function ($inv) {
             return [
                 'id'              => $inv->product_id,
+                'inventory_id'    => $inv->id,
                 'product_id'      => $inv->product_id,
                 'name'            => $inv->product->name ?? $inv->product->title,
                 'sku'             => $inv->product->sku,
                 'stock_available' => $inv->quantity,
+                'sizes_stock'     => $inv->sizes_stock ?? [],          // 🔥 Desglose por talla en este almacén
+                'available_sizes' => $inv->product->available_sizes ?? [], // 🔥 Tallas conocidas del producto
                 'warehouse_name'  => $inv->warehouse->name ?? 'N/A',
             ];
         });

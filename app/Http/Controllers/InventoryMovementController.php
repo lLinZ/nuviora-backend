@@ -197,6 +197,7 @@ class InventoryMovementController extends Controller
             'reference_type' => 'nullable|string',
             'reference_id' => 'nullable|integer',
             'notes' => 'nullable|string',
+            'sizes' => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -218,7 +219,8 @@ class InventoryMovementController extends Controller
                 auth()->id(),
                 $request->notes,
                 $request->reference_type,
-                $request->reference_id
+                $request->reference_id,
+                $request->sizes
             );
 
             return response()->json([
@@ -246,6 +248,7 @@ class InventoryMovementController extends Controller
             'reference_type' => 'nullable|string',
             'reference_id' => 'nullable|integer',
             'notes' => 'nullable|string',
+            'sizes' => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -267,7 +270,8 @@ class InventoryMovementController extends Controller
                 auth()->id(),
                 $request->notes,
                 $request->reference_type,
-                $request->reference_id
+                $request->reference_id,
+                $request->sizes
             );
 
             return response()->json([
@@ -293,6 +297,7 @@ class InventoryMovementController extends Controller
             'warehouse_id' => 'required|exists:warehouses,id',
             'new_quantity' => 'required|integer|min:0',
             'notes' => 'nullable|string',
+            'sizes' => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -312,7 +317,8 @@ class InventoryMovementController extends Controller
                 $request->warehouse_id,
                 $request->new_quantity,
                 auth()->id(),
-                $request->notes
+                $request->notes,
+                $request->sizes
             );
 
             return response()->json([
