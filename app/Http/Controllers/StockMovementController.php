@@ -87,10 +87,14 @@ class StockMovementController extends Controller
         // (Opcional) validar que el producto exista y no se vaya a negativo
         $product = Product::findOrFail($data['product_id']);
 
-        // 🔥 Actualizar sizes_stock en la bodega principal si vienen tallas
+        // 🔥 Actualizar sizes_stock en la bodega seleccionada si vienen tallas
         if (!empty($data['sizes']) && is_array($data['sizes'])) {
-            $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
-            $warehouseId = $mainWarehouse ? $mainWarehouse->id : 1;
+            $warehouseId = $data['warehouse_id'] ?? null;
+            
+            if (!$warehouseId) {
+                $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
+                $warehouseId = $mainWarehouse ? $mainWarehouse->id : 1;
+            }
 
             $inv = \App\Models\Inventory::firstOrCreate(
                 ['product_id' => $product->id, 'warehouse_id' => $warehouseId],

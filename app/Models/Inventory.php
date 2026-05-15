@@ -11,11 +11,21 @@ class Inventory extends Model
         'product_id',
         'quantity',
         'reserved_stock',
-        'reserved_stock',
         'defective_stock',
         'blocked_stock',
         'sizes_stock',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::saving(function ($inventory) {
+            if (isset($inventory->sizes_stock) && is_array($inventory->sizes_stock)) {
+                $inventory->quantity = array_sum($inventory->sizes_stock);
+            }
+        });
+    }
 
     protected $casts = [
         'quantity'        => 'integer',

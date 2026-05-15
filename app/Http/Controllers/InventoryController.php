@@ -51,7 +51,7 @@ class InventoryController extends Controller
                     'product'      => $inv->product,
                     'warehouse_id' => $inv->warehouse_id,
                     'warehouse'    => $inv->warehouse ? $inv->warehouse->toArray() : null,
-                    'quantity'     => $inv->quantity,
+                    'quantity'     => !empty($inv->sizes_stock) ? array_sum($inv->sizes_stock) : $inv->quantity,
                     'sizes_stock'  => $inv->sizes_stock ?? [],
                     'available_sizes' => $inv->product?->available_sizes ?? []
                 ];
