@@ -205,23 +205,27 @@ class ShopifyWebhookController extends Controller
                       ?? null;
             }
 
-            // Si encontró una talla y aún no está en el nombre del producto, se la pegamos
+            // Si encontró una talla personalizada y aún no está en el nombre del producto, se la pegamos
             $productName = $baseName;
             if ($talla && stripos($productName, $talla) === false) {
                 $productName .= " - " . $talla;
             }
+            
+            // 🔥 NATIVO SHOPIFY: Extraer la variante oficial de Shopify (si existe y no es el default)
+            $variantTitle = isset($item['variant_title']) && $item['variant_title'] !== '' && stripos($item['variant_title'], 'Default') === false 
+                ? trim($item['variant_title']) 
+                : null;
+                
+            // Si encontró una variante oficial y no está en el nombre, se la pegamos
+            if ($variantTitle && stripos($productName, $variantTitle) === false) {
+                $productName .= " - " . $variantTitle;
+            }
 
             $productTitle = trim($item['title']);
             
-            // 1. Intentar buscar por ID de variante exacto
-            $existingProduct = \App\Models\Product::where('product_id', $item['product_id'])
-                ->where('variant_id', $item['variant_id'] ?? null)
-                ->first();
-
-            // 2. Si no existe por ID, buscar por el nombre completo
-            if (!$existingProduct) {
-                $existingProduct = \App\Models\Product::whereRaw('LOWER(name) = ?', [strtolower($productName)])->first();
-            }
+            // 1. SIEMPRE buscar el producto original por su TITULO BASE (Para no dañar el inventario de Fran)
+            $productTitle = trim($item['title']);
+            $existingProduct = \App\Models\Product::whereRaw('LOWER(title) = ?', [strtolower($productTitle)])->first();
 
             // Precio seguro: solo redondear si viene un valor positivo del webhook
             $safePrice = (isset($item['price']) && $item['price'] > 0) ? round($item['price']) : null;
@@ -232,7 +236,7 @@ class ShopifyWebhookController extends Controller
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
                     'title'      => $productTitle,
-                    'name'       => $productName,
+                    'name'       => $item['name'] ?? null,
                     'sku'        => $item['sku'] ?? null,
                 ];
                 // Solo actualizar precio si viene un valor válido (evita sobreescribir con 0)
@@ -246,12 +250,12 @@ class ShopifyWebhookController extends Controller
                 $existingProduct->update($updateData);
                 $product = $existingProduct;
             } else {
-                // Crear nuevo producto específico para esta variante/talla
+                // Crear nuevo producto genérico sin dividir por talla
                 $product = \App\Models\Product::create([
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
                     'title'      => $productTitle,
-                    'name'       => $productName,
+                    'name'       => $item['name'] ?? null,
                     'price'      => $safePrice ?? 0,
                     'sku'        => $item['sku'] ?? null,
                     'image'      => $imageUrl,
@@ -272,7 +276,7 @@ class ShopifyWebhookController extends Controller
                     'price'          => $orderProductPrice,
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl ?? $product->image, // Preservar imagen existente si no se obtuvo nueva
-                    'showable_name'  => $product->showable_name,
+                    'showable_name'  => $productName, // 🔥 Guardamos la talla solo a nivel de orden para que la vendedora la vea, sin afectar el inventario maestro
                 ]
             );
         }
