@@ -186,9 +186,31 @@ class ShopifyWebhookController extends Controller
                 ]);
             }
 
-            // Buscar producto usando el nombre completo (que incluye la variante/talla) en lugar del título base
-            // Ej: "CircuFlex - S/M" en vez de solo "CircuFlex"
-            $productName = trim($item['name'] ?? $item['title']);
+            // Buscar producto usando el nombre completo
+            $baseName = trim($item['name'] ?? $item['title']);
+            
+            // 🔥 Extraer la talla si el formulario la manda como propiedad personalizada o atributo adicional
+            $talla = null;
+            // 1. Buscar en propiedades del producto (line item properties)
+            $properties = collect($item['properties'] ?? []);
+            $talla = $properties->firstWhere('name', 'Talla')['value'] 
+                  ?? $properties->firstWhere('name', 'talla')['value'] 
+                  ?? null;
+                  
+            // 2. Si no está en el producto, buscar en los atributos de la orden (note_attributes)
+            if (!$talla) {
+                $noteAttributes = collect($orderData['note_attributes'] ?? []);
+                $talla = $noteAttributes->firstWhere('name', 'Talla')['value'] 
+                      ?? $noteAttributes->firstWhere('name', 'talla')['value'] 
+                      ?? null;
+            }
+
+            // Si encontró una talla y aún no está en el nombre del producto, se la pegamos
+            $productName = $baseName;
+            if ($talla && stripos($productName, $talla) === false) {
+                $productName .= " - " . $talla;
+            }
+
             $productTitle = trim($item['title']);
             
             // 1. Intentar buscar por ID de variante exacto
