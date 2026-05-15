@@ -234,6 +234,38 @@ class WhatsAppWebhookController extends Controller
             $msg->refresh()->load('client', 'order');
 
             event(new \App\Events\WhatsappMessageReceived($msg));
+            
+            // 🚀 BRIDGE TO n8n: Notify any response to n8n for custom automations
+            $n8nWebhook = env('N8N_WH_WHATSAPP');
+            if ($n8nWebhook) {
+                try {
+                    \Illuminate\Support\Facades\Http::timeout(5)->post($n8nWebhook, [
+                        'source'       => 'laravel_whatsapp_bridge',
+                        'message_id'   => $messageId,
+                        'from'         => $from,
+                        'body'         => $body,
+                        'type'         => $type,
+                        'received_at'  => $receivedAt->toDateTimeString(),
+                        'client'       => [
+                            'id'    => $client->id,
+                            'name'  => $client->first_name . ' ' . $client->last_name,
+                            'phone' => $client->phone,
+                        ],
+                        'order' => $order ? [
+                            'id'           => $order->id,
+                            'order_number' => $order->order_number,
+                            'status'       => $order->status?->description,
+                        ] : null,
+                        'agent' => $client->agent_id ? [
+                            'id'   => $client->agent_id,
+                            'name' => $client->agent?->name,
+                        ] : null,
+                        'raw_payload'  => $payload
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning("n8n_BRIDGE_ERROR: " . $e->getMessage());
+                }
+            }
 
             return response()->json(['status' => 'success']);
 
