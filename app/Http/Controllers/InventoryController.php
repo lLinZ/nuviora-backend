@@ -95,7 +95,7 @@ class InventoryController extends Controller
                 'inventory_id'    => $inv->id,
                 'product_id'      => $inv->product_id,
                 'product'         => $inv->product,
-                'name'            => $inv->product?->title ?? $inv->product?->name ?? 'Sin nombre',
+                'name'            => $inv->product?->name ?? 'Sin nombre',
                 'sku'             => $inv->product?->sku ?? 'S/SKU',
                 'stock_available' => $inv->quantity,
                 'sizes_stock'     => $inv->sizes_stock ?? [],
