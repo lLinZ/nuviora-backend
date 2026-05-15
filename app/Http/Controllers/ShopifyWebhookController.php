@@ -230,6 +230,9 @@ class ShopifyWebhookController extends Controller
             // Precio seguro: solo redondear si viene un valor positivo del webhook
             $safePrice = (isset($item['price']) && $item['price'] > 0) ? round($item['price']) : null;
 
+            // Determinar la talla final (ya sea de variant_title o de propiedad/nota)
+            $finalSize = $variantTitle ?: $talla;
+
             if ($existingProduct) {
                 // Actualizar producto existente
                 $updateData = [
@@ -239,6 +242,19 @@ class ShopifyWebhookController extends Controller
                     'name'       => $item['name'] ?? null,
                     'sku'        => $item['sku'] ?? null,
                 ];
+                
+                // Actualizar available_sizes si hay una talla nueva
+                if ($finalSize) {
+                    $sizes = is_string($existingProduct->available_sizes) 
+                        ? json_decode($existingProduct->available_sizes, true) 
+                        : ($existingProduct->available_sizes ?? []);
+                    if (!is_array($sizes)) $sizes = [];
+                    if (!in_array($finalSize, $sizes)) {
+                        $sizes[] = $finalSize;
+                        $updateData['available_sizes'] = $sizes;
+                    }
+                }
+
                 // Solo actualizar precio si viene un valor válido (evita sobreescribir con 0)
                 if ($safePrice !== null) {
                     $updateData['price'] = $safePrice;
@@ -252,13 +268,14 @@ class ShopifyWebhookController extends Controller
             } else {
                 // Crear nuevo producto genérico sin dividir por talla
                 $product = \App\Models\Product::create([
-                    'product_id' => $item['product_id'],
-                    'variant_id' => $item['variant_id'] ?? null,
-                    'title'      => $productTitle,
-                    'name'       => $item['name'] ?? null,
-                    'price'      => $safePrice ?? 0,
-                    'sku'        => $item['sku'] ?? null,
-                    'image'      => $imageUrl,
+                    'product_id'      => $item['product_id'],
+                    'variant_id'      => $item['variant_id'] ?? null,
+                    'title'           => $productTitle,
+                    'name'            => $item['name'] ?? null,
+                    'price'           => $safePrice ?? 0,
+                    'sku'             => $item['sku'] ?? null,
+                    'image'           => $imageUrl,
+                    'available_sizes' => $finalSize ? [$finalSize] : null,
                 ]);
             }
 
@@ -277,6 +294,7 @@ class ShopifyWebhookController extends Controller
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl ?? $product->image, // Preservar imagen existente si no se obtuvo nueva
                     'showable_name'  => $productName, // 🔥 Guardamos la talla solo a nivel de orden para que la vendedora la vea, sin afectar el inventario maestro
+                    'size'           => $finalSize,   // Guardamos la talla exacta para el descuento de inventario
                 ]
             );
         }

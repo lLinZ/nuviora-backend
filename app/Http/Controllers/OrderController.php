@@ -643,7 +643,29 @@ class OrderController extends Controller
                             ->first();
 
                         if ($inv) {
+                            // 1. Descuento General
                             $inv->decrement('quantity', $op->quantity);
+                            
+                            // 2. Descuento Específico por Talla (Sub-Variant Matrix)
+                            if ($op->size) {
+                                // Obtener array fresco del inventario actualizado
+                                $currentInv = \App\Models\Inventory::find($inv->id);
+                                $sizesStock = is_string($currentInv->sizes_stock) 
+                                    ? json_decode($currentInv->sizes_stock, true) 
+                                    : ($currentInv->sizes_stock ?? []);
+                                
+                                if (!is_array($sizesStock)) $sizesStock = [];
+                                
+                                // Si la talla existe en el stock, la descontamos (si no, la forzamos negativo para auditoría)
+                                if (isset($sizesStock[$op->size])) {
+                                    $sizesStock[$op->size] -= $op->quantity;
+                                } else {
+                                    $sizesStock[$op->size] = -$op->quantity;
+                                }
+                                
+                                $currentInv->sizes_stock = $sizesStock;
+                                $currentInv->save();
+                            }
                             
                             $movementNote = ($order->is_return || $order->is_exchange) 
                                 ? "Devolución/Cambio - Reserva por asignación - Orden #{$order->name}" 
@@ -680,10 +702,30 @@ class OrderController extends Controller
                         ->where('warehouse_id', '=', $warehouseId)
                         ->first();
 
-                    if ($inv) {
-                        $inv->increment('quantity', $op->quantity);
-                        
-                        InventoryMovement::create([
+                        if ($inv) {
+                            // 1. Devolución General
+                            $inv->increment('quantity', $op->quantity);
+                            
+                            // 2. Devolución Específica por Talla (Sub-Variant Matrix)
+                            if ($op->size) {
+                                $currentInv = \App\Models\Inventory::find($inv->id);
+                                $sizesStock = is_string($currentInv->sizes_stock) 
+                                    ? json_decode($currentInv->sizes_stock, true) 
+                                    : ($currentInv->sizes_stock ?? []);
+                                
+                                if (!is_array($sizesStock)) $sizesStock = [];
+                                
+                                if (isset($sizesStock[$op->size])) {
+                                    $sizesStock[$op->size] += $op->quantity;
+                                } else {
+                                    $sizesStock[$op->size] = $op->quantity;
+                                }
+                                
+                                $currentInv->sizes_stock = $sizesStock;
+                                $currentInv->save();
+                            }
+                            
+                            InventoryMovement::create([
                             'product_id' => $op->product_id,
                             'from_warehouse_id' => null,
                             'to_warehouse_id' => $warehouseId,

@@ -20,6 +20,7 @@ class OrderProduct extends Model // 👈 mejor singular
         'quantity',
         'image',
         'description',
+        'size',
         'is_upsell',
         'upsell_user_id'
     ];

@@ -11,8 +11,10 @@ class Inventory extends Model
         'product_id',
         'quantity',
         'reserved_stock',
+        'reserved_stock',
         'defective_stock',
         'blocked_stock',
+        'sizes_stock',
     ];
 
     protected $casts = [
@@ -20,6 +22,7 @@ class Inventory extends Model
         'reserved_stock'  => 'integer',
         'defective_stock' => 'integer',
         'blocked_stock'   => 'integer',
+        'sizes_stock'     => 'array',
     ];
 
     protected $appends = ['useful_stock'];

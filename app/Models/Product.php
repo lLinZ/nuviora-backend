@@ -68,9 +68,14 @@ class Product extends Model
         'sku',
         'image',
         'description',
+        'available_sizes',
         // SCM fields
         'lead_time_days',
         'defect_percentage',
+    ];
+
+    protected $casts = [
+        'available_sizes' => 'array',
     ];
 
     protected $appends = ['stock', 'stock_available'];
