@@ -1377,7 +1377,8 @@ class OrderController extends Controller
             $order->status_id = $statusId;
         }
 
-        $order->agency_id = $agency->id;
+        $order->warehouse_id = $agency->id;
+        $order->agency_id = null; // Limpiar el campo viejo para evitar errores de FK
 
         // ⏱️ TIMER: Iniciar cronómetro si no existe
         if (!$order->received_at) {
@@ -1399,7 +1400,7 @@ class OrderController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Orden asignada a la agencia correctamente',
-            'order' => $order->load(['agency', 'warehouse'])
+            'order' => $order->load(['agency', 'warehouse', 'status'])
         ]);
     }
     public function addUpsell(Request $request, Order $order)

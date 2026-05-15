@@ -97,6 +97,11 @@ class Order extends Model
         return $this->belongsTo(User::class, 'agency_id');
     }
 
+    public function warehouse()
+    {
+        return $this->belongsTo(Warehouse::class, 'warehouse_id');
+    }
+
     public function shop()
     {
         return $this->belongsTo(Shop::class);
