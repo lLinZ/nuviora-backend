@@ -122,7 +122,8 @@ class OrderController extends Controller
             'rejectionReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
             'paymentReceipts', // 👈 Payment Receipts Gallery
-            'agency', // 👈 incluimos agencia
+            'agency', // 👈 incluimos agencia (viejo)
+            'warehouse', // 👈 incluimos agencia regional (nuevo SCM)
             'postponements.user', // 👈 incluimos historial de reprogramación
             'shop', // 👈 incluimos tienda
             'returnOrders', // 👈 devoluciones creadas desde esta orden
@@ -1007,7 +1008,7 @@ class OrderController extends Controller
         $user = Auth::user();
         $perPage = (int) $request->get('per_page', 50);
 
-        $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency'])
+        $query = Order::with(['client', 'agent', 'deliverer', 'status', 'payments', 'shop', 'agency', 'warehouse'])
             ->withCount('updates')
             ->orderBy('updated_at', 'desc')
             ->orderBy('id', 'desc');
