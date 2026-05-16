@@ -56,13 +56,13 @@ class WhatsAppService
                 'to' => $cleanTo
             ]);
 
-            return false;
+            return $response->json() ?: ['error' => $response->body(), 'status' => $response->status()];
         } catch (\Exception $e) {
             Log::error('WhatsApp Service Exception', [
                 'message' => $e->getMessage(),
                 'to' => $cleanTo
             ]);
-            return false;
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -98,13 +98,13 @@ class WhatsAppService
                 'template' => $templateName
             ]);
 
-            return false;
+            return $response->json() ?: ['error' => $response->body(), 'status' => $response->status()];
         } catch (\Exception $e) {
             Log::error('WhatsApp Template Exception', [
                 'message' => $e->getMessage(),
                 'to' => $cleanTo
             ]);
-            return false;
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -180,13 +180,13 @@ class WhatsAppService
                 'to' => $cleanTo
             ]);
 
-            return false;
+            return $response->json() ?: ['error' => $response->body(), 'status' => $response->status()];
         } catch (\Exception $e) {
             Log::error('WhatsApp Media Send Exception', [
                 'message' => $e->getMessage(),
                 'to' => $cleanTo
             ]);
-            return false;
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -229,14 +229,14 @@ class WhatsAppService
                 'url' => $url
             ]);
 
-            return false;
+            return $response->json() ?: ['error' => $response->body(), 'status' => $response->status()];
         } catch (\Exception $e) {
             Log::error('WhatsApp Media Send URL Exception', [
                 'message' => $e->getMessage(),
                 'to' => $cleanTo,
                 'url' => $url
             ]);
-            return false;
+            return ['error' => $e->getMessage()];
         }
     }
 

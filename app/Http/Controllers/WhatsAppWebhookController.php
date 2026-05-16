@@ -47,6 +47,8 @@ class WhatsAppWebhookController extends Controller
             
             $body        = '';
             $mediaPath   = null;
+            $buttonId    = null;
+            $buttonText  = null;
 
             // 1. Extraer contenido según el tipo
             if (isset($messageData['text'])) {
@@ -62,12 +64,18 @@ class WhatsAppWebhookController extends Controller
             } elseif (isset($messageData['interactive'])) {
                 $iType = $messageData['interactive']['type'] ?? '';
                 if ($iType === 'button_reply') {
-                    $body = $messageData['interactive']['button_reply']['title'] ?? 'Botón presionado';
+                    $buttonText = $messageData['interactive']['button_reply']['title'] ?? 'Botón presionado';
+                    $buttonId   = $messageData['interactive']['button_reply']['id'] ?? '';
+                    $body = $buttonText;
                 } elseif ($iType === 'list_reply') {
                     $body = $messageData['interactive']['list_reply']['title'] ?? 'Opción de lista';
                     $desc = $messageData['interactive']['list_reply']['description'] ?? '';
                     if ($desc) $body .= " ({$desc})";
                 }
+            } elseif ($type === 'button' || isset($messageData['button'])) {
+                $buttonText = $messageData['button']['text'] ?? '';
+                $buttonId   = $messageData['button']['payload'] ?? '';
+                $body = $buttonText;
             } elseif (isset($messageData['image'])) {
                 $imageId = $messageData['image']['id'] ?? null;
                 $caption = $messageData['image']['caption'] ?? '';
@@ -238,11 +246,12 @@ class WhatsAppWebhookController extends Controller
             // 🚀 OFFICIAL BRIDGE: Trigger system webhooks for this event
             try {
                 $webhookService = new \App\Services\WebhookService();
-                $webhookService->trigger('whatsapp.message_received', [
+                
+                $webhookData = [
                     'message_id'   => $messageId,
                     'from'         => $from,
                     'body'         => $body,
-                    'type'         => $type,
+                    'type'         => $buttonId ? 'button' : $type,
                     'received_at'  => $receivedAt->toDateTimeString(),
                     'client'       => [
                         'id'    => $client->id,
@@ -251,6 +260,7 @@ class WhatsAppWebhookController extends Controller
                     ],
                     'order' => $order ? [
                         'id'           => $order->id,
+                        'order_id'     => $order->order_id,
                         'order_number' => $order->order_number,
                         'status'       => $order->status?->description,
                     ] : null,
@@ -259,7 +269,14 @@ class WhatsAppWebhookController extends Controller
                         'name' => $client->agent?->name,
                     ] : null,
                     'raw_payload'  => $payload
-                ]);
+                ];
+
+                if ($buttonId) {
+                    $webhookData['button_id']   = $buttonId;
+                    $webhookData['button_text'] = $buttonText;
+                }
+
+                $webhookService->trigger('whatsapp.message_received', $webhookData);
             } catch (\Exception $e) {
                 \Illuminate\Support\Facades\Log::warning("WhatsApp_Webhook_Bridge_Error: " . $e->getMessage());
             }

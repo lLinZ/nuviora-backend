@@ -32,10 +32,12 @@ class ExternalWhatsAppController extends Controller
     public function send(Request $request)
     {
         $request->validate([
-            'phone'         => 'required|string',
+            'phone'         => 'required_without:to|string',
+            'to'            => 'required_without:phone|string',
             'template_name' => 'nullable|string',
+            'template'      => 'nullable|array',
             'vars'          => 'nullable|array',
-            'body'          => 'nullable|string|required_without_all:template_name,media',
+            'body'          => 'nullable|string',
             'media'         => 'nullable|array',
             'order_id'      => 'nullable|integer',
             // message_type allows n8n to override. Default: outgoing_automated_message
@@ -46,7 +48,7 @@ class ExternalWhatsAppController extends Controller
         // Resolve message_type — default is automated (templates/n8n automations)
         $messageType = $request->input('message_type', WhatsappMessage::TYPE_AUTOMATED);
 
-        $phone = $request->phone;
+        $phone = $request->input('phone') ?? $request->input('to');
         
         // Ensure phone format (basic cleaning)
         $phone = preg_replace('/[^0-9]/', '', $phone);
@@ -138,14 +140,31 @@ class ExternalWhatsAppController extends Controller
         }
 
         // 4. Handle Text or Template
-        if ($request->filled('template_name') || $request->filled('body')) {
+        $templateData = $request->input('template');
+        $hasTemplate = $request->filled('template_name') || ($templateData && is_array($templateData) && !empty($templateData['name']));
+
+        if ($hasTemplate || $request->filled('body')) {
             $templateName = $request->template_name;
             $components = [];
+            $langCode = 'es';
+
+            if ($templateData && is_array($templateData)) {
+                if (!$templateName) {
+                    $templateName = $templateData['name'] ?? null;
+                }
+                if (isset($templateData['language']['code'])) {
+                    $langCode = $templateData['language']['code'];
+                }
+                if (isset($templateData['components']) && is_array($templateData['components'])) {
+                    $components = $templateData['components'];
+                }
+            }
+
             $renderedBody = $request->body ?? "Plantilla: {$templateName}";
             $tpl = null;
             $vars = $request->vars ?? [];
 
-            if ($request->filled('template_name')) {
+            if ($templateName) {
                 $normalizedName = strtolower(str_replace(' ', '_', $templateName));
                 $tpl = WhatsappTemplate::where('name', $normalizedName)
                     ->orWhere('name', $templateName)
@@ -156,10 +175,16 @@ class ExternalWhatsAppController extends Controller
                     $templateName = $tpl->name;
                     $renderedBody = $tpl->render($vars);
                     
-                    if (!empty($tpl->meta_components)) {
+                    if (!empty($tpl->language)) {
+                        $langCode = $tpl->language;
+                    }
+
+                    // Build components from database template ONLY if they were not explicitly passed in the request
+                    if (empty($components) && !empty($tpl->meta_components)) {
                         foreach ($tpl->meta_components as $component) {
                             $rawType = strtoupper($component['type'] ?? '');
-                            if (!in_array($rawType, ['HEADER', 'BODY'])) continue;
+                            // Support HEADER, BODY, and BUTTONS (any component type)
+                            if (!in_array($rawType, ['HEADER', 'BODY', 'BUTTONS'])) continue;
 
                             $text = $component['text'] ?? '';
                             preg_match_all('/\{\{(\d+)\}\}/u', $text, $matches);
@@ -184,8 +209,8 @@ class ExternalWhatsAppController extends Controller
                         }
                     }
                 } else {
-                    // Fallback
-                    if (!empty($vars)) {
+                    // Fallback when template is not in DB and components were not explicitly passed
+                    if (empty($components) && !empty($vars)) {
                         $parameters = array_map(fn($v) => ['type' => 'text', 'text' => (string)$v], $vars);
                         $components[] = ['type' => 'body', 'parameters' => $parameters];
                     }
@@ -203,9 +228,7 @@ class ExternalWhatsAppController extends Controller
                 'sent_at'        => now(),
             ]);
 
-            if ($request->filled('template_name')) {
-                // Use the template's own language code; fallback to 'es' if not stored
-                $langCode = ($tpl && !empty($tpl->language)) ? $tpl->language : 'es';
+            if ($templateName) {
                 $result = $service->sendTemplate($client->phone, $templateName, $langCode, $components);
             } else {
                 $result = $service->sendMessage($client->phone, $message->body);
@@ -258,42 +281,138 @@ class ExternalWhatsAppController extends Controller
      */
     public function checkWindow(Request $request)
     {
-        $phone    = $request->input('phone');
-        $orderId  = $request->input('order_id');
-        $clientId = $request->input('client_id');
+        $internalId  = $request->input('internal_id');
+        $shopId      = $request->input('shop_id');
+        $orderId     = $request->input('order_id');
+        $orderNumber = $request->input('order_number');
+        $clientId    = $request->input('client_id');
+        $phone       = $request->input('phone');
 
         $client = null;
         $order  = null;
 
-        // 1. Priority: Find by Order ID if provided (it identifies the client too)
-        if ($orderId) {
-            $order = Order::where('order_id', $orderId)
-                ->orWhere('id', is_numeric($orderId) ? $orderId : null)
-                ->first();
+        // Rule 1: Si llega internal_id, buscar exactamente orders.id = internal_id.
+        // Validar que esa orden también coincida con shop_id y client_id.
+        if ($internalId) {
+            $order = Order::find($internalId);
+            if (!$order) {
+                return response()->json(['success' => false, 'message' => "Order with ID {$internalId} not found."], 404);
+            }
+            
+            if ($shopId && (int)$order->shop_id !== (int)$shopId) {
+                return response()->json(['success' => false, 'message' => "Order shop mismatch (expected {$shopId}, got {$order->shop_id})."], 400);
+            }
+            
+            if ($clientId && (int)$order->client_id !== (int)$clientId) {
+                return response()->json(['success' => false, 'message' => "Order client mismatch (expected {$clientId}, got {$order->client_id})."], 400);
+            }
+            
+            $client = $order->client;
+        }
+
+        // Rule 3: Si no llega internal_id, buscar por shop_id + order_id.
+        if (!$order && $shopId && $orderId) {
+            $orders = Order::where('shop_id', $shopId)
+                ->where(function($q) use ($orderId) {
+                    $q->where('order_id', $orderId)
+                      ->orWhere('id', is_numeric($orderId) ? $orderId : null);
+                })
+                ->get();
+
+            if ($orders->count() > 1) {
+                return response()->json(['success' => false, 'message' => "Ambiguity: Multiple orders found for shop_id {$shopId} and order_id {$orderId}."], 400);
+            }
+            
+            $order = $orders->first();
             if ($order) {
                 $client = $order->client;
             }
         }
 
-        // 2. If client still not found, try directly by client_id
-        if (!$client && $clientId && is_numeric($clientId)) {
-            $client = Client::find((int) $clientId);
+        // Rule 4: Si no encuentra, buscar por shop_id + order_number.
+        if (!$order && $shopId && $orderNumber) {
+            $orders = Order::where('shop_id', $shopId)
+                ->where('order_number', $orderNumber)
+                ->get();
+
+            if ($orders->count() > 1) {
+                return response()->json(['success' => false, 'message' => "Ambiguity: Multiple orders found for shop_id {$shopId} and order_number {$orderNumber}."], 400);
+            }
+            
+            $order = $orders->first();
+            if ($order) {
+                $client = $order->client;
+            }
         }
 
-        // 3. Fallback: Find by Phone (last 10 digits)
-        if (!$client && $phone) {
-            $phoneClean  = preg_replace('/[^0-9]/', '', $phone);
-            $last10 = substr($phoneClean, -10);
-            $client = Client::where('phone', 'like', "%{$last10}")->first();
+        // Rule 5: Como última opción, usar client_id + phone + última orden activa.
+        if (!$order) {
+            if ($clientId) {
+                $client = Client::find($clientId);
+            }
+            if (!$client && $phone) {
+                $phoneClean = preg_replace('/[^0-9]/', '', $phone);
+                $last10 = substr($phoneClean, -10);
+                $client = Client::where('phone', 'like', "%{$last10}")->first();
+            }
+
+            if ($client) {
+                $query = Order::where('client_id', $client->id);
+                if ($shopId) {
+                    $query->where('shop_id', $shopId);
+                }
+
+                // Filter by active status (excluding Entregado, Cancelado, Rechazado)
+                $query->whereHas('status', function($q) {
+                    $q->whereNotIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                });
+
+                $orders = $query->orderBy('created_at', 'desc')->get();
+
+                if ($orders->count() > 1) {
+                    return response()->json(['success' => false, 'message' => "Ambiguity: Multiple active orders found for client {$client->id} and shop {$shopId}."], 400);
+                }
+
+                $order = $orders->first();
+            }
+        }
+
+        // Enforce: Never return an order from another client or another shop.
+        if ($order) {
+            $client = $order->client;
+            if ($clientId && (int)$order->client_id !== (int)$clientId) {
+                return response()->json(['success' => false, 'message' => 'Security check failed: Order client mismatch.'], 400);
+            }
+            if ($shopId && (int)$order->shop_id !== (int)$shopId) {
+                return response()->json(['success' => false, 'message' => 'Security check failed: Order shop mismatch.'], 400);
+            }
+            if ($phone) {
+                $phoneClean = preg_replace('/[^0-9]/', '', $phone);
+                $last10 = substr($phoneClean, -10);
+                if ($client) {
+                    $clientPhoneClean = preg_replace('/[^0-9]/', '', $client->phone);
+                    $clientLast10 = substr($clientPhoneClean, -10);
+                    if ($clientLast10 !== $last10) {
+                        return response()->json(['success' => false, 'message' => 'Security check failed: Client phone mismatch.'], 400);
+                    }
+                }
+            }
         }
 
         if (!$client) {
-            return response()->json(['success' => false, 'message' => 'Client not found'], 404);
+            // If we couldn't resolve the client by this stage
+            if ($clientId) {
+                $client = Client::find($clientId);
+            }
+            if (!$client && $phone) {
+                $phoneClean = preg_replace('/[^0-9]/', '', $phone);
+                $last10 = substr($phoneClean, -10);
+                $client = Client::where('phone', 'like', "%{$last10}")->first();
+            }
         }
 
-        // 3. Get latest order if none specified
-        if (!$order) {
-            $order = Order::where('client_id', $client->id)->latest()->first();
+        if (!$client) {
+            return response()->json(['success' => false, 'message' => 'Client not found.'], 404);
         }
 
         // 4. Products Formatting
