@@ -38,6 +38,9 @@ class OrderObserver
         // 🔥 CLIENT FIX: Trigger event for "Nuevo" status even if auto-assignment happens instantly.
         // This allows n8n to process "New Order" automations correctly.
         if (!self::$muteWebhooks) {
+            // Reload status relation to ensure it matches status_id (avoids stale cache bug)
+            $order->unsetRelation('status');
+            $order->load('status');
             $this->webhookService->trigger('order.status_changed', $order);
         }
 
@@ -154,6 +157,9 @@ class OrderObserver
 
         // Trigger Outgoing Webhooks if status changed
         if ($order->wasChanged('status_id') && !self::$muteWebhooks) {
+            // Reload status relation to ensure it matches the new status_id (avoids stale cache bug)
+            $order->unsetRelation('status');
+            $order->load('status');
             $this->webhookService->trigger('order.status_changed', $order);
         }
     }
