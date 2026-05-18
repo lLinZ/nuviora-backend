@@ -278,19 +278,23 @@ class EarningsService
                 $user = $rows->first()->user;
                 if (!$user) return null;
 
-                $vendorRows  = $rows->where('role_type', 'vendedor');
-                $upsellRows  = $rows->where('role_type', 'upsell');
+                // Filas primarias = todo lo que NO sea upsell (vendedor, repartidor, gerente, agencia)
+                $primaryRoles = array_values(array_filter($roles, fn($r) => $r !== 'upsell'));
+                $primaryRows  = count($primaryRoles) > 0
+                    ? $rows->whereIn('role_type', $primaryRoles)
+                    : $rows; // si solo se pidió upsell, usar todas las filas como base
+                $upsellRows   = $rows->where('role_type', 'upsell');
 
                 $result = [
-                    'user_id'             => $user->id,
-                    'names'               => $user->names,
-                    'surnames'            => $user->surnames,
-                    'email'               => $user->email,
-                    'color'               => $user->color,
-                    'orders_count'        => $vendorRows->unique('order_id')->count(),
-                    'upsells_count'       => $upsellRows->count(),
-                    'amount_usd'          => (float) $rows->sum('amount_usd'),
-                    'amount_local'        => (float) $rows->sum('amount_usd') * $rate,
+                    'user_id'       => $user->id,
+                    'names'         => $user->names,
+                    'surnames'      => $user->surnames,
+                    'email'         => $user->email,
+                    'color'         => $user->color,
+                    'orders_count'  => $primaryRows->unique('order_id')->count(),
+                    'upsells_count' => $upsellRows->count(),
+                    'amount_usd'    => (float) $rows->sum('amount_usd'),
+                    'amount_local'  => (float) $rows->sum('amount_usd') * $rate,
                 ];
 
                 // Incluimos el detalle orden por orden para todos
