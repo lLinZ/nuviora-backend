@@ -453,6 +453,29 @@ class ExternalWhatsAppController extends Controller
                 ];
             });
 
+        // 6. Advanced Automation check for n8n flow tracking
+        $lastAutomated = WhatsappMessage::where('client_id', $client->id)
+            ->where('is_from_client', false)
+            ->where('message_type', WhatsappMessage::TYPE_AUTOMATED)
+            ->latest('sent_at')
+            ->first();
+
+        $hasClientResponseSinceLastAutomated = false;
+        $hasAgentResponseSinceLastAutomated = false;
+
+        if ($lastAutomated) {
+            $hasClientResponseSinceLastAutomated = WhatsappMessage::where('client_id', $client->id)
+                ->where('is_from_client', true)
+                ->where('sent_at', '>', $lastAutomated->sent_at)
+                ->exists();
+
+            $hasAgentResponseSinceLastAutomated = WhatsappMessage::where('client_id', $client->id)
+                ->where('is_from_client', false)
+                ->where('message_type', WhatsappMessage::TYPE_AGENT)
+                ->where('sent_at', '>', $lastAutomated->sent_at)
+                ->exists();
+        }
+
         return response()->json([
             'success' => true,
             'client_id' => $client->id,
@@ -486,6 +509,13 @@ class ExternalWhatsAppController extends Controller
                 'bcv_eur'     => (float) Setting::get('rate_bcv_eur', 0),
             ],
             'latest_messages' => $messages,
+            'automation_check' => [
+                'last_automated_message_body' => $lastAutomated ? $lastAutomated->body : null,
+                'last_automated_message_date' => $lastAutomated ? $lastAutomated->sent_at?->toDateTimeString() : null,
+                'has_client_response_since_last_automated' => $hasClientResponseSinceLastAutomated,
+                'has_agent_response_since_last_automated' => $hasAgentResponseSinceLastAutomated,
+                'should_stop_flow' => $hasClientResponseSinceLastAutomated || $hasAgentResponseSinceLastAutomated
+            ],
             'timestamp' => now()->toDateTimeString()
         ]);
     }
