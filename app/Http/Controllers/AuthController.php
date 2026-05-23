@@ -433,6 +433,7 @@ class AuthController extends Controller
             'address' => 'string|min:8',
             'delivery_cost' => 'numeric|min:0',
             'is_lite_view' => 'nullable',
+            'can_handle_no_stock' => 'nullable|boolean',
         ]);
         if ($validator->fails()) {
             return response()->json(['status' => false, 'errors' => $validator->errors()], 400);
@@ -459,6 +460,9 @@ class AuthController extends Controller
             }
             if ($request->has('is_lite_view')) {
                 $user->is_lite_view = filter_var($request->is_lite_view, FILTER_VALIDATE_BOOLEAN);
+            }
+            if ($request->has('can_handle_no_stock')) {
+                $user->can_handle_no_stock = filter_var($request->can_handle_no_stock, FILTER_VALIDATE_BOOLEAN);
             }
             $user->save();
             return response()->json(['status' => true, 'message' => 'Se ha editado el usuario', 'data' => $user], 200);

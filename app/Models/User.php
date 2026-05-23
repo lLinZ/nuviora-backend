@@ -81,7 +81,8 @@ class User extends Authenticatable
         'agency_id',
         'delivery_cost',
         'is_lite_view',
-        'is_active_crm'
+        'is_active_crm',
+        'can_handle_no_stock'
     ];
 
     public function deliverers()
@@ -116,6 +117,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'is_lite_view' => 'boolean',
             'is_active_crm' => 'boolean',
+            'can_handle_no_stock' => 'boolean',
         ];
     }
 }

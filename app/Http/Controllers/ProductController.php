@@ -17,6 +17,12 @@ class ProductController extends Controller
     {
         $query = Product::query();
 
+        if (Auth::check() && (Auth::user()->can_handle_no_stock || in_array(Auth::user()->role?->description, ['Admin', 'Gerente']))) {
+            $query->with(['inventories' => function($q) {
+                $q->with('warehouse')->where('quantity', '>', 0);
+            }]);
+        }
+
         if ($request->has('search')) {
             $search = $request->search;
             $query->where('name', 'like', "%{$search}%")

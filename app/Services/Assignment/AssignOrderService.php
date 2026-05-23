@@ -48,13 +48,40 @@ class AssignOrderService
         $stockCheck = $order->getStockDetails();
         if ($stockCheck['has_warning']) {
             $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
-            if ($sinStockStatus && $order->status_id !== $sinStockStatus->id) {
-                $order->status_id = $sinStockStatus->id;
-                $order->save();
-                event(new \App\Events\OrderUpdated($order));
-                \Illuminate\Support\Facades\Log::warning("AssignOrderService: Orden #{$order->name} sin stock. No se asigna a ninguna vendedora.");
+            $statusId = $sinStockStatus ? $sinStockStatus->id : $order->status_id;
+
+            $noStockAgents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id)
+                ->filter(fn($agent) => $agent->can_handle_no_stock);
+
+            if ($noStockAgents->isNotEmpty()) {
+                return DB::transaction(function () use ($order, $noStockAgents, $statusId) {
+                    $ord = Order::where('id', '=', $order->id)->lockForUpdate()->first(['*']);
+                    if ($ord->agent_id) return $ord->agent;
+
+                    $agentId = $this->strategy->pickAgentId($noStockAgents, $ord);
+                    
+                    $ord->update(['agent_id' => $agentId, 'status_id' => $statusId]);
+                    event(new \App\Events\OrderUpdated($ord));
+
+                    \App\Models\OrderAssignmentLog::create([
+                        'order_id'    => $ord->id,
+                        'agent_id'    => $agentId,
+                        'strategy'    => (new \ReflectionClass($this->strategy))->getShortName() . '_NoStock',
+                        'assigned_by' => null,
+                        'meta'        => ['reason' => 'auto_no_stock'],
+                    ]);
+
+                    return $ord->agent;
+                });
+            } else {
+                if ($sinStockStatus && $order->status_id !== $sinStockStatus->id) {
+                    $order->status_id = $sinStockStatus->id;
+                    $order->save();
+                    event(new \App\Events\OrderUpdated($order));
+                    \Illuminate\Support\Facades\Log::warning("AssignOrderService: Orden #{$order->name} sin stock. No se asigna a ninguna vendedora.");
+                }
+                return null; // ⛔ No asignar
             }
-            return null; // ⛔ No asignar
         }
 
         $agents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id);
@@ -144,10 +171,8 @@ class AssignOrderService
         $count = 0;
         foreach ($ids as $ordModel) {
             /** @var Order $ordModel */
-            // 🛑 CHECK STOCK: Only assign if order HAS stock
-            if (!$ordModel->hasStock()) {
-                continue;
-            }
+            // 🛑 CHECK STOCK: Only assign if order HAS stock, OR if it has NO stock but there are authorized agents
+            $hasStock = $ordModel->hasStock();
 
             // 🛡️ Ensure we look for agents in the SPECIFIC shop of the order, or forced shopId
             $targetShopId = $shopId ?: $ordModel->shop_id;
@@ -164,9 +189,15 @@ class AssignOrderService
             }
 
             $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
+
+            if (!$hasStock) {
+                // Filtrar solo a las vendedoras que pueden manejar Sin Stock
+                $agentsForShop = $agentsForShop->filter(fn($a) => $a->can_handle_no_stock);
+            }
+
             if ($agentsForShop->isEmpty()) continue;
 
-            DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId, $novedadStatusId) {
+            DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId, $novedadStatusId, $hasStock) {
                 $ord = Order::where('id', '=', $ordModel->id)->lockForUpdate()->first(['*']);
                 
                 // Safety check: skip if already assigned by someone else
@@ -210,6 +241,9 @@ class AssignOrderService
                     }
                 } elseif ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
                     $newStatusId = $novedadStatusId;
+                } elseif (!$hasStock) {
+                    $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
+                    $newStatusId = $sinStockStatus ? $sinStockStatus->id : $ordModel->status_id;
                 } else {
                     $newStatusId = $assignmentStatusId;
                 }
