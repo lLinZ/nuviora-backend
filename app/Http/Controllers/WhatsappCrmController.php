@@ -233,6 +233,7 @@ class WhatsappCrmController extends Controller
                 'latestOrder.products.product',
                 'latestOrder.city',
                 'latestOrder.province',
+                'latestOrder.client',
                 'agent',
             ])
             ->paginate(50);
@@ -287,6 +288,8 @@ class WhatsappCrmController extends Controller
                     'created_at'      => $order->created_at,
                     'reset_count'     => $order->reset_count ?? 0,
                     'location'        => $order->city?->name ?? '-',
+                    'address1'        => $order->client?->address1 ?? null,
+                    'address2'        => $order->client?->address2 ?? null,
                 ] : null,
             ];
         });
