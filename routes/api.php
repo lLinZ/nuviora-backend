@@ -234,6 +234,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
     Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
+
+    // ── Round-Robin Control ───────────────────────────────────────────────────
+    Route::get('/settings/round-robin',           [SettingsController::class, 'getRoundRobin']);
+    Route::post('/settings/round-robin/reset',    [SettingsController::class, 'resetRoundRobin']);
+    Route::post('/settings/round-robin/pointer',  [SettingsController::class, 'setRoundRobinPointer']);
+    Route::put('/settings/strategy',              [SettingsController::class, 'updateStrategy']);
     Route::get('/business/today', [BusinessController::class, 'status']); // estado actual
     Route::get('/business/status', [BusinessController::class, 'status']); // estado actual
     Route::post('/business/open',   [BusinessController::class, 'open']);   // abrir jornada (ahora)
