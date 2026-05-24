@@ -453,10 +453,14 @@ class ExternalWhatsAppController extends Controller
                 ];
             });
 
-        // 6. Advanced Automation check for n8n flow tracking
+        // 6. Advanced Automation check for n8n flow tracking (Enhanced for Fran)
         $lastAutomated = WhatsappMessage::where('client_id', $client->id)
             ->where('is_from_client', false)
-            ->where('message_type', WhatsappMessage::TYPE_AUTOMATED)
+            ->where(function($q) {
+                // Consider as automated: explicit message_type = automated OR body contains "Plantilla:"
+                $q->where('message_type', WhatsappMessage::TYPE_AUTOMATED)
+                  ->orWhere('body', 'like', 'Plantilla:%');
+            })
             ->latest('sent_at')
             ->first();
 
@@ -515,6 +519,12 @@ class ExternalWhatsAppController extends Controller
                 'has_client_response_since_last_automated' => $hasClientResponseSinceLastAutomated,
                 'has_agent_response_since_last_automated' => $hasAgentResponseSinceLastAutomated,
                 'should_stop_flow' => $hasClientResponseSinceLastAutomated || $hasAgentResponseSinceLastAutomated
+            ],
+            'template_tracking' => [
+                'last_template_sent' => $lastAutomated ? $lastAutomated->body : null,
+                'last_template_sent_at' => $lastAutomated ? $lastAutomated->sent_at?->toDateTimeString() : null,
+                'has_client_responded_since' => $hasClientResponseSinceLastAutomated,
+                'should_send_next_template' => $lastAutomated && !$hasClientResponseSinceLastAutomated && !$hasAgentResponseSinceLastAutomated
             ],
             'timestamp' => now()->toDateTimeString()
         ]);
