@@ -50,8 +50,21 @@ class AssignOrderService
             $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
             $statusId = $sinStockStatus ? $sinStockStatus->id : $order->status_id;
 
-            $noStockAgents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id)
-                ->filter(fn($agent) => $agent->can_handle_no_stock);
+            // 🔥 FIX: Verificar si hay stock en ALGÚN otro almacén
+            $hasStockAnywhere = true;
+            foreach ($order->products as $op) {
+                $totalStock = \App\Models\Inventory::where('product_id', $op->product_id)->sum('quantity');
+                if ($totalStock < $op->quantity) {
+                    $hasStockAnywhere = false;
+                    break;
+                }
+            }
+
+            $noStockAgents = collect();
+            if ($hasStockAnywhere) {
+                $noStockAgents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id)
+                    ->filter(fn($agent) => $agent->can_handle_no_stock);
+            }
 
             if ($noStockAgents->isNotEmpty()) {
                 return DB::transaction(function () use ($order, $noStockAgents, $statusId) {
@@ -191,8 +204,33 @@ class AssignOrderService
             $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
 
             if (!$hasStock) {
-                // Filtrar solo a las vendedoras que pueden manejar Sin Stock
-                $agentsForShop = $agentsForShop->filter(fn($a) => $a->can_handle_no_stock);
+                // 🔥 FIX: Verificar si hay stock en ALGÚN otro almacén
+                $hasStockAnywhere = true;
+                if (!$ordModel->relationLoaded('products')) {
+                    $ordModel->load('products');
+                }
+                foreach ($ordModel->products as $op) {
+                    $totalStock = \App\Models\Inventory::where('product_id', $op->product_id)->sum('quantity');
+                    if ($totalStock < $op->quantity) {
+                        $hasStockAnywhere = false;
+                        break;
+                    }
+                }
+
+                if ($hasStockAnywhere) {
+                    // Filtrar solo a las vendedoras que pueden manejar Sin Stock
+                    $agentsForShop = $agentsForShop->filter(fn($a) => $a->can_handle_no_stock);
+                } else {
+                    // Si no hay stock en ningún almacén en el país, NO ASIGNAR A NADIE.
+                    $agentsForShop = collect(); // Vaciamos para que salte
+                    
+                    // Asegurarnos de que quede en estado Sin Stock
+                    $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
+                    if ($sinStockStatus && $ordModel->status_id !== $sinStockStatus->id) {
+                        $ordModel->status_id = $sinStockStatus->id;
+                        $ordModel->save();
+                    }
+                }
             }
 
             if ($agentsForShop->isEmpty()) continue;

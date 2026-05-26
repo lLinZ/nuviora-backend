@@ -474,6 +474,7 @@ class InventoryService
                 if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
                     $order->status_id          = $restoredStatus->id;
                     $order->previous_status_id = null; // Limpiar después de restaurar
+                    $order->agent_id           = null; // 🔥 FIX: Liberar a la especialista
                     $order->save();
 
                     \App\Models\OrderActivityLog::create([
@@ -501,6 +502,9 @@ class InventoryService
             }
 
             // ⭐ CASO 2: No hay status anterior guardado → intentar auto-asignar
+            $order->agent_id = null; // 🔥 FIX: Liberar a la especialista antes de auto-asignar
+            $order->save();
+
             $agent = $assignService->assignOne($order);
 
             if ($agent && $assignedStatus) {
@@ -523,6 +527,7 @@ class InventoryService
                 // ⭐ CASO 3: Sin agente disponible → Nuevo
                 $order->status_id          = $nuevoStatus->id;
                 $order->previous_status_id = null;
+                $order->agent_id           = null; // 🔥 FIX: Liberar a la especialista
                 $order->save();
 
                 \App\Models\OrderActivityLog::create([
