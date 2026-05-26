@@ -474,7 +474,10 @@ class InventoryService
                 if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
                     $order->status_id          = $restoredStatus->id;
                     $order->previous_status_id = null; // Limpiar después de restaurar
-                    $order->agent_id           = null; // 🔥 FIX: Liberar a la especialista
+                    // 🔥 FIX: Solo liberar a la especialista si la orden originalmente venía del pool general (Nuevo)
+                    if ($restoredStatus->description === 'Nuevo') {
+                        $order->agent_id = null;
+                    }
                     $order->save();
 
                     \App\Models\OrderActivityLog::create([

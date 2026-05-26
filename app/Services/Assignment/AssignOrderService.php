@@ -223,10 +223,15 @@ class AssignOrderService
                 } else {
                     // Si no hay stock en ningún almacén en el país, NO ASIGNAR A NADIE.
                     $agentsForShop = collect(); // Vaciamos para que salte
-                    
-                    // Asegurarnos de que quede en estado Sin Stock
+                }
+
+                // 🔥 FIX: Asegurar que si la orden no se pudo asignar (por falta de stock
+                // global o por falta de especialistas activas), se envíe a estado Sin Stock 
+                // para que no se quede atrapada en Nuevo y aparezca en el panel correcto.
+                if ($agentsForShop->isEmpty()) {
                     $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
                     if ($sinStockStatus && $ordModel->status_id !== $sinStockStatus->id) {
+                        $ordModel->previous_status_id = $ordModel->status_id;
                         $ordModel->status_id = $sinStockStatus->id;
                         $ordModel->save();
                     }
