@@ -50,7 +50,7 @@ class ConversationBucketService
     /**
      * Lógica central de cálculo.
      */
-    public static function calculateBucket(WhatsappConversation $conv, ?WhatsappMessage $lastMessage): string
+    public static function calculateBucket(WhatsappConversation $conv, ?WhatsappMessage $lastMessage, ?\App\Models\Order $latestOrder = null): string
     {
         // 1. Si es manual y no ha escrito el cliente después (manejado en recalculate), respetamos
         if ($conv->is_manual_bucket) {
@@ -65,15 +65,22 @@ class ConversationBucketService
 
         // 3. Prioridad MEDIA: Cerrado por estatus de pedido terminal
         // Solo si el cliente NO ha escrito recientemente (verificado arriba).
-        $latestOrder = \App\Models\Order::where('client_id', $conv->client_id)
-            ->orderBy('created_at', 'desc')
-            ->with('status')
-            ->first();
+        if (!$latestOrder) {
+            $latestOrder = \App\Models\Order::where('client_id', $conv->client_id)
+                ->orderBy('created_at', 'desc')
+                ->with('status')
+                ->first();
+        }
 
-        if ($latestOrder && $latestOrder->status) {
-            $desc = $latestOrder->status->description;
-            if (in_array($desc, ['Entregado', 'Cancelado', 'Rechazado'])) {
-                return WhatsappConversation::BUCKET_CLOSED;
+        if ($latestOrder) {
+            if (!$latestOrder->relationLoaded('status')) {
+                $latestOrder->load('status');
+            }
+            if ($latestOrder->status) {
+                $desc = $latestOrder->status->description;
+                if (in_array($desc, ['Entregado', 'Cancelado', 'Rechazado'])) {
+                    return WhatsappConversation::BUCKET_CLOSED;
+                }
             }
         }
 

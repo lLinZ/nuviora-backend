@@ -249,7 +249,8 @@ class WhatsappCrmController extends Controller
             // Lógica CENTRALIZADA Y ESTRICTA (Vía Service)
             $bucketName = ConversationBucketService::calculateBucket(
                 $conversation ?? new WhatsappConversation(['client_id' => $client->id]), 
-                $latestMsg
+                $latestMsg,
+                $order
             );
 
             if (isset($bucketCounts[$bucketName])) $bucketCounts[$bucketName]++;
@@ -312,7 +313,8 @@ class WhatsappCrmController extends Controller
             
             $b = ConversationBucketService::calculateBucket(
                 $s->activeWhatsappConversation ?? new WhatsappConversation(['client_id' => $s->id]), 
-                $latest
+                $latest,
+                $order
             );
             
             if (isset($totalCounts[$b])) $totalCounts[$b]++;
