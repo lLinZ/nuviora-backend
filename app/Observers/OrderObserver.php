@@ -35,19 +35,25 @@ class OrderObserver
             'description' => 'Orden creada/importada.',
         ]);
 
-        // 🔥 CLIENT FIX: Trigger event for "Nuevo" status even if auto-assignment happens instantly.
-        // This allows n8n to process "New Order" automations correctly.
-        if (!self::$muteWebhooks) {
-            // Reload status relation to ensure it matches status_id (avoids stale cache bug)
-            $order->unsetRelation('status');
-            $order->load('status');
-            $this->webhookService->trigger('order.status_changed', $order);
-        }
+        $originalStatusId = $order->status_id;
 
         try {
             app(AssignOrderService::class)->assignOne($order);
         } catch (\Throwable $e) {
             Log::error('Auto-assign failed: ' . $e->getMessage(), ['order_id' => $order->id]);
+        }
+
+        // 🔥 CLIENT FIX: Trigger event for "Nuevo" status AFTER auto-assignment
+        // to prevent n8n from receiving "Nuevo" and "Sin Stock" almost simultaneously.
+        if (!self::$muteWebhooks) {
+            $order->refresh(); // Reload to check if assignOne changed the status
+            
+            // Only trigger "Nuevo" webhook if it didn't instantly transition to another status
+            if ($order->status_id === $originalStatusId) {
+                $order->unsetRelation('status');
+                $order->load('status');
+                $this->webhookService->trigger('order.status_changed', $order);
+            }
         }
     }
 

@@ -1517,11 +1517,15 @@ class OrderController extends Controller
             }
 
             // For return/exchange orders, allow deleting any product (not just upsells)
-            // For regular orders, ONLY ADMIN can delete original products
+            // For regular orders, ONLY ADMIN can delete original products, UNLESS order is Sin Stock and user is Vendedor
             $isAdmin = \Illuminate\Support\Facades\Auth::user()->role?->description === 'Admin';
+            $isVendedor = \Illuminate\Support\Facades\Auth::user()->role?->description === 'Vendedor';
+            $isSinStock = $order->status && $order->status->description === 'Sin Stock';
             
             if (!$isAdmin && !($order->is_return || $order->is_exchange) && !$item->is_upsell) {
-                return response()->json(['status' => false, 'message' => 'No es un upsell. Solo admins pueden eliminar productos base.'], 403);
+                if (!($isVendedor && $isSinStock)) {
+                    return response()->json(['status' => false, 'message' => 'No es un upsell. Solo admins pueden eliminar productos base.'], 403);
+                }
             }
 
             $item->delete();
@@ -2350,7 +2354,8 @@ class OrderController extends Controller
         }
 
         $userRole = Auth::user()->role?->description;
-        if (!in_array($userRole, ['Gerente', 'Admin'])) {
+        // 🔥 CLIENT FIX: Allow Vendedor to edit logistics, mostly needed for Sin Stock specialists
+        if (!in_array($userRole, ['Gerente', 'Admin', 'Vendedor'])) {
             return response()->json(['status' => false, 'message' => 'No tiene permisos para editar la logística'], 403);
         }
 

@@ -50,12 +50,14 @@ class AssignOrderService
             $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
             $statusId = $sinStockStatus ? $sinStockStatus->id : $order->status_id;
 
-            // 🔥 FIX: Verificar si hay stock en ALGÚN otro almacén
-            $hasStockAnywhere = true;
+            // 🔥 FIX Fran: Mostrar a la especialista si AL MENOS UN producto tiene stock en algún almacén.
+            // Regla: 2 productos, 1 sin stock global y otro con stock → la vendedora debe verla.
+            $hasStockAnywhere = false;
             foreach ($order->products as $op) {
                 $totalStock = \App\Models\Inventory::where('product_id', $op->product_id)->sum('quantity');
-                if ($totalStock < $op->quantity) {
-                    $hasStockAnywhere = false;
+                if ($totalStock > 0) {
+                    // Al menos un producto tiene algo de stock en cualquier almacén del país
+                    $hasStockAnywhere = true;
                     break;
                 }
             }
@@ -204,15 +206,15 @@ class AssignOrderService
             $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
 
             if (!$hasStock) {
-                // 🔥 FIX: Verificar si hay stock en ALGÚN otro almacén
-                $hasStockAnywhere = true;
+                // 🔥 FIX Fran: Al menos UN producto con stock global → asignar a especialista.
+                $hasStockAnywhere = false;
                 if (!$ordModel->relationLoaded('products')) {
                     $ordModel->load('products');
                 }
                 foreach ($ordModel->products as $op) {
                     $totalStock = \App\Models\Inventory::where('product_id', $op->product_id)->sum('quantity');
-                    if ($totalStock < $op->quantity) {
-                        $hasStockAnywhere = false;
+                    if ($totalStock > 0) {
+                        $hasStockAnywhere = true;
                         break;
                     }
                 }
