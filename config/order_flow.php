@@ -13,7 +13,7 @@ return [
 
     'Vendedor' => [
         'visible_columns' => [
-            'Reprogramado para hoy', 'Asignado a vendedor', 'Llamado 1', 'Llamado 2', 'Llamado 3',
+            'Reprogramado para hoy', 'Asignado a vendedor', 'Sin Stock', 'Llamado 1', 'Llamado 2', 'Llamado 3',
             'Esperando Ubicacion', 'Asignar a agencia', 'Programado para mas tarde',
             'Programado para otro dia', 'Novedades', 'Novedad Solucionada',
             'Cancelado', 'Entregado'
