@@ -107,6 +107,40 @@ class OrderController extends Controller
 
 
 
+    /**
+     * Determina si el usuario autenticado puede acceder al detalle de una orden.
+     * Mismas reglas de aislamiento que OrderController@index:
+     *  - Admin/Gerente/Master (super roles): ven todo.
+     *  - Vendedor/Vendedora: solo sus órdenes (agent_id).
+     *  - Agencia: solo las de su agencia (agency_id) y nunca canceladas.
+     *  - Repartidor: solo las suyas (deliverer_id).
+     *  - Otros roles internos: acceso permitido.
+     */
+    private function userCanAccessOrder(\App\Models\Order $order, $user): bool
+    {
+        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
+        $superRoles = ['admin', 'manager', 'gerente', 'master'];
+
+        if (in_array($roleName, $superRoles)) {
+            return true;
+        }
+
+        if (str_contains($roleName, 'vende')) {
+            return (int) $order->agent_id === (int) $user->id;
+        }
+
+        if ($roleName === 'agencia') {
+            return (int) $order->agency_id === (int) $user->id
+                && $order->status?->description !== 'Cancelado';
+        }
+
+        if ($roleName === 'repartidor') {
+            return (int) $order->deliverer_id === (int) $user->id;
+        }
+
+        return true;
+    }
+
     public function show($id)
     {
         $order = \App\Models\Order::with([
@@ -130,12 +164,10 @@ class OrderController extends Controller
             'parentOrder', // 👈 orden padre si es devolución
         ])->findOrFail($id);
 
-    // 🔒 RESTRICCIÓN AGENCIA: No deben ver órdenes canceladas
+    // 🔒 AISLAMIENTO DE DATOS POR ROL
     $user = \Illuminate\Support\Facades\Auth::user();
-    if ($user->role?->description === 'Agencia') {
-        if ($order->status?->description === 'Cancelado') {
-            return response()->json(['status' => false, 'message' => 'No tienes permiso para ver esta orden.'], 403);
-        }
+    if (!$this->userCanAccessOrder($order, $user)) {
+        return response()->json(['status' => false, 'message' => 'No tienes permiso para ver esta orden.'], 403);
     }
 
         // 📦 CHECK STOCK AVAILABILITY
@@ -798,7 +830,12 @@ class OrderController extends Controller
 }
     public function getOrderProducts($orderId)
     {
-        $order = Order::with('products.product')->findOrFail($orderId);
+        $order = Order::with('products.product', 'status')->findOrFail($orderId);
+
+        // 🔒 AISLAMIENTO: no exponer productos de órdenes que no le pertenecen al usuario.
+        if (!$this->userCanAccessOrder($order, \Illuminate\Support\Facades\Auth::user())) {
+            return response()->json(['status' => false, 'message' => 'No tienes permiso para ver esta orden.'], 403);
+        }
 
         return response()->json([
             'order_id'   => $order->id,
