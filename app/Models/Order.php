@@ -222,20 +222,39 @@ class Order extends Model
     }
 
     /**
+     * Resuelve el almacén relevante para el chequeo de stock de la orden.
+     *
+     * Prioridad:
+     *   1. Almacén de la agencia asignada (Warehouse.user_id = agency_id)
+     *   2. warehouse_id explícito de la orden (asignación directa de almacén)
+     *   3. Almacén principal (is_main)
+     */
+    public function resolveStockWarehouseId(): ?int
+    {
+        $warehouseId = null;
+
+        if ($this->agency_id) {
+            $warehouseId = \App\Models\Warehouse::where('user_id', $this->agency_id)->value('id');
+        }
+
+        if (!$warehouseId && $this->warehouse_id) {
+            $warehouseId = $this->warehouse_id;
+        }
+
+        if (!$warehouseId) {
+            $warehouseId = \App\Models\Warehouse::where('is_main', true)->value('id');
+        }
+
+        return $warehouseId;
+    }
+
+    /**
      * Helper to check stock availability for an order
      */
     public function getStockDetails()
     {
-        // 1. Determine relevant warehouse
-        $warehouseId = null;
-        if ($this->agency_id) {
-            $warehouseId = \App\Models\Warehouse::where('user_id', $this->agency_id)->first()?->id;
-        }
-        
-        // Fallback to main warehouse if no agency warehouse found
-        if (!$warehouseId) {
-            $warehouseId = \App\Models\Warehouse::where('is_main', true)->first()?->id;
-        }
+        // 1. Determine relevant warehouse (agency → warehouse_id → main)
+        $warehouseId = $this->resolveStockWarehouseId();
 
         if (!$warehouseId) {
             return ['has_warning' => false, 'items' => []]; 
@@ -268,6 +287,100 @@ class Order extends Model
             'has_warning' => $hasWarning,
             'items' => $items
         ];
+    }
+
+    /**
+     * Determina en qué OTROS almacenes activos hay stock ÚTIL suficiente
+     * para cumplir TODA la orden (todos sus productos y cantidades).
+     *
+     * Stock útil = quantity - reserved - defective - blocked  (Inventory::useful_stock)
+     *
+     * Se usa para mostrarle a la vendedora, cuando una orden está en "Sin Stock",
+     * en qué bodegas/agencias sí podría cumplirse, de modo que pueda reasignar la
+     * agencia y mover la orden a otro status.
+     *
+     * @return array<int, array{warehouse_id:int, warehouse_name:string, agency_user_id:?int, agency_name:?string, city_name:?string, items:array}>
+     */
+    public function getStockAvailabilityElsewhere(): array
+    {
+        // Almacén actualmente usado para el chequeo (para excluirlo del resultado).
+        // Usamos la MISMA resolución que getStockDetails para mantener coherencia.
+        $currentWarehouseId = $this->resolveStockWarehouseId();
+
+        // Productos y cantidades requeridas por la orden
+        $required = $this->products->mapWithKeys(function ($op) {
+            return [$op->product_id => (int) $op->quantity];
+        });
+
+        if ($required->isEmpty()) {
+            return [];
+        }
+
+        $productIds = $required->keys()->all();
+
+        // Almacenes activos candidatos (distintos del actual)
+        $warehouses = \App\Models\Warehouse::where('is_active', true)
+            ->when($currentWarehouseId, function ($q) use ($currentWarehouseId) {
+                $q->where('id', '!=', $currentWarehouseId);
+            })
+            ->get();
+
+        if ($warehouses->isEmpty()) {
+            return [];
+        }
+
+        // Inventarios de esos almacenes para los productos requeridos, indexados por almacén
+        $inventories = \App\Models\Inventory::whereIn('warehouse_id', $warehouses->pluck('id'))
+            ->whereIn('product_id', $productIds)
+            ->get()
+            ->groupBy('warehouse_id');
+
+        $result = [];
+
+        foreach ($warehouses as $warehouse) {
+            $whInv = ($inventories->get($warehouse->id) ?? collect())->keyBy('product_id');
+
+            $canFulfill = true;
+            $items = [];
+
+            foreach ($required as $productId => $needed) {
+                /** @var \App\Models\Inventory|null $inv */
+                $inv = $whInv->get($productId);
+                $useful = $inv ? (int) $inv->useful_stock : 0;
+
+                if ($useful < $needed) {
+                    $canFulfill = false;
+                }
+
+                $items[$productId] = [
+                    'needed'    => $needed,
+                    'available' => $useful,
+                    'has_stock' => $useful >= $needed,
+                ];
+            }
+
+            // Solo reportamos almacenes que pueden cumplir TODA la orden
+            if (!$canFulfill) {
+                continue;
+            }
+
+            // Agencia (usuario) ligada a este almacén y su ciudad principal
+            $agencyUser = $warehouse->user_id ? \App\Models\User::find($warehouse->user_id) : null;
+            $cityName = $agencyUser
+                ? \App\Models\City::where('agency_id', $agencyUser->id)->orderBy('id')->value('name')
+                : null;
+
+            $result[] = [
+                'warehouse_id'    => $warehouse->id,
+                'warehouse_name'  => $warehouse->name,
+                'agency_user_id'  => $agencyUser?->id,
+                'agency_name'     => $agencyUser?->names,
+                'city_name'       => $cityName,
+                'items'           => $items,
+            ];
+        }
+
+        return $result;
     }
 
     public function hasStock()

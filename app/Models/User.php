@@ -57,6 +57,14 @@ class User extends Authenticatable
         return $this->hasMany(Order::class, 'agency_id');
     }
 
+    /**
+     * Ciudades que atiende este usuario cuando es una Agencia.
+     */
+    public function cities()
+    {
+        return $this->hasMany(City::class, 'agency_id');
+    }
+
     public function stockMovements()
     {
         return $this->hasMany(StockMovement::class, 'deliverer_id');

@@ -22,7 +22,23 @@ class OrderUpdated implements ShouldBroadcast
     public function __construct($order)
     {
         // 🔄 Asegurarnos de tener las relaciones cargadas para el frontend
-        $this->order = $order->load(['status', 'client', 'agent', 'agency', 'deliverer', 'shop']);
+        // 'products' se carga para poder calcular stock_elsewhere en broadcastWith().
+        $this->order = $order->load(['status', 'client', 'agent', 'agency', 'deliverer', 'shop', 'products']);
+    }
+
+    /**
+     * Payload enviado al frontend. Incluimos stock_elsewhere cuando la orden
+     * está en "Sin Stock" para que el Kanban/Dialog muestre dónde sí hay stock.
+     */
+    public function broadcastWith(): array
+    {
+        $orderArray = $this->order->toArray();
+
+        $orderArray['stock_elsewhere'] = ($this->order->status?->description === \App\Constants\OrderStatus::SIN_STOCK)
+            ? $this->order->getStockAvailabilityElsewhere()
+            : [];
+
+        return ['order' => $orderArray];
     }
 
     /**

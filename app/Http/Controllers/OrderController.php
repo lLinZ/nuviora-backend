@@ -191,6 +191,9 @@ class OrderController extends Controller
                 'agency'               => $order->agency,
                 'shop'                 => $order->shop,
                 'has_stock_warning'    => $hasStockWarning, // 👈 New flag
+                'stock_elsewhere'      => ($order->status?->description === \App\Constants\OrderStatus::SIN_STOCK)
+                    ? $order->getStockAvailabilityElsewhere()
+                    : [], // 👈 Almacenes con stock útil cuando está en "Sin Stock"
                 'novedad_type'         => $order->novedad_type,
                 'novedad_description'  => $order->novedad_description,
                 'novedad_resolution'   => $order->novedad_resolution,
@@ -1148,12 +1151,18 @@ class OrderController extends Controller
             $orderArray['has_stock_warning'] = $check['has_warning'];
             $orderArray['binance_rate'] = $binanceRate;
             $orderArray['bcv_rate'] = $bcvRate;
-            
+
+            // 📦 Si la orden está en "Sin Stock", calcular en qué OTROS almacenes
+            // sí hay stock útil suficiente, para que la vendedora pueda reasignar agencia.
+            $orderArray['stock_elsewhere'] = ($order->status?->description === \App\Constants\OrderStatus::SIN_STOCK)
+                ? $order->getStockAvailabilityElsewhere()
+                : [];
+
             // Reload status in case it changed
             if ($orderArray['status_id'] !== $order->getOriginal('status_id')) {
                 $orderArray['status'] = $order->status ? $order->status->toArray() : null;
             }
-            
+
             return $orderArray;
         });
 
@@ -1301,7 +1310,12 @@ class OrderController extends Controller
                     $orderArray['has_stock_warning'] = $check['has_warning'];
                     $orderArray['binance_rate'] = $binanceRate;
                     $orderArray['bcv_rate'] = $bcvRate;
-                    
+
+                    // 📦 Solo para la columna "Sin Stock": dónde sí hay stock útil.
+                    $orderArray['stock_elsewhere'] = ($statusName === \App\Constants\OrderStatus::SIN_STOCK)
+                        ? $order->getStockAvailabilityElsewhere()
+                        : [];
+
                     $grouped[$statusName]['items'][] = $orderArray;
                 }
             }
@@ -1337,6 +1351,20 @@ class OrderController extends Controller
         $order->agent_id = $agent->id;
         $order->save();
 
+        // Regenerar comisión si la orden ya estaba en estado de comisión
+        if ($order->status && in_array($order->status->description, ['Entregado', 'Confirmado'])) {
+            \App\Models\Earning::where('order_id', $order->id)
+                ->where('role_type', 'vendedor')
+                ->delete();
+
+            $commissionService = app(\App\Services\CommissionService::class);
+            if ($order->status->description === 'Entregado') {
+                $commissionService->generateForDeliveredOrder($order);
+            } else {
+                $commissionService->generateForConfirmedOrder($order);
+            }
+        }
+
         // 🔗 Sync with client to ensure consistency in CRM
         if ($order->client_id) {
             \App\Models\Client::where('id', $order->client_id)->update(['agent_id' => $agent->id]);
@@ -1361,7 +1389,7 @@ class OrderController extends Controller
     public function assignAgency(Request $request, Order $order)
     {
         $request->validate([
-            'agency_id' => 'required|exists:warehouses,id',
+            'agency_id' => 'required|integer',
         ]);
 
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
@@ -1369,28 +1397,91 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
 
-        $agency = Warehouse::findOrFail($request->agency_id);
+        // 🧩 Resolver agencia. Aceptamos un USUARIO con rol Agencia (caso normal del
+        // diálogo y de stock_elsewhere.agency_user_id). Por compatibilidad, si el id
+        // corresponde a un warehouse, lo resolvemos hacia su usuario asociado.
+        $agencyUser = User::find($request->agency_id);
+        $warehouse  = $agencyUser ? Warehouse::where('user_id', $agencyUser->id)->first() : null;
 
-        // Buscar el status "Asignar a agencia" o similar
-        $statusId = Status::where('description', '=', 'Asignar a agencia')->first()?->id;
-
-        if ($statusId) {
-            $order->status_id = $statusId;
+        if (!$agencyUser) {
+            $warehouse  = Warehouse::find($request->agency_id);
+            $agencyUser = $warehouse?->user_id ? User::find($warehouse->user_id) : null;
         }
 
-        $order->warehouse_id = $agency->id;
-        $order->agency_id = null; // Limpiar el campo viejo para evitar errores de FK
+        // Debe existir al menos un destino válido (agencia o almacén).
+        if (!$agencyUser && !$warehouse) {
+            return response()->json(['status' => false, 'message' => 'Agencia no válida.'], 422);
+        }
+
+        // ✅ Mantener consistencia: agency_id (usuario) <-> warehouse_id.
+        // getStockDetails() resuelve el almacén vía agency_id, así que ambos
+        // deben quedar sincronizados para que el chequeo de stock apunte al
+        // almacén correcto. (Si el almacén no tiene usuario-agencia asociado,
+        // se mantiene el comportamiento legacy: solo warehouse_id.)
+        $order->agency_id    = $agencyUser?->id;
+        $order->warehouse_id = $warehouse?->id;
 
         // ⏱️ TIMER: Iniciar cronómetro si no existe
         if (!$order->received_at) {
             $order->received_at = now();
         }
 
-        $order->save();
+        $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
+        $wasSinStock    = $sinStockStatus && $order->status_id === $sinStockStatus->id;
 
-        // 📦 Immediately sync stock status after agency assignment
-        if (method_exists($order, 'syncStockStatus')) {
-            $order->syncStockStatus();
+        if ($wasSinStock) {
+            // 📦 Caso "Sin Stock": guardamos primero la nueva agencia para que el
+            // chequeo de stock evalúe el nuevo almacén, y si ahora hay stock útil
+            // suficiente, restauramos el status previo (decisión de producto).
+            $order->save();
+            $order->refresh();
+
+            $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado', 'En ruta', 'Asignar a agencia', 'Novedades', 'Novedad Solucionada'];
+
+            if ($order->hasStock() && $order->previous_status_id) {
+                $restored = Status::find($order->previous_status_id);
+
+                if ($restored && !in_array($restored->description, $terminalStatuses)) {
+                    $destinationName = $agencyUser?->names ?? $warehouse?->name ?? 'nueva agencia';
+
+                    $order->status_id          = $restored->id;
+                    $order->previous_status_id = null;
+                    $order->save();
+
+                    \App\Models\OrderActivityLog::create([
+                        'order_id'    => $order->id,
+                        'user_id'     => auth()->id() ?? 1,
+                        'action'      => 'status_changed',
+                        'description' => "Agencia reasignada a '{$destinationName}'. Stock disponible en el nuevo almacén: orden restaurada a '{$restored->description}'.",
+                        'properties'  => [
+                            'old_status'   => $sinStockStatus->id,
+                            'new_status'   => $restored->id,
+                            'agency_id'    => $agencyUser?->id,
+                            'warehouse_id' => $warehouse?->id,
+                            'restored'     => true,
+                        ],
+                    ]);
+
+                    \App\Models\OrderUpdate::create([
+                        'order_id' => $order->id,
+                        'user_id'  => auth()->id() ?? 1,
+                        'message'  => "✅ Agencia reasignada. Había stock en el nuevo almacén: la orden volvió a '{$restored->description}'.",
+                    ]);
+                }
+            }
+            // Si todavía no hay stock en el nuevo almacén, la orden permanece en "Sin Stock".
+        } else {
+            // Flujo normal: mover a "Asignar a agencia".
+            $statusId = Status::where('description', '=', 'Asignar a agencia')->first()?->id;
+            if ($statusId) {
+                $order->status_id = $statusId;
+            }
+            $order->save();
+
+            // 📦 Immediately sync stock status after agency assignment
+            if (method_exists($order, 'syncStockStatus')) {
+                $order->syncStockStatus();
+            }
         }
 
         // 📡 BROADCAST EVENT: Ensure frontend updates for agency
@@ -1398,10 +1489,18 @@ class OrderController extends Controller
             event(new \App\Events\OrderUpdated($order));
         }
 
+        $order->load(['agency', 'warehouse', 'status']);
+        $orderArray = $order->toArray();
+        // Recalcular stock_elsewhere: si quedó en "Sin Stock" puede que aún haya
+        // otras opciones; si salió de "Sin Stock", se devuelve vacío.
+        $orderArray['stock_elsewhere'] = ($order->status?->description === OrderStatus::SIN_STOCK)
+            ? $order->getStockAvailabilityElsewhere()
+            : [];
+
         return response()->json([
             'status' => true,
             'message' => 'Orden asignada a la agencia correctamente',
-            'order' => $order->load(['agency', 'warehouse', 'status'])
+            'order' => $orderArray,
         ]);
     }
     public function addUpsell(Request $request, Order $order)

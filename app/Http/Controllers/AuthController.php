@@ -247,9 +247,26 @@ class AuthController extends Controller
 
     public function usersByRole($roleDescription)
     {
+        $isAgency = strtolower(trim($roleDescription)) === 'agencia';
+
         $users = User::whereHas('role', function ($q) use ($roleDescription) {
             $q->where('description', '=', $roleDescription);
-        })->get();
+        })
+        // Para Agencias incluimos sus ciudades para poder etiquetar "Agencia: Ciudad X".
+        ->when($isAgency, function ($q) {
+            $q->with(['cities' => function ($cq) {
+                $cq->orderBy('id');
+            }]);
+        })
+        ->get();
+
+        if ($isAgency) {
+            $users->each(function ($user) {
+                // Ciudad principal = primera ciudad asociada (orden por id).
+                $primary = $user->cities->first();
+                $user->primary_city = $primary?->name;
+            });
+        }
 
         return response()->json([
             'status' => true,
