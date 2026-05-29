@@ -150,9 +150,13 @@ class AssignOrderService
     {
         $date = $to->format('Y-m-d');
         
-        // Statuses que NUNCA deben ser asignados automáticamente
+        // Statuses que NUNCA deben ser asignados automáticamente.
+        // NOTA: "Sin Stock" ya NO se excluye: queremos que el backlog recoja las
+        // órdenes Sin Stock SIN vendedora y, si hay stock en alguna agencia, les
+        // asigne una por round robin (quedan en Sin Stock pero asignadas). La lógica
+        // interna las deja sin asignar si no hay stock en ningún almacén, y solo
+        // procesa las que tienen agent_id nulo (no toca las ya asignadas).
         $excludedStatuses = [
-            OrderStatus::SIN_STOCK,
             OrderStatus::ENTREGADO,
             OrderStatus::CANCELADO,
             OrderStatus::RECHAZADO,

@@ -344,7 +344,17 @@ class ShopifyWebhookController extends Controller
             // 📡 Broadcast para actualizar el Kanban en tiempo real
             event(new \App\Events\OrderUpdated($order));
 
-            // ⛔ NO auto-asignar: la orden queda en "Sin Stock" hasta que haya inventario
+            // 🔧 Intentar asignar via round robin AUNQUE no haya stock en el almacén
+            // principal: si hay stock en OTRA agencia y hay vendedoras activas,
+            // assignOne le asignará una vendedora (la orden queda en "Sin Stock" pero
+            // asignada, para que la vendedora pueda reasignar la agencia). Si no hay
+            // stock en ningún almacén del país, o la tienda está cerrada, queda sin asignar.
+            try {
+                $assignService->assignOne($order);
+            } catch (\Throwable $e) {
+                \Log::error("Error en auto-asignación Sin Stock para #{$order->name}: " . $e->getMessage());
+            }
+
             return response()->json(['success' => true, 'warning' => 'no_stock'], 200);
         }
 
