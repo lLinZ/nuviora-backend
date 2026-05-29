@@ -62,10 +62,12 @@ class AssignOrderService
                 }
             }
 
+            // 🔧 Sin Stock ahora usa el MISMO roster que las órdenes normales
+            // (round robin completo). Ya NO se filtra por especialistas
+            // (can_handle_no_stock): cualquier vendedora activa puede recibirla.
             $noStockAgents = collect();
             if ($hasStockAnywhere) {
-                $noStockAgents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id)
-                    ->filter(fn($agent) => $agent->can_handle_no_stock);
+                $noStockAgents = $this->activeAgentsForDate(now()->toDateString(), $order->shop_id);
             }
 
             if ($noStockAgents->isNotEmpty()) {
@@ -219,10 +221,9 @@ class AssignOrderService
                     }
                 }
 
-                if ($hasStockAnywhere) {
-                    // Filtrar solo a las vendedoras que pueden manejar Sin Stock
-                    $agentsForShop = $agentsForShop->filter(fn($a) => $a->can_handle_no_stock);
-                } else {
+                // 🔧 Sin Stock ahora usa el roster completo (round robin normal),
+                // no solo las especialistas (can_handle_no_stock).
+                if (!$hasStockAnywhere) {
                     // Si no hay stock en ningún almacén en el país, NO ASIGNAR A NADIE.
                     $agentsForShop = collect(); // Vaciamos para que salte
                 }
