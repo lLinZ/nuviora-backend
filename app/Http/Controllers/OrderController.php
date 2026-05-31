@@ -1465,48 +1465,68 @@ class OrderController extends Controller
 
         $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
         $wasSinStock    = $sinStockStatus && $order->status_id === $sinStockStatus->id;
+        $message        = 'Orden asignada a la agencia correctamente';
 
         if ($wasSinStock) {
             // 📦 Caso "Sin Stock": guardamos primero la nueva agencia para que el
-            // chequeo de stock evalúe el nuevo almacén, y si ahora hay stock útil
-            // suficiente, restauramos el status previo (decisión de producto).
+            // chequeo de stock evalúe el nuevo almacén.
             $order->save();
             $order->refresh();
 
             $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado', 'En ruta', 'Asignar a agencia', 'Novedades', 'Novedad Solucionada'];
 
-            if ($order->hasStock() && $order->previous_status_id) {
-                $restored = Status::find($order->previous_status_id);
+            // ⚠️ IMPORTANTE: solo avanzamos la orden si hasStock() es verdadero.
+            // hasStock() usa getStockDetails(), el MISMO chequeo que syncStockStatus()
+            // corre en cada carga del Kanban. Si avanzáramos sin stock real, el
+            // siguiente refresh rebotaría la orden de vuelta a "Sin Stock".
+            if ($order->hasStock()) {
+                // Status destino:
+                //  1. Restaurar el status previo (si existe y no es terminal).
+                //  2. Si no hay previo válido → "Asignado a vendedor". La orden conserva
+                //     SU MISMA vendedora (no se toca agent_id).
+                $restored = $order->previous_status_id ? Status::find($order->previous_status_id) : null;
 
                 if ($restored && !in_array($restored->description, $terminalStatuses)) {
-                    $destinationName = $agencyUser?->names ?? $warehouse?->name ?? 'nueva agencia';
+                    $targetStatus = $restored;
+                } else {
+                    $targetStatus = Status::where('description', OrderStatus::ASIGNADO_VENDEDOR)->first();
+                }
 
-                    $order->status_id          = $restored->id;
+                if ($targetStatus) {
+                    $destinationName = $agencyUser?->names ?? $warehouse?->name ?? 'nueva agencia';
+                    $wasRestored     = $restored && $targetStatus->id === $restored->id;
+
+                    $order->status_id          = $targetStatus->id;
                     $order->previous_status_id = null;
+                    // 👤 NO se toca agent_id: la vendedora asignada se mantiene.
                     $order->save();
 
                     \App\Models\OrderActivityLog::create([
                         'order_id'    => $order->id,
                         'user_id'     => auth()->id() ?? 1,
                         'action'      => 'status_changed',
-                        'description' => "Agencia reasignada a '{$destinationName}'. Stock disponible en el nuevo almacén: orden restaurada a '{$restored->description}'.",
+                        'description' => "Agencia reasignada a '{$destinationName}'. Stock disponible en el nuevo almacén: orden movida a '{$targetStatus->description}'.",
                         'properties'  => [
                             'old_status'   => $sinStockStatus->id,
-                            'new_status'   => $restored->id,
+                            'new_status'   => $targetStatus->id,
                             'agency_id'    => $agencyUser?->id,
                             'warehouse_id' => $warehouse?->id,
-                            'restored'     => true,
+                            'restored'     => $wasRestored,
                         ],
                     ]);
 
                     \App\Models\OrderUpdate::create([
                         'order_id' => $order->id,
                         'user_id'  => auth()->id() ?? 1,
-                        'message'  => "✅ Agencia reasignada. Había stock en el nuevo almacén: la orden volvió a '{$restored->description}'.",
+                        'message'  => "✅ Agencia reasignada. Había stock en el nuevo almacén: la orden pasó a '{$targetStatus->description}'.",
                     ]);
+
+                    $message = "Orden reasignada a {$destinationName}. Pasó a '{$targetStatus->description}'.";
                 }
+            } else {
+                // El nuevo almacén tampoco tiene stock suficiente: la orden se queda en Sin Stock.
+                $message = 'Se reasignó la agencia, pero ese almacén tampoco tiene stock suficiente. La orden permanece en "Sin Stock".';
             }
-            // Si todavía no hay stock en el nuevo almacén, la orden permanece en "Sin Stock".
         } else {
             // Flujo normal: mover a "Asignar a agencia".
             $statusId = Status::where('description', '=', 'Asignar a agencia')->first()?->id;
@@ -1536,7 +1556,7 @@ class OrderController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'Orden asignada a la agencia correctamente',
+            'message' => $message,
             'order' => $orderArray,
         ]);
     }
