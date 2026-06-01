@@ -72,6 +72,58 @@ class WhatsappCrmController extends Controller
     }
 
     /**
+     * Aplica el filtro de bucket (atención / seguimiento / cerrado) a un query de Client.
+     * Refleja exactamente la lógica de ConversationBucketService::calculateBucket en SQL.
+     * Centralizado para reutilizar tanto en el listado como en el conteo de badges.
+     */
+    private function applyBucketFilter($query, string $bucket): void
+    {
+        $query->where(function ($q) use ($bucket) {
+            // CASO A: El bucket está forzado manualmente en la tabla whatsapp_conversations
+            $q->whereExists(function ($sub) use ($bucket) {
+                $sub->select(DB::raw(1))
+                    ->from('whatsapp_conversations')
+                    ->whereColumn('whatsapp_conversations.client_id', 'clients.id')
+                    ->where('whatsapp_conversations.status', 'open')
+                    ->where('whatsapp_conversations.is_manual_bucket', true)
+                    ->where('whatsapp_conversations.conversation_bucket', $bucket);
+            })
+            // CASO B: No es manual (o no tiene registro manual), seguimos la lógica automática
+            ->orWhere(function ($sq) use ($bucket) {
+                // Asegurar que NO haya un bloqueo manual de OTRO bucket
+                $sq->whereNotExists(function ($sub) {
+                    $sub->select(DB::raw(1))
+                        ->from('whatsapp_conversations')
+                        ->whereColumn('whatsapp_conversations.client_id', 'clients.id')
+                        ->where('whatsapp_conversations.status', 'open')
+                        ->where('whatsapp_conversations.is_manual_bucket', true);
+                });
+
+                // Lógica automática según el bucket solicitado
+                if ($bucket === 'requires_attention') {
+                    $sq->whereRaw('1 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)');
+                } elseif ($bucket === 'closed') {
+                    $sq->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
+                       ->whereHas('latestOrder.status', function ($osq) {
+                           $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                       });
+                } elseif ($bucket === 'follow_up') {
+                    $sq->where(function ($fsq) {
+                        // Respuesta nuestra
+                        $fsq->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
+                            // O no tiene mensajes
+                            ->orWhereDoesntHave('whatsappMessages');
+                    })
+                    // Y NO debe ser un pedido cerrado (porque cerrado gana a seguimiento)
+                    ->whereDoesntHave('latestOrder.status', function ($osq) {
+                        $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
+                    });
+                }
+            });
+        });
+    }
+
+    /**
      * Verifica si el agente tiene acceso a un cliente específico.
      * Retorna true si tiene acceso, false si no.
      */
@@ -135,49 +187,7 @@ class WhatsappCrmController extends Controller
 
         // 4. Filtro por bucket (BASADO EN ÚLTIMA INTERACCIÓN + MANUAL)
         if ($bucket && $bucket !== 'all') {
-            $query->where(function($q) use ($bucket) {
-                // CASO A: El bucket está forzado manualmente en la tabla whatsapp_conversations
-                $q->whereExists(function ($sub) use ($bucket) {
-                    $sub->select(DB::raw(1))
-                        ->from('whatsapp_conversations')
-                        ->whereColumn('whatsapp_conversations.client_id', 'clients.id')
-                        ->where('whatsapp_conversations.status', 'open')
-                        ->where('whatsapp_conversations.is_manual_bucket', true)
-                        ->where('whatsapp_conversations.conversation_bucket', $bucket);
-                })
-                // CASO B: No es manual (o no tiene registro manual), seguimos la lógica automática
-                ->orWhere(function($sq) use ($bucket) {
-                    // Asegurar que NO haya un bloqueo manual de OTRO bucket
-                    $sq->whereNotExists(function ($sub) {
-                        $sub->select(DB::raw(1))
-                            ->from('whatsapp_conversations')
-                            ->whereColumn('whatsapp_conversations.client_id', 'clients.id')
-                            ->where('whatsapp_conversations.status', 'open')
-                            ->where('whatsapp_conversations.is_manual_bucket', true);
-                    });
-
-                    // Lógica automática según el bucket solicitado
-                    if ($bucket === 'requires_attention') {
-                        $sq->whereRaw('1 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)');
-                    } elseif ($bucket === 'closed') {
-                        $sq->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
-                           ->whereHas('latestOrder.status', function($osq) {
-                               $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                           });
-                    } elseif ($bucket === 'follow_up') {
-                        $sq->where(function($fsq) {
-                            // Respuesta nuestra
-                            $fsq->whereRaw('0 = (SELECT is_from_client FROM whatsapp_messages WHERE whatsapp_messages.client_id = clients.id ORDER BY sent_at DESC, id DESC LIMIT 1)')
-                                // O no tiene mensajes
-                                ->orWhereDoesntHave('whatsappMessages');
-                        })
-                        // Y NO debe ser un pedido cerrado (porque cerrado gana a seguimiento)
-                        ->whereDoesntHave('latestOrder.status', function($osq) {
-                            $osq->whereIn('description', ['Entregado', 'Cancelado', 'Rechazado']);
-                        });
-                    }
-                });
-            });
+            $this->applyBucketFilter($query, $bucket);
         }
 
         // 5. Filtro por rango de fecha
@@ -296,28 +306,21 @@ class WhatsappCrmController extends Controller
         });
 
         // ── Contadores de buckets GLOBALES (para los badges del header) ─────────────────
-        $statsQuery = Client::whereHas('whatsappMessages');
-        if (!$isAdmin) { $this->applyVisibilityScope($statsQuery, $user); }
-        elseif ($agentId) { $this->applyVisibilityScope($statsQuery, $agentId); }
+        // Se cuentan a nivel de base de datos (1 query por bucket) en lugar de cargar
+        // TODOS los clientes en memoria, lo que agotaba la RAM de PHP a medida que crecía
+        // el volumen de conversaciones.
+        $buildStatsQuery = function () use ($isAdmin, $user, $agentId) {
+            $q = Client::whereHas('whatsappMessages');
+            if (!$isAdmin) { $this->applyVisibilityScope($q, $user); }
+            elseif ($agentId) { $this->applyVisibilityScope($q, $agentId); }
+            return $q;
+        };
 
-        $allStats = $statsQuery->with(['activeWhatsappConversation', 'latestWhatsappMessage', 'latestOrder.status'])
-            ->withCount(['whatsappMessages as unread_count' => function ($q) {
-                $q->where('is_from_client', true)->where('status', '!=', 'read');
-            }])
-            ->get(['id', 'agent_id']);
-        $totalCounts = ['requires_attention' => 0, 'follow_up' => 0, 'closed' => 0];
-
-        foreach ($allStats as $s) {
-            $latest = $s->latestWhatsappMessage;
-            $order  = $s->latestOrder;
-            
-            $b = ConversationBucketService::calculateBucket(
-                $s->activeWhatsappConversation ?? new WhatsappConversation(['client_id' => $s->id]), 
-                $latest,
-                $order
-            );
-            
-            if (isset($totalCounts[$b])) $totalCounts[$b]++;
+        $totalCounts = [];
+        foreach (['requires_attention', 'follow_up', 'closed'] as $b) {
+            $bq = $buildStatsQuery();
+            $this->applyBucketFilter($bq, $b);
+            $totalCounts[$b] = $bq->count();
         }
 
         return response()->json(array_merge($paginator->toArray(), [
