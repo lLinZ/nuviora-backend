@@ -41,3 +41,17 @@ Broadcast::channel('orders.{id}', function ($user, $id) {
 Broadcast::channel('whatsapp', function ($user) {
     return in_array($user->role?->description, ['Admin', 'Gerente', 'Master', 'SuperAdmin', 'Vendedor']);
 });
+
+// Chat interno vendedora <-> agencia. Participantes del hilo + supervisión Admin/Gerente/Master.
+Broadcast::channel('internal-chat.{conversationId}', function ($user, $conversationId) {
+    if (!$user) return false;
+
+    if (in_array($user->role?->description, ['Admin', 'Gerente', 'Master'])) {
+        return true;
+    }
+
+    $conversation = \App\Models\InternalConversation::find($conversationId);
+    if (!$conversation) return false;
+
+    return $conversation->hasParticipant($user->id);
+});

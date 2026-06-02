@@ -53,16 +53,10 @@ class WhatsappConversationController extends Controller
         // 2. Filtrar por bucket (nuevo sistema)
         $bucket = $request->query('bucket', 'all');
         if ($bucket && $bucket !== 'all') {
-                $query->whereHas('whatsappConversations', function ($cq) {
-                    $cq->where('conversation_bucket', 'requires_attention')
-                       ->where('status', 'open');
-                });
-            } else {
-                $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
-                    $cq->where('conversation_bucket', $bucket)
-                       ->where('status', 'open');
-                });
-            }
+            $query->whereHas('whatsappConversations', function ($cq) use ($bucket) {
+                $cq->where('conversation_bucket', $bucket)
+                   ->where('status', 'open');
+            });
         } else {
             // 'all': mostrar todos los clientes que tienen al menos un mensaje de WhatsApp
             $query->whereHas('whatsappMessages');

@@ -60,6 +60,19 @@ Route::middleware('api_key')->prefix('external/whatsapp')->group(function () {
 // Endpoints
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/kanban-data', [OrderController::class, 'kanban']);
+
+    /**---------------------
+     * CHAT INTERNO (vendedora <-> agencia)
+     * ---------------------**/
+    Route::prefix('internal-chat')->group(function () {
+        Route::get('/conversations', [\App\Http\Controllers\InternalChatController::class, 'conversations']);
+        Route::get('/contacts', [\App\Http\Controllers\InternalChatController::class, 'contacts']);
+        Route::get('/unread-count', [\App\Http\Controllers\InternalChatController::class, 'unreadCount']);
+        Route::post('/conversations', [\App\Http\Controllers\InternalChatController::class, 'openConversation']);
+        Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\InternalChatController::class, 'messages']);
+        Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\InternalChatController::class, 'store']);
+        Route::post('/conversations/{conversation}/read', [\App\Http\Controllers\InternalChatController::class, 'markRead']);
+    });
     /**---------------------
      * USERS
      * ---------------------**/
