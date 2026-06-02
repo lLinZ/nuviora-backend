@@ -35,8 +35,9 @@ class InternalChatController extends Controller
         $isAdmin = $this->isAdmin($user);
 
         $query = InternalConversation::with([
-            'vendedor:id,names,surnames',
-            'agency:id,names,surnames',
+            'vendedor.role',
+            'agency.role',
+            'agency.cities:id,name,agency_id',
             'lastMessage',
         ]);
 
@@ -63,9 +64,9 @@ class InternalChatController extends Controller
 
             return [
                 'id'              => $c->id,
-                'vendedor'        => $c->vendedor ? ['id' => $c->vendedor->id, 'name' => trim($c->vendedor->names . ' ' . $c->vendedor->surnames)] : null,
-                'agency'          => $c->agency ? ['id' => $c->agency->id, 'name' => trim($c->agency->names . ' ' . $c->agency->surnames)] : null,
-                'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => trim($counterpart->names . ' ' . $counterpart->surnames)] : null,
+                'vendedor'        => $c->vendedor ? ['id' => $c->vendedor->id, 'name' => $c->vendedor->chatDisplayName()] : null,
+                'agency'          => $c->agency ? ['id' => $c->agency->id, 'name' => $c->agency->chatDisplayName()] : null,
+                'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
                 'last_message'    => $c->lastMessage ? [
                     'body'       => $c->lastMessage->body,
                     'sender_id'  => $c->lastMessage->sender_id,
@@ -99,10 +100,10 @@ class InternalChatController extends Controller
         }
 
         $contacts = User::whereHas('role', fn ($q) => $q->where('description', $targetRole))
-            ->select('id', 'names', 'surnames')
+            ->with(['role', 'cities:id,name,agency_id'])
             ->orderBy('names')
             ->get()
-            ->map(fn ($u) => ['id' => $u->id, 'name' => trim($u->names . ' ' . $u->surnames)]);
+            ->map(fn ($u) => ['id' => $u->id, 'name' => $u->chatDisplayName()]);
 
         return response()->json($contacts);
     }
@@ -157,13 +158,13 @@ class InternalChatController extends Controller
         }
 
         $messages = $conversation->messages()
-            ->with('sender:id,names,surnames')
+            ->with(['sender.role', 'sender.cities:id,name,agency_id'])
             ->orderBy('created_at')
             ->get()
             ->map(fn (InternalMessage $m) => [
                 'id'         => $m->id,
                 'sender_id'  => $m->sender_id,
-                'sender'     => $m->sender ? ['id' => $m->sender->id, 'name' => trim($m->sender->names . ' ' . $m->sender->surnames)] : null,
+                'sender'     => $m->sender ? ['id' => $m->sender->id, 'name' => $m->sender->chatDisplayName()] : null,
                 'body'       => $m->body,
                 'order_id'   => $m->order_id,
                 'read_at'    => $m->read_at,
@@ -208,12 +209,12 @@ class InternalChatController extends Controller
 
         event(new InternalMessageSent($message));
 
-        $message->load('sender:id,names,surnames');
+        $user->loadMissing(['role', 'cities']);
 
         return response()->json([
             'id'         => $message->id,
             'sender_id'  => $message->sender_id,
-            'sender'     => ['id' => $user->id, 'name' => trim($user->names . ' ' . $user->surnames)],
+            'sender'     => ['id' => $user->id, 'name' => $user->chatDisplayName()],
             'body'       => $message->body,
             'order_id'   => $message->order_id,
             'read_at'    => $message->read_at,

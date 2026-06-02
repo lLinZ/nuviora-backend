@@ -71,6 +71,28 @@ class User extends Authenticatable
     }
 
     /**
+     * Nombre a mostrar en el chat interno, con identidad enmascarada:
+     * - Agencia  -> ciudad(es) que atiende (oculta el nombre real).
+     * - Vendedor -> "Vendedora #ID" (oculta el nombre real).
+     * - Otros (Admin/Gerente) -> nombre real (supervisión).
+     */
+    public function chatDisplayName(): string
+    {
+        $role = $this->role?->description;
+
+        if ($role === 'Agencia') {
+            $cities = $this->cities->pluck('name')->filter()->implode(', ');
+            return $cities !== '' ? $cities : 'Agencia';
+        }
+
+        if ($role === 'Vendedor') {
+            return 'Vendedora #' . $this->id;
+        }
+
+        return trim(($this->names ?? '') . ' ' . ($this->surnames ?? ''));
+    }
+
+    /**
      * The attributes that are mass assignable.
      *
      * @var list<string>

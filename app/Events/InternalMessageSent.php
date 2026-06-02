@@ -17,7 +17,7 @@ class InternalMessageSent implements ShouldBroadcast
 
     public function __construct(InternalMessage $message)
     {
-        $this->message = $message->loadMissing(['sender:id,names,surnames,role_id', 'conversation', 'order:id']);
+        $this->message = $message->loadMissing(['sender.role', 'sender.cities:id,name,agency_id', 'conversation', 'order:id']);
     }
 
     public function broadcastWith(): array
@@ -34,8 +34,8 @@ class InternalMessageSent implements ShouldBroadcast
                 'read_at'         => $this->message->read_at,
                 'created_at'      => $this->message->created_at,
                 'sender' => $sender ? [
-                    'id'    => $sender->id,
-                    'names' => trim(($sender->names ?? '') . ' ' . ($sender->surnames ?? '')),
+                    'id'   => $sender->id,
+                    'name' => $sender->chatDisplayName(),
                 ] : null,
             ],
         ];
