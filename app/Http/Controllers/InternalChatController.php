@@ -5,9 +5,9 @@ namespace App\Http\Controllers;
 use App\Events\InternalMessageSent;
 use App\Models\InternalConversation;
 use App\Models\InternalMessage;
+use App\Models\Order;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class InternalChatController extends Controller
 {
@@ -25,37 +25,51 @@ class InternalChatController extends Controller
         return in_array($this->roleOf($user), self::ADMIN_ROLES);
     }
 
+    /** Datos del cliente de una orden (para el encabezado del hilo). */
+    private function clientName(?Order $order): ?string
+    {
+        if (!$order || !$order->client) return null;
+        return trim(($order->client->first_name ?? '') . ' ' . ($order->client->last_name ?? '')) ?: null;
+    }
+
+    /** La contraparte enmascarada de una orden, según quién pregunta. */
+    private function counterpartOf(Order $order, User $user): ?User
+    {
+        if ((int) $order->agent_id === (int) $user->id) return $order->agency;
+        if ((int) $order->agency_id === (int) $user->id) return $order->agent;
+        return null;
+    }
+
+    private const INBOX_WITH = [
+        'order:id,name,client_id,agent_id,agency_id',
+        'order.client:id,first_name,last_name',
+        'order.agent.role',
+        'order.agency.role',
+        'order.agency.cities:id,name,agency_id',
+        'lastMessage',
+    ];
+
     /**
-     * Bandeja: hilos del usuario autenticado (o todos, si es Admin/Gerente),
-     * ordenados por última actividad, con contraparte, último mensaje y no-leídos.
+     * Bandeja: hilos (por orden) del usuario, ordenados por última actividad.
      */
     public function conversations(Request $request)
     {
         $user = $request->user();
         $isAdmin = $this->isAdmin($user);
 
-        $query = InternalConversation::with([
-            'vendedor.role',
-            'agency.role',
-            'agency.cities:id,name,agency_id',
-            'lastMessage',
-        ]);
+        $query = InternalConversation::with(self::INBOX_WITH);
 
         if (!$isAdmin) {
-            $query->where(function ($q) use ($user) {
-                $q->where('vendedor_id', $user->id)
-                  ->orWhere('agency_id', $user->id);
+            $query->whereHas('order', function ($q) use ($user) {
+                $q->where('agent_id', $user->id)->orWhere('agency_id', $user->id);
             });
         }
 
         $conversations = $query->orderByDesc('last_message_at')->get();
 
         $data = $conversations->map(function (InternalConversation $c) use ($user, $isAdmin) {
-            // Para admins (que sólo observan) el "counterpart" no aplica: mostramos ambos.
-            $counterpart = null;
-            if (!$isAdmin) {
-                $counterpart = (int) $c->vendedor_id === (int) $user->id ? $c->agency : $c->vendedor;
-            }
+            $order = $c->order;
+            $counterpart = (!$isAdmin && $order) ? $this->counterpartOf($order, $user) : null;
 
             $unread = $isAdmin ? 0 : $c->messages()
                 ->where('sender_id', '!=', $user->id)
@@ -64,8 +78,10 @@ class InternalChatController extends Controller
 
             return [
                 'id'              => $c->id,
-                'vendedor'        => $c->vendedor ? ['id' => $c->vendedor->id, 'name' => $c->vendedor->chatDisplayName()] : null,
-                'agency'          => $c->agency ? ['id' => $c->agency->id, 'name' => $c->agency->chatDisplayName()] : null,
+                'order'           => $order ? ['id' => $order->id, 'name' => $order->name] : null,
+                'client'          => $this->clientName($order),
+                'vendedor'        => $order && $order->agent ? ['id' => $order->agent->id, 'name' => $order->agent->chatDisplayName()] : null,
+                'agency'          => $order && $order->agency ? ['id' => $order->agency->id, 'name' => $order->agency->chatDisplayName()] : null,
                 'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
                 'last_message'    => $c->lastMessage ? [
                     'body'       => $c->lastMessage->body,
@@ -81,69 +97,87 @@ class InternalChatController extends Controller
     }
 
     /**
-     * Contrapartes disponibles para iniciar un hilo nuevo.
-     * Vendedor -> Agencias; Agencia -> Vendedores.
+     * Buscador de órdenes asignadas al usuario, para iniciar/abrir un chat.
+     * Vendedora -> sus órdenes con agencia asignada. Agencia -> sus órdenes.
      */
-    public function contacts(Request $request)
+    public function searchOrders(Request $request)
     {
         $user = $request->user();
         $role = $this->roleOf($user);
+        $term = trim((string) $request->query('q', ''));
 
-        $targetRole = match ($role) {
-            'Vendedor' => 'Agencia',
-            'Agencia'  => 'Vendedor',
-            default    => null, // Admins gestionan hilos existentes desde la bandeja
-        };
+        $query = Order::with([
+            'client:id,first_name,last_name',
+            'agent.role',
+            'agency.role',
+            'agency.cities:id,name,agency_id',
+        ]);
 
-        if (!$targetRole) {
+        if ($role === 'Vendedor') {
+            $query->where('agent_id', $user->id)->whereNotNull('agency_id');
+        } elseif ($role === 'Agencia') {
+            $query->where('agency_id', $user->id)->whereNotNull('agent_id');
+        } elseif ($this->isAdmin($user)) {
+            // Admin puede buscar cualquier orden con vendedora y agencia.
+            $query->whereNotNull('agent_id')->whereNotNull('agency_id');
+        } else {
             return response()->json([]);
         }
 
-        $contacts = User::whereHas('role', fn ($q) => $q->where('description', $targetRole))
-            ->with(['role', 'cities:id,name,agency_id'])
-            ->orderBy('names')
-            ->get()
-            ->map(fn ($u) => ['id' => $u->id, 'name' => $u->chatDisplayName()]);
+        if ($term !== '') {
+            $query->where(function ($q) use ($term) {
+                $q->where('name', 'like', "%{$term}%")
+                  ->orWhere('id', $term);
+            });
+        }
 
-        return response()->json($contacts);
+        $orders = $query->orderByDesc('id')->limit(25)->get();
+
+        // Mapear conversaciones existentes en una sola consulta.
+        $convByOrder = InternalConversation::whereIn('order_id', $orders->pluck('id'))
+            ->pluck('id', 'order_id');
+
+        $data = $orders->map(function (Order $order) use ($user, $convByOrder) {
+            $counterpart = $this->counterpartOf($order, $user)
+                ?? $order->agency // fallback admin: muestra la agencia
+                ?? $order->agent;
+
+            return [
+                'order_id'        => $order->id,
+                'order_name'      => $order->name,
+                'client'          => $this->clientName($order),
+                'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
+                'conversation_id' => $convByOrder[$order->id] ?? null,
+            ];
+        });
+
+        return response()->json($data);
     }
 
     /**
-     * Abre (o reutiliza) el hilo entre el usuario actual y una contraparte.
+     * Abre (o crea) el hilo de una orden. Lo usa el buscador y el botón en la orden.
      */
-    public function openConversation(Request $request)
+    public function openByOrder(Request $request, Order $order)
     {
-        $request->validate(['counterpart_id' => 'required|integer|exists:users,id']);
-
         $user = $request->user();
-        $role = $this->roleOf($user);
 
-        if (!in_array($role, ['Vendedor', 'Agencia'])) {
-            return response()->json(['message' => 'Solo vendedoras y agencias pueden iniciar un chat.'], 403);
+        $isParticipant = (int) $order->agent_id === (int) $user->id
+            || (int) $order->agency_id === (int) $user->id;
+
+        if (!$isParticipant && !$this->isAdmin($user)) {
+            return response()->json(['message' => 'No tienes acceso al chat de esta orden.'], 403);
         }
 
-        $counterpart = User::with('role')->findOrFail($request->counterpart_id);
-        $counterRole = $counterpart->role->description ?? null;
+        $conversation = InternalConversation::firstOrCreate(['order_id' => $order->id]);
 
-        // Debe ser exactamente el par Vendedor<->Agencia.
-        $pairOk = ($role === 'Vendedor' && $counterRole === 'Agencia')
-            || ($role === 'Agencia' && $counterRole === 'Vendedor');
-
-        if (!$pairOk) {
-            return response()->json(['message' => 'Un chat interno solo es entre una vendedora y una agencia.'], 422);
-        }
-
-        $vendedorId = $role === 'Vendedor' ? $user->id : $counterpart->id;
-        $agencyId   = $role === 'Agencia' ? $user->id : $counterpart->id;
-
-        $conversation = InternalConversation::firstOrCreate(
-            ['vendedor_id' => $vendedorId, 'agency_id' => $agencyId],
-        );
+        $order->loadMissing(['client:id,first_name,last_name', 'agent.role', 'agency.role', 'agency.cities:id,name,agency_id']);
+        $counterpart = $this->counterpartOf($order, $user) ?? $order->agency ?? $order->agent;
 
         return response()->json([
             'id'          => $conversation->id,
-            'vendedor_id' => $conversation->vendedor_id,
-            'agency_id'   => $conversation->agency_id,
+            'order'       => ['id' => $order->id, 'name' => $order->name],
+            'client'      => $this->clientName($order),
+            'counterpart' => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
         ], $conversation->wasRecentlyCreated ? 201 : 200);
     }
 
@@ -153,6 +187,8 @@ class InternalChatController extends Controller
     public function messages(Request $request, InternalConversation $conversation)
     {
         $user = $request->user();
+        $conversation->loadMissing('order');
+
         if (!$this->canAccess($user, $conversation)) {
             return response()->json(['message' => 'No tienes acceso a esta conversación.'], 403);
         }
@@ -166,13 +202,11 @@ class InternalChatController extends Controller
                 'sender_id'  => $m->sender_id,
                 'sender'     => $m->sender ? ['id' => $m->sender->id, 'name' => $m->sender->chatDisplayName()] : null,
                 'body'       => $m->body,
-                'order_id'   => $m->order_id,
                 'read_at'    => $m->read_at,
                 'created_at' => $m->created_at,
                 'mine'       => (int) $m->sender_id === (int) $user->id,
             ]);
 
-        // Auto-marcar como leído lo recibido (solo participantes).
         if ($conversation->hasParticipant($user->id)) {
             $conversation->messages()
                 ->where('sender_id', '!=', $user->id)
@@ -188,12 +222,11 @@ class InternalChatController extends Controller
      */
     public function store(Request $request, InternalConversation $conversation)
     {
-        $request->validate([
-            'body'     => 'required|string|max:5000',
-            'order_id' => 'nullable|integer|exists:orders,id',
-        ]);
+        $request->validate(['body' => 'required|string|max:5000']);
 
         $user = $request->user();
+        $conversation->loadMissing('order');
+
         if (!$this->canAccess($user, $conversation)) {
             return response()->json(['message' => 'No tienes acceso a esta conversación.'], 403);
         }
@@ -202,7 +235,6 @@ class InternalChatController extends Controller
             'conversation_id' => $conversation->id,
             'sender_id'       => $user->id,
             'body'            => $request->body,
-            'order_id'        => $request->order_id,
         ]);
 
         $conversation->update(['last_message_at' => $message->created_at]);
@@ -216,7 +248,6 @@ class InternalChatController extends Controller
             'sender_id'  => $message->sender_id,
             'sender'     => ['id' => $user->id, 'name' => $user->chatDisplayName()],
             'body'       => $message->body,
-            'order_id'   => $message->order_id,
             'read_at'    => $message->read_at,
             'created_at' => $message->created_at,
             'mine'       => true,
@@ -229,9 +260,9 @@ class InternalChatController extends Controller
     public function markRead(Request $request, InternalConversation $conversation)
     {
         $user = $request->user();
+        $conversation->loadMissing('order');
 
         if (!$conversation->hasParticipant($user->id)) {
-            // Admins observan: su lectura no afecta los contadores de los participantes.
             return response()->json(['status' => 'ignored']);
         }
 
@@ -256,8 +287,8 @@ class InternalChatController extends Controller
 
         $count = InternalMessage::whereNull('read_at')
             ->where('sender_id', '!=', $user->id)
-            ->whereHas('conversation', function ($q) use ($user) {
-                $q->where('vendedor_id', $user->id)->orWhere('agency_id', $user->id);
+            ->whereHas('conversation.order', function ($q) use ($user) {
+                $q->where('agent_id', $user->id)->orWhere('agency_id', $user->id);
             })
             ->count();
 

@@ -13,7 +13,6 @@ class InternalMessage extends Model
         'conversation_id',
         'sender_id',
         'body',
-        'order_id',
         'read_at',
     ];
 
@@ -29,10 +28,5 @@ class InternalMessage extends Model
     public function sender()
     {
         return $this->belongsTo(User::class, 'sender_id');
-    }
-
-    public function order()
-    {
-        return $this->belongsTo(Order::class, 'order_id');
     }
 }

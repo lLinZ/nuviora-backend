@@ -10,8 +10,7 @@ class InternalConversation extends Model
     use HasFactory;
 
     protected $fillable = [
-        'vendedor_id',
-        'agency_id',
+        'order_id',
         'last_message_at',
     ];
 
@@ -19,14 +18,9 @@ class InternalConversation extends Model
         'last_message_at' => 'datetime',
     ];
 
-    public function vendedor()
+    public function order()
     {
-        return $this->belongsTo(User::class, 'vendedor_id');
-    }
-
-    public function agency()
-    {
-        return $this->belongsTo(User::class, 'agency_id');
+        return $this->belongsTo(Order::class, 'order_id');
     }
 
     public function messages()
@@ -40,11 +34,15 @@ class InternalConversation extends Model
     }
 
     /**
-     * ¿Es este usuario uno de los dos participantes del hilo?
+     * ¿Es este usuario participante? Vendedora (agent_id) o agencia (agency_id)
+     * de la orden asociada.
      */
     public function hasParticipant($userId): bool
     {
-        return (int) $this->vendedor_id === (int) $userId
-            || (int) $this->agency_id === (int) $userId;
+        $order = $this->relationLoaded('order') ? $this->order : $this->order()->first();
+        if (!$order) return false;
+
+        return (int) $order->agent_id === (int) $userId
+            || (int) $order->agency_id === (int) $userId;
     }
 }

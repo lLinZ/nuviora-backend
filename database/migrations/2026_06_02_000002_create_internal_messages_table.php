@@ -8,8 +8,7 @@ return new class extends Migration
 {
     /**
      * Mensajes del chat interno. read_at = cuando la contraparte (no el emisor)
-     * lo leyó; sirve para el contador de no-leídos. order_id es opcional para
-     * referenciar un pedido dentro del mensaje (la "sala general").
+     * lo leyó; sirve para el contador de no-leídos.
      */
     public function up(): void
     {
@@ -18,7 +17,6 @@ return new class extends Migration
             $table->foreignId('conversation_id')->constrained('internal_conversations')->onDelete('cascade');
             $table->foreignId('sender_id')->constrained('users')->onDelete('cascade');
             $table->text('body');
-            $table->foreignId('order_id')->nullable()->constrained('orders')->nullOnDelete();
             $table->timestamp('read_at')->nullable();
             $table->timestamps();
 

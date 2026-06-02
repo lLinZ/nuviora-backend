@@ -17,7 +17,11 @@ class InternalMessageSent implements ShouldBroadcast
 
     public function __construct(InternalMessage $message)
     {
-        $this->message = $message->loadMissing(['sender.role', 'sender.cities:id,name,agency_id', 'conversation', 'order:id']);
+        $this->message = $message->loadMissing([
+            'sender.role',
+            'sender.cities:id,name,agency_id',
+            'conversation.order:id,agent_id,agency_id',
+        ]);
     }
 
     public function broadcastWith(): array
@@ -30,7 +34,6 @@ class InternalMessageSent implements ShouldBroadcast
                 'conversation_id' => $this->message->conversation_id,
                 'sender_id'       => $this->message->sender_id,
                 'body'            => $this->message->body,
-                'order_id'        => $this->message->order_id,
                 'read_at'         => $this->message->read_at,
                 'created_at'      => $this->message->created_at,
                 'sender' => $sender ? [
@@ -43,16 +46,18 @@ class InternalMessageSent implements ShouldBroadcast
 
     /**
      * Emite al canal del hilo (para anexar en vivo) y a los canales personales
-     * de ambos participantes (para el contador de no-leídos / campanita).
+     * de los participantes de la orden (para el contador de no-leídos / campanita).
      */
     public function broadcastOn(): array
     {
-        $conv = $this->message->conversation;
+        $channels = [new PrivateChannel('internal-chat.' . $this->message->conversation_id)];
 
-        return [
-            new PrivateChannel('internal-chat.' . $this->message->conversation_id),
-            new PrivateChannel('App.Models.User.' . $conv->vendedor_id),
-            new PrivateChannel('App.Models.User.' . $conv->agency_id),
-        ];
+        $order = $this->message->conversation?->order;
+        if ($order) {
+            if ($order->agent_id)  $channels[] = new PrivateChannel('App.Models.User.' . $order->agent_id);
+            if ($order->agency_id) $channels[] = new PrivateChannel('App.Models.User.' . $order->agency_id);
+        }
+
+        return $channels;
     }
 }

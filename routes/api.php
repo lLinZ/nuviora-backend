@@ -62,13 +62,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/kanban-data', [OrderController::class, 'kanban']);
 
     /**---------------------
-     * CHAT INTERNO (vendedora <-> agencia)
+     * CHAT INTERNO POR ORDEN (vendedora <-> agencia)
      * ---------------------**/
     Route::prefix('internal-chat')->group(function () {
         Route::get('/conversations', [\App\Http\Controllers\InternalChatController::class, 'conversations']);
-        Route::get('/contacts', [\App\Http\Controllers\InternalChatController::class, 'contacts']);
         Route::get('/unread-count', [\App\Http\Controllers\InternalChatController::class, 'unreadCount']);
-        Route::post('/conversations', [\App\Http\Controllers\InternalChatController::class, 'openConversation']);
+        Route::get('/orders/search', [\App\Http\Controllers\InternalChatController::class, 'searchOrders']);
+        Route::post('/orders/{order}/open', [\App\Http\Controllers\InternalChatController::class, 'openByOrder']);
         Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\InternalChatController::class, 'messages']);
         Route::post('/conversations/{conversation}/messages', [\App\Http\Controllers\InternalChatController::class, 'store']);
         Route::post('/conversations/{conversation}/read', [\App\Http\Controllers\InternalChatController::class, 'markRead']);
