@@ -88,22 +88,43 @@ class ShopifyWebhookController extends Controller
             ?? $noteAttributes->firstWhere('name', 'reference')['value'] 
             ?? null;
 
-        $client = Client::updateOrCreate(
-            ['customer_id' => $finalCustomerId],
-            [
-                'customer_number' => $finalCustomerId,
-                'first_name'      => $firstName,
-                'last_name'       => $lastName,
-                'phone'           => $phone,
-                'email'           => $email,
-                'country_name'    => $addressSource['country'] ?? null,
-                'country_code'    => $addressSource['country_code'] ?? null,
-                'province'        => $addressSource['province'] ?? null,
-                'city'            => $addressSource['province'] ?? null,
-                'address1'        => $addressSource['address1'] ?? $customAddress ?? null,
-                'address2'        => $addressSource['address2'] ?? $customReference ?? null,
-            ]
-        );
+        // IDENTIDAD DEL CLIENTE = TELÉFONO.
+        // Shopify puede asignar distintos customer_id a la misma persona (checkout de
+        // invitado, emails distintos, etc.), lo que partía un mismo teléfono en varios
+        // clientes y dejaba sus órdenes regadas / fuera del WhatsApp CRM. Por eso, si la
+        // orden trae teléfono, primero buscamos un cliente existente por teléfono
+        // (últimos 10 dígitos, igual que el resto del sistema) y lo reutilizamos.
+        $clientData = [
+            'customer_number' => $finalCustomerId,
+            'first_name'      => $firstName,
+            'last_name'       => $lastName,
+            'phone'           => $phone,
+            'email'           => $email,
+            'country_name'    => $addressSource['country'] ?? null,
+            'country_code'    => $addressSource['country_code'] ?? null,
+            'province'        => $addressSource['province'] ?? null,
+            'city'            => $addressSource['province'] ?? null,
+            'address1'        => $addressSource['address1'] ?? $customAddress ?? null,
+            'address2'        => $addressSource['address2'] ?? $customReference ?? null,
+        ];
+
+        $last10 = $phone ? substr(preg_replace('/[^0-9]/', '', $phone), -10) : null;
+        $client = ($last10 && strlen($last10) >= 7)
+            ? Client::where('phone', 'like', "%{$last10}")->orderBy('id')->first()
+            : null;
+
+        if ($client) {
+            // Cliente ya existe (mismo teléfono): actualizamos sus datos pero NO pisamos
+            // su customer_id si ya tenía uno, para no romper vínculos previos.
+            if (empty($client->customer_id)) {
+                $clientData['customer_id'] = $finalCustomerId;
+            }
+            $client->update($clientData);
+        } else {
+            // Sin teléfono usable o cliente nuevo: comportamiento por customer_id.
+            $clientData['customer_id'] = $finalCustomerId;
+            $client = Client::updateOrCreate(['customer_id' => $finalCustomerId], $clientData);
+        }
 
         // 2️⃣ Guardar/actualizar orden
         // Buscar "ciudad" (que ahora es provincia) en la tabla cities
