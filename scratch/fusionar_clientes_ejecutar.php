@@ -124,10 +124,11 @@ foreach ($dups as $p10 => $ids) {
 
             // 4) Borrar clientes duplicados (ya sin filas dependientes)
             Client::whereIn('id', $victims)->delete();
-        });
 
-        // 5) Recalcular bucket del CRM del sobreviviente
-        ConversationBucketService::recalculate($survivor);
+            // 5) Recalcular bucket del CRM del sobreviviente (DENTRO de la transacción:
+            //    si esto falla, TODO el grupo se revierte de verdad).
+            ConversationBucketService::recalculate($survivor);
+        });
 
         $clientesBorrados += count($victims);
         echo "    ✅ fusionado\n";

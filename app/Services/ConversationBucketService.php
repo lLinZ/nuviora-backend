@@ -41,7 +41,7 @@ class ConversationBucketService
         $conv->update([
             'conversation_bucket' => $bucket,
             'last_message_at'     => $lastMessage?->sent_at ?? now(),
-            'is_manual_bucket'    => $conv->is_manual_bucket
+            'is_manual_bucket'    => $conv->is_manual_bucket ?? false
         ]);
 
         return $bucket;
