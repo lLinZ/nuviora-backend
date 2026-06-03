@@ -454,6 +454,10 @@ class ExternalWhatsAppController extends Controller
             });
 
         // 6. Advanced Automation check for n8n flow tracking (Enhanced for Fran)
+        //
+        // $lastAutomated = el ÚLTIMO mensaje automático que enviamos (plantilla/automatización).
+        // Solo lo usamos como dato informativo ("qué fue lo último que mandamos"), NO para
+        // decidir si reenviar.
         $lastAutomated = WhatsappMessage::where('client_id', $client->id)
             ->where('is_from_client', false)
             ->where(function($q) {
@@ -464,21 +468,50 @@ class ExternalWhatsAppController extends Controller
             ->latest('sent_at')
             ->first();
 
+        // === ANCLA DE CONFIRMACIÓN (fix anti-"enmascarado") =========================
+        // El recordatorio de "no respondió la confirmación" debe decidirse SIEMPRE respecto
+        // a la plantilla de CONFIRMACIÓN inicial de este pedido, nunca respecto al último
+        // mensaje automático. Si nos basamos en "el último automático", cualquier automático
+        // posterior (un acuse "¡Gracias!", o el propio recordatorio) "tapa" la respuesta del
+        // cliente y le reenviamos plantilla aunque ya hubiera contestado. Ese era el bug.
+        //
+        // La confirmación se guarda como body "Plantilla: confirmacion_..." (ver send()).
+        // Los recordatorios son "Plantilla: no_respondio_confirmacion_..." y NO matchean
+        // 'Plantilla: confirmacion%', por eso el ancla NO se mueve con ellos.
+        // (Si agregas plantillas de confirmación con otro nombre, amplía este patrón.)
+        $confirmationMessage = WhatsappMessage::where('client_id', $client->id)
+            ->where('is_from_client', false)
+            ->where('body', 'like', 'Plantilla: confirmacion%')
+            ->when($order, function($q) use ($order) {
+                $q->where('order_id', $order->id);
+            })
+            ->latest('sent_at')
+            ->first();
+
         $hasClientResponseSinceLastAutomated = false;
         $hasAgentResponseSinceLastAutomated = false;
 
-        if ($lastAutomated) {
+        if ($confirmationMessage) {
+            // Usamos '>=' para no perder una respuesta registrada en el mismo segundo del
+            // envío. El cliente nunca puede contestar antes de que enviemos, así que cualquier
+            // mensaje suyo en/after el ancla cuenta como respuesta. Sesgamos a NO spamear.
             $hasClientResponseSinceLastAutomated = WhatsappMessage::where('client_id', $client->id)
                 ->where('is_from_client', true)
-                ->where('sent_at', '>', $lastAutomated->sent_at)
+                ->where('sent_at', '>=', $confirmationMessage->sent_at)
                 ->exists();
 
             $hasAgentResponseSinceLastAutomated = WhatsappMessage::where('client_id', $client->id)
                 ->where('is_from_client', false)
                 ->where('message_type', WhatsappMessage::TYPE_AGENT)
-                ->where('sent_at', '>', $lastAutomated->sent_at)
+                ->where('sent_at', '>=', $confirmationMessage->sent_at)
                 ->exists();
         }
+
+        // Solo se reenvía el siguiente recordatorio si: hubo una confirmación previa, y desde
+        // esa confirmación el cliente NO escribió y ningún agente intervino manualmente.
+        $shouldSendNextTemplate = $confirmationMessage
+            && !$hasClientResponseSinceLastAutomated
+            && !$hasAgentResponseSinceLastAutomated;
 
         return response()->json([
             'success' => true,
@@ -516,6 +549,7 @@ class ExternalWhatsAppController extends Controller
             'automation_check' => [
                 'last_automated_message_body' => $lastAutomated ? $lastAutomated->body : null,
                 'last_automated_message_date' => $lastAutomated ? $lastAutomated->sent_at?->toDateTimeString() : null,
+                'confirmation_anchor_date'    => $confirmationMessage ? $confirmationMessage->sent_at?->toDateTimeString() : null,
                 'has_client_response_since_last_automated' => $hasClientResponseSinceLastAutomated,
                 'has_agent_response_since_last_automated' => $hasAgentResponseSinceLastAutomated,
                 'should_stop_flow' => $hasClientResponseSinceLastAutomated || $hasAgentResponseSinceLastAutomated
@@ -523,8 +557,9 @@ class ExternalWhatsAppController extends Controller
             'template_tracking' => [
                 'last_template_sent' => $lastAutomated ? $lastAutomated->body : null,
                 'last_template_sent_at' => $lastAutomated ? $lastAutomated->sent_at?->toDateTimeString() : null,
+                'confirmation_sent_at' => $confirmationMessage ? $confirmationMessage->sent_at?->toDateTimeString() : null,
                 'has_client_responded_since' => $hasClientResponseSinceLastAutomated,
-                'should_send_next_template' => $lastAutomated && !$hasClientResponseSinceLastAutomated && !$hasAgentResponseSinceLastAutomated
+                'should_send_next_template' => $shouldSendNextTemplate
             ],
             'timestamp' => now()->toDateTimeString()
         ]);
