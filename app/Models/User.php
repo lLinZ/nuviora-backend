@@ -78,14 +78,15 @@ class User extends Authenticatable
      */
     public function chatDisplayName(): string
     {
-        $role = $this->role?->description;
+        // Detección robusta (case-insensitive; "vende" cubre Vendedor y Vendedora).
+        $role = strtolower(trim($this->role?->description ?? ''));
 
-        if ($role === 'Agencia') {
+        if ($role === 'agencia') {
             $cities = $this->cities->pluck('name')->filter()->implode(', ');
             return $cities !== '' ? $cities : 'Agencia';
         }
 
-        if ($role === 'Vendedor') {
+        if (str_contains($role, 'vende')) {
             return 'Vendedora #' . $this->id;
         }
 

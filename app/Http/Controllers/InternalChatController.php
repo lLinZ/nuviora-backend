@@ -11,18 +11,31 @@ use Illuminate\Http\Request;
 
 class InternalChatController extends Controller
 {
-    private const ADMIN_ROLES = ['Admin', 'Gerente', 'Master'];
-
-    private function roleOf(?User $user): ?string
+    /**
+     * Detección de rol robusta, alineada con OrderController/kanban:
+     * case-insensitive y "vende" matchea Vendedor Y Vendedora.
+     */
+    private function roleName(?User $user): string
     {
-        if (!$user) return null;
+        if (!$user) return '';
         if (!$user->relationLoaded('role')) $user->load('role');
-        return $user->role->description ?? null;
+        return strtolower(trim($user->role->description ?? ''));
     }
 
     private function isAdmin(?User $user): bool
     {
-        return in_array($this->roleOf($user), self::ADMIN_ROLES);
+        return in_array($this->roleName($user), ['admin', 'manager', 'gerente', 'master'], true);
+    }
+
+    /** Vendedor o Vendedora (igual que el kanban: str_contains 'vende'). */
+    private function isAgent(?User $user): bool
+    {
+        return str_contains($this->roleName($user), 'vende');
+    }
+
+    private function isAgencyRole(?User $user): bool
+    {
+        return $this->roleName($user) === 'agencia';
     }
 
     /** Datos del cliente de una orden (para el encabezado del hilo). */
@@ -38,6 +51,22 @@ class InternalChatController extends Controller
         if ((int) $order->agent_id === (int) $user->id) return $order->agency;
         if ((int) $order->agency_id === (int) $user->id) return $order->agent;
         return null;
+    }
+
+    /**
+     * Contraparte a mostrar: si soy participante, la OTRA parte (null si falta,
+     * p.ej. orden sin agencia aún). Si soy admin/observador, la agencia.
+     */
+    private function displayCounterpart(Order $order, User $user): ?User
+    {
+        $isParticipant = (int) $order->agent_id === (int) $user->id
+            || (int) $order->agency_id === (int) $user->id;
+
+        if ($isParticipant) {
+            return $this->counterpartOf($order, $user);
+        }
+
+        return $order->agency ?? $order->agent;
     }
 
     private const INBOX_WITH = [
@@ -98,12 +127,14 @@ class InternalChatController extends Controller
 
     /**
      * Buscador de órdenes asignadas al usuario, para iniciar/abrir un chat.
-     * Vendedora -> sus órdenes con agencia asignada. Agencia -> sus órdenes.
+     * Misma lógica de scoping que el kanban (OrderController@index):
+     *   - Vendedora -> SUS órdenes (agent_id).
+     *   - Agencia   -> SUS órdenes (agency_id).
+     *   - Admin/Gerente -> todas.
      */
     public function searchOrders(Request $request)
     {
         $user = $request->user();
-        $role = $this->roleOf($user);
         $term = trim((string) $request->query('q', ''));
 
         $query = Order::with([
@@ -113,21 +144,26 @@ class InternalChatController extends Controller
             'agency.cities:id,name,agency_id',
         ]);
 
-        if ($role === 'Vendedor') {
-            $query->where('agent_id', $user->id)->whereNotNull('agency_id');
-        } elseif ($role === 'Agencia') {
-            $query->where('agency_id', $user->id)->whereNotNull('agent_id');
-        } elseif ($this->isAdmin($user)) {
-            // Admin puede buscar cualquier orden con vendedora y agencia.
-            $query->whereNotNull('agent_id')->whereNotNull('agency_id');
+        if ($this->isAdmin($user)) {
+            // Admin/Gerente ven todas.
+        } elseif ($this->isAgent($user)) {
+            $query->where('agent_id', $user->id);
+        } elseif ($this->isAgencyRole($user)) {
+            $query->where('agency_id', $user->id);
         } else {
             return response()->json([]);
         }
 
+        // Búsqueda por NÚMERO de orden (name/order_id) o nombre del cliente.
+        // (Nunca por la clave primaria 'id', que confunde números de orden.)
         if ($term !== '') {
             $query->where(function ($q) use ($term) {
                 $q->where('name', 'like', "%{$term}%")
-                  ->orWhere('id', $term);
+                  ->orWhere('order_id', 'like', "%{$term}%")
+                  ->orWhereHas('client', function ($cq) use ($term) {
+                      $cq->where('first_name', 'like', "%{$term}%")
+                         ->orWhere('last_name', 'like', "%{$term}%");
+                  });
             });
         }
 
@@ -138,9 +174,7 @@ class InternalChatController extends Controller
             ->pluck('id', 'order_id');
 
         $data = $orders->map(function (Order $order) use ($user, $convByOrder) {
-            $counterpart = $this->counterpartOf($order, $user)
-                ?? $order->agency // fallback admin: muestra la agencia
-                ?? $order->agent;
+            $counterpart = $this->displayCounterpart($order, $user);
 
             return [
                 'order_id'        => $order->id,
@@ -171,7 +205,7 @@ class InternalChatController extends Controller
         $conversation = InternalConversation::firstOrCreate(['order_id' => $order->id]);
 
         $order->loadMissing(['client:id,first_name,last_name', 'agent.role', 'agency.role', 'agency.cities:id,name,agency_id']);
-        $counterpart = $this->counterpartOf($order, $user) ?? $order->agency ?? $order->agent;
+        $counterpart = $this->displayCounterpart($order, $user);
 
         return response()->json([
             'id'          => $conversation->id,
