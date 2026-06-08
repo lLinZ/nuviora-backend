@@ -17,7 +17,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // Ensure CORS middleware runs first in the global stack
         $middleware->prepend(\Illuminate\Http\Middleware\HandleCors::class);
         $middleware->alias([
-            'api_key' => \App\Http\Middleware\ApiKeyMiddleware::class,
+            'api_key'      => \App\Http\Middleware\ApiKeyMiddleware::class,
+            'agency.gate'  => \App\Http\Middleware\EnforceAgencyChatGate::class,
         ]);
     })
     ->withBroadcasting(

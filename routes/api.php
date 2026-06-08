@@ -58,7 +58,7 @@ Route::middleware('api_key')->prefix('external/whatsapp')->group(function () {
 });
 
 // Endpoints
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/kanban-data', [OrderController::class, 'kanban']);
 
     /**---------------------
@@ -67,6 +67,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('internal-chat')->group(function () {
         Route::get('/conversations', [\App\Http\Controllers\InternalChatController::class, 'conversations']);
         Route::get('/unread-count', [\App\Http\Controllers\InternalChatController::class, 'unreadCount']);
+        Route::get('/gate-status', [\App\Http\Controllers\InternalChatController::class, 'gateStatus']);
         Route::get('/orders/search', [\App\Http\Controllers\InternalChatController::class, 'searchOrders']);
         Route::post('/orders/{order}/open', [\App\Http\Controllers\InternalChatController::class, 'openByOrder']);
         Route::get('/conversations/{conversation}/messages', [\App\Http\Controllers\InternalChatController::class, 'messages']);

@@ -329,6 +329,57 @@ class InternalChatController extends Controller
         return response()->json(['unread' => $count]);
     }
 
+    /**
+     * Estado del candado del chat para la agencia: si está bloqueada y la lista
+     * de hilos que debe responder. El modal del frontend consume esto.
+     */
+    public function gateStatus(Request $request)
+    {
+        $user = $request->user();
+        $threshold = \App\Services\AgencyChatGate::threshold();
+
+        if (!\App\Services\AgencyChatGate::isAgency($user)) {
+            return response()->json([
+                'blocked'       => false,
+                'pending_count' => 0,
+                'threshold'     => $threshold,
+                'conversations' => [],
+            ]);
+        }
+
+        $pending = \App\Services\AgencyChatGate::pendingConversations($user, [
+            'order:id,name,client_id,agent_id,agency_id',
+            'order.client:id,first_name,last_name',
+            'order.agent.role',
+        ]);
+
+        $conversations = $pending->map(function (InternalConversation $c) {
+            $order = $c->order;
+
+            return [
+                'conversation_id' => $c->id,
+                'order'           => $order ? ['id' => $order->id, 'name' => $order->name] : null,
+                'client'          => $this->clientName($order),
+                'counterpart'     => $order && $order->agent
+                    ? ['id' => $order->agent->id, 'name' => $order->agent->chatDisplayName()]
+                    : null,
+                'last_message'    => $c->lastMessage ? [
+                    'body'       => $c->lastMessage->body,
+                    'sender_id'  => $c->lastMessage->sender_id,
+                    'created_at' => $c->lastMessage->created_at,
+                ] : null,
+                'last_message_at' => $c->last_message_at,
+            ];
+        })->values();
+
+        return response()->json([
+            'blocked'       => $pending->count() >= $threshold,
+            'pending_count' => $pending->count(),
+            'threshold'     => $threshold,
+            'conversations' => $conversations,
+        ]);
+    }
+
     private function canAccess(?User $user, InternalConversation $conversation): bool
     {
         if ($this->isAdmin($user)) return true;
