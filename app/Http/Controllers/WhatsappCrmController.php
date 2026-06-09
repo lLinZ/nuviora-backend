@@ -15,12 +15,16 @@ use Illuminate\Support\Facades\DB;
 /**
  * WhatsApp CRM v2 — Lógica de permisos simplificada y robusta.
  *
- * REGLA DE ORO:
- *  - Un agente ve un chat si la ÚLTIMA ORDEN del cliente tiene agent_id = user.id
- *  - Si el cliente NO tiene órdenes (lead) y clients.agent_id = user.id, también lo ve.
+ * REGLA DE ORO (la ORDEN manda, no clients.agent_id):
+ *  - Un agente ve un chat si la ÚLTIMA ORDEN CON DUEÑA del cliente tiene agent_id = user.id.
+ *    (Una orden posterior sin asignar NO le quita la propiedad a la última dueña real.)
+ *  - Si el cliente NO tiene ninguna orden asignada (lead puro o pedido aún sin vendedora)
+ *    y clients.agent_id = user.id, también lo ve.
  *  - Admin/Gerente ven TODO.
  *
- * Esta regla es simple, escalable y se aplica igual en TODOS los métodos.
+ * clients.agent_id se desincroniza (round-robin de leads + mass-updates de cierre de
+ * tienda), por eso NO se usa para decidir propiedad de clientes que ya tienen órdenes.
+ * Esta regla se aplica igual en TODOS los métodos.
  */
 class WhatsappCrmController extends Controller
 {
@@ -48,24 +52,34 @@ class WhatsappCrmController extends Controller
     {
         $userId = is_object($userOrId) ? $userOrId->id : $userOrId;
         
-        // ── REGLA SIMPLE Y A PRUEBA DE FALLOS ───────────────────────────────
+        // ── LA ORDEN ES LA ÚNICA FUENTE DE VERDAD ───────────────────────────
+        // El "dueño" de un cliente se decide SIEMPRE por la propiedad de la orden,
+        // nunca por clients.agent_id (que se desincroniza: el round-robin de leads
+        // del CRM y los mass-updates de cierre de tienda lo dejan apuntando a otra
+        // vendedora). clients.agent_id solo aplica a clientes que TODAVÍA no tienen
+        // ninguna orden asignada.
         $query->where(function ($q) use ($userId) {
-            // A. Clientes con órdenes: la orden más reciente pertenece al agente explícitamente
+            // A. Cliente con al menos UNA orden asignada:
+            //    visible SOLO para la vendedora de la ÚLTIMA orden que tuvo dueña
+            //    (la "última dueña real"). Se ignora a propósito una orden posterior
+            //    que haya quedado con agent_id = NULL (fuera de horario, sin stock,
+            //    reset por cierre de tienda): la dueña real sigue siendo la anterior.
             $q->whereHas('orders', function ($oq) use ($userId) {
                 $oq->where('agent_id', $userId)
-                   ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
+                   ->whereRaw('orders.id = (
+                        SELECT MAX(o2.id) FROM orders o2
+                        WHERE o2.client_id = orders.client_id
+                          AND o2.agent_id IS NOT NULL
+                   )');
             })
-            // B. Clientes donde el agente es el dueño original del Lead,
-            //    Y la última orden (si existe) NO le pertenece a otro agente.
-            // Esto cubre:
-            // 1. Leads puros (sin órdenes)
-            // 2. Clientes con órdenes donde la última orden NO tiene un vendedor asignado aún (agent_id IS NULL)
+            // B. Cliente SIN ninguna orden asignada todavía (lead puro, o pedido que
+            //    aún no ha sido tomado por ninguna vendedora): cae al dueño del lead
+            //    del CRM. En cuanto CUALQUIER orden reciba una dueña real, la rama A
+            //    toma el control y esta deja de aplicar para todos.
             ->orWhere(function ($sub) use ($userId) {
                 $sub->where('agent_id', $userId)
-                    ->whereDoesntHave('orders', function ($oq) use ($userId) {
-                        $oq->whereNotNull('agent_id')
-                           ->where('agent_id', '!=', $userId)
-                           ->whereRaw('id = (SELECT MAX(o2.id) FROM orders o2 WHERE o2.client_id = orders.client_id)');
+                    ->whereDoesntHave('orders', function ($oq) {
+                        $oq->whereNotNull('agent_id');
                     });
             });
         });
