@@ -154,20 +154,30 @@ class InternalChatController extends Controller
             return response()->json([]);
         }
 
-        // Búsqueda por NÚMERO de orden (name/order_id) o nombre del cliente.
-        // (Nunca por la clave primaria 'id', que confunde números de orden.)
+        // Búsqueda alineada con el kanban (OrderController@index) para que la
+        // vendedora encuentre en el chat las MISMAS órdenes que ve en su tablero:
+        // número de orden, nombre/apellido/nombre completo, teléfono y ciudad del
+        // cliente. (Nunca por la clave primaria 'id', que confunde números de orden.)
         if ($term !== '') {
             $query->where(function ($q) use ($term) {
                 $q->where('name', 'like', "%{$term}%")
+                  ->orWhere('order_number', 'like', "%{$term}%")
                   ->orWhere('order_id', 'like', "%{$term}%")
                   ->orWhereHas('client', function ($cq) use ($term) {
                       $cq->where('first_name', 'like', "%{$term}%")
-                         ->orWhere('last_name', 'like', "%{$term}%");
+                         ->orWhere('last_name', 'like', "%{$term}%")
+                         ->orWhere('phone', 'like', "%{$term}%")
+                         ->orWhere('city', 'like', "%{$term}%")
+                         ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", ["%{$term}%"]);
                   });
             });
         }
 
-        $orders = $query->orderByDesc('id')->limit(25)->get();
+        // Orden por actividad reciente (igual que el kanban) y límite más holgado
+        // para no truncar a vendedoras de alto volumen. La búsqueda por teléfono o
+        // número de orden ya es muy selectiva, así que 50 cubre de sobra el caso de
+        // iniciar un chat por una orden concreta.
+        $orders = $query->orderByDesc('updated_at')->orderByDesc('id')->limit(50)->get();
 
         // Mapear conversaciones existentes en una sola consulta.
         $convByOrder = InternalConversation::whereIn('order_id', $orders->pluck('id'))
