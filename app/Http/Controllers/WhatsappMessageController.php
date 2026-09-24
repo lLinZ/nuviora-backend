@@ -183,10 +183,17 @@ class WhatsappMessageController extends Controller
         $path = $file->store('whatsapp_media', 'public');
         
         $service = new WhatsAppService();
-        $mime = $file->getMimeType();
-        $type = str_contains($mime, 'video') ? 'video' : (str_contains($mime, 'audio') ? 'audio' : 'image');
-        
-        $upload = $service->uploadMedia(storage_path('app/public/' . $path), $type);
+        $fullPath = storage_path('app/public/' . $path);
+
+        // 🔥 Tarea 11: formato que acepte WhatsApp (convierte videos .mov/.webm/HEVC a MP4)
+        try {
+            [$fullPath, $mime, $type] = $service->prepareMedia($fullPath, $file->getMimeType());
+            $path = dirname($path) . '/' . basename($fullPath);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $upload = $service->uploadMedia($fullPath, $mime);
         if ($upload && isset($upload['id'])) {
             $result = $service->sendMedia($order->client->phone, $upload['id'], $type, $request->caption);
             if ($result && isset($result['messages'][0]['id'])) {
@@ -206,7 +213,8 @@ class WhatsappMessageController extends Controller
                 return response()->json($msg, 201);
             }
         }
-        return response()->json(['error' => 'Failed to send media'], 500);
+        $error = $service->lastError ? "WhatsApp rechazó el archivo: {$service->lastError}" : 'Error al enviar el archivo.';
+        return response()->json(['error' => $error, 'message' => $error], 500);
     }
 
     public function markAsRead($orderId)

@@ -481,11 +481,16 @@ class WhatsappCrmController extends Controller
         $fullPath = storage_path('app/public/' . $path);
 
         $service = new \App\Services\WhatsAppService();
-        $mime    = $file->getMimeType();
-        $type    = str_starts_with($mime, 'image/') ? 'image'
-                : (str_starts_with($mime, 'video/') ? 'video' : 'document');
 
-        $upload = $service->uploadMedia($fullPath, $type);
+        // 🔥 Tarea 11: formato que acepte WhatsApp (convierte videos .mov/.webm/HEVC a MP4)
+        try {
+            [$fullPath, $mime, $type] = $service->prepareMedia($fullPath, $file->getMimeType());
+            $path = dirname($path) . '/' . basename($fullPath);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $upload = $service->uploadMedia($fullPath, $mime);
 
         if ($upload && isset($upload['id'])) {
             $send = $service->sendMedia($client->phone, $upload['id'], $type, $request->caption);
@@ -517,7 +522,7 @@ class WhatsappCrmController extends Controller
             }
         }
 
-        return response()->json(['message' => 'Error al enviar el archivo.'], 500);
+        return response()->json(['message' => $service->lastError ? "WhatsApp rechazó el archivo: {$service->lastError}" : 'Error al enviar el archivo.'], 500);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

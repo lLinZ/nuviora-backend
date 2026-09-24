@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
 
 class WhatsAppService
 {
@@ -12,6 +13,93 @@ class WhatsAppService
     protected $baseUrl = 'https://graph.facebook.com/v21.0';
 
     protected $wabaId;
+
+    /** Último error devuelto por Meta al subir o enviar un archivo (para mostrárselo a la vendedora). */
+    public ?string $lastError = null;
+
+    /** Tipos de archivo que acepta WhatsApp Cloud API, por tipo de mensaje. */
+    private const MEDIA_TYPES = [
+        'image'    => ['image/jpeg', 'image/png'],
+        'video'    => ['video/mp4', 'video/3gpp'],
+        'audio'    => ['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus'],
+        'document' => [
+            'application/pdf', 'text/plain',
+            'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ],
+    ];
+
+    /**
+     * 🔥 Tarea 11: deja un archivo listo para WhatsApp y devuelve [ruta, mime, tipo de mensaje].
+     * Meta solo acepta video MP4/3GPP con H.264 (+ AAC) de hasta 16 MB: los .mov del iPhone,
+     * .webm o MP4 en HEVC se convierten a MP4 H.264 con ffmpeg (si ya es H.264 solo se cambia
+     * el contenedor, en segundos). Lanza RuntimeException con un mensaje para la vendedora.
+     */
+    public function prepareMedia(string $path, string $mime): array
+    {
+        if (str_starts_with($mime, 'video/')) {
+            $codec = $this->videoCodec($path);
+            if (in_array($mime, self::MEDIA_TYPES['video'], true) && $codec === 'h264') {
+                return [$path, $mime, 'video'];
+            }
+
+            $mp4 = $this->convertToMp4($path, $codec === 'h264');
+            if (filesize($mp4) > 16 * 1024 * 1024) {
+                throw new \RuntimeException('El video pesa más de 16 MB después de convertirlo (máximo de WhatsApp). Envía un video más corto.');
+            }
+            return [$mp4, 'video/mp4', 'video'];
+        }
+
+        foreach (self::MEDIA_TYPES as $type => $mimes) {
+            if (in_array($mime, $mimes, true)) {
+                return [$path, $mime, $type];
+            }
+        }
+
+        // Imágenes o audios que WhatsApp no reproduce (webp, heic, wav...) y el resto: como documento
+        return [$path, $mime, 'document'];
+    }
+
+    /** PHP-FPM suele correr sin PATH: se buscan también en /usr/bin y /usr/local/bin. */
+    private function binary(string $name): string
+    {
+        return (new \Symfony\Component\Process\ExecutableFinder())->find($name, $name, ['/usr/bin', '/usr/local/bin']);
+    }
+
+    private function videoCodec(string $path): ?string
+    {
+        $result = Process::timeout(15)->run([
+            $this->binary('ffprobe'), '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries', 'stream=codec_name', '-of', 'default=nw=1:nk=1', $path,
+        ]);
+
+        return $result->successful() ? (trim($result->output()) ?: null) : null;
+    }
+
+    private function convertToMp4(string $path, bool $isH264): string
+    {
+        $out = preg_replace('/\.[^.\/]+$/', '', $path) . '-wa.mp4';
+
+        // Si ya es H.264 solo se reempaqueta (el audio se pasa a AAC); si no, se recodifica a 720p máx.
+        $codecArgs = $isH264
+            ? ['-c:v', 'copy']
+            : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p',
+               '-vf', "scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))'"];
+
+        $result = Process::timeout(55)->run(array_merge(
+            [$this->binary('ffmpeg'), '-y', '-loglevel', 'error', '-i', $path],
+            $codecArgs,
+            ['-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', $out]
+        ));
+
+        if (!$result->successful() || !is_file($out) || filesize($out) === 0) {
+            Log::error('WhatsApp Video Conversion Error', ['file' => basename($path), 'error' => substr($result->errorOutput(), -500)]);
+            throw new \RuntimeException('No se pudo convertir el video a MP4. Intenta enviarlo en MP4 desde el teléfono.');
+        }
+
+        return $out;
+    }
 
     public function __construct()
     {
@@ -111,23 +199,30 @@ class WhatsAppService
     /**
      * Upload media to Meta WhatsApp servers.
      */
-    public function uploadMedia($filePath, $type)
+    /**
+     * Sube un archivo a Meta. $mime es el tipo real del archivo (usar prepareMedia() antes):
+     * antes se mandaba "video"/"image" y el tipo del archivo se adivinaba por la extensión,
+     * por eso Meta rechazaba los .mov y similares.
+     */
+    public function uploadMedia($filePath, $mime)
     {
         $url = "{$this->baseUrl}/{$this->phoneNumberId}/media";
+        $this->lastError = null;
 
         try {
             $response = Http::withToken($this->accessToken)
                 ->withoutVerifying()
-                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->attach('file', file_get_contents($filePath), basename($filePath), ['Content-Type' => $mime])
                 ->post($url, [
                     'messaging_product' => 'whatsapp',
-                    'type' => $type
+                    'type' => $mime
                 ]);
 
             if ($response->successful()) {
                 return $response->json();
             }
 
+            $this->lastError = $response->json('error.message') ?? $response->body();
             Log::error('WhatsApp Media Upload Error', [
                 'status' => $response->status(),
                 'body' => $response->body()
@@ -173,6 +268,7 @@ class WhatsAppService
                 return $response->json();
             }
 
+            $this->lastError = $response->json('error.message') ?? $response->body();
             Log::error('WhatsApp Media Send Error', [
                 'type' => $type,
                 'status' => $response->status(),
