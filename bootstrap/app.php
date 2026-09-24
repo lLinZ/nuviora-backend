@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'api_key'      => \App\Http\Middleware\ApiKeyMiddleware::class,
             'agency.gate'  => \App\Http\Middleware\EnforceAgencyChatGate::class,
+            'role'         => \App\Http\Middleware\EnsureRole::class,
         ]);
     })
     ->withBroadcasting(

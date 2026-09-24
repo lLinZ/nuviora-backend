@@ -16,7 +16,15 @@ use App\Models\WarehouseType;
 
 class AuthController extends Controller
 {
-    // POST /users
+    // 🔒 Roles cuyas cuentas solo Admin/Master pueden crear o editar
+    private const PROTECTED_ROLES = ['Admin', 'Master'];
+
+    private function isSuperAdmin(?User $user): bool
+    {
+        return in_array($user?->role?->description, self::PROTECTED_ROLES, true);
+    }
+
+    // POST /users (la ruta ya exige Admin, Gerente o Master)
     public function store(Request $request)
     {
         $request->validate([
@@ -29,6 +37,12 @@ class AuthController extends Controller
             'address'  => 'nullable|string|max:255',
             'delivery_cost' => 'nullable|numeric|min:0',
         ]);
+
+        // 🔒 Un Gerente no puede crear cuentas de Admin o Master
+        $newRole = Role::find($request->role_id);
+        if (in_array($newRole?->description, self::PROTECTED_ROLES, true) && !$this->isSuperAdmin(Auth::user())) {
+            return response()->json(['status' => false, 'message' => 'No tienes permisos para crear usuarios con ese rol'], 403);
+        }
 
         $user = User::create([
             'names'     => $request->names,
@@ -415,6 +429,10 @@ class AuthController extends Controller
 
     public function edit_color(Request $request, User $user)
     {
+        // 🔒 Solo el propio usuario (o Admin/Master)
+        if (Auth::id() !== $user->id && !$this->isSuperAdmin(Auth::user())) {
+            return response()->json(['status' => false, 'message' => 'No tienes permisos para realizar esta acción'], 403);
+        }
         if (!$request->color) {
             return response()->json(['status' => false, 'message' => 'El color es obligatorio'], 400);
         }
@@ -425,6 +443,10 @@ class AuthController extends Controller
     }
     public function edit_theme(Request $request, User $user)
     {
+        // 🔒 Solo el propio usuario (o Admin/Master)
+        if (Auth::id() !== $user->id && !$this->isSuperAdmin(Auth::user())) {
+            return response()->json(['status' => false, 'message' => 'No tienes permisos para realizar esta acción'], 403);
+        }
         if (!$request->theme) {
             return response()->json(['status' => false, 'message' => 'El tema es obligatorio'], 400);
         }
@@ -441,6 +463,23 @@ class AuthController extends Controller
     }
     public function edit_user_data(Request $request, User $user)
     {
+        // 🔒 Cada quien edita sus propios datos; supervisión edita a los demás,
+        // pero un Gerente no puede tocar cuentas Admin/Master (evita robar la cuenta cambiando el email).
+        $authUser = Auth::user();
+        $isSelf = $authUser->id === $user->id;
+        $isSupervisor = in_array($authUser->role?->description, ['Admin', 'Gerente', 'Master'], true);
+
+        if (!$isSelf && !$isSupervisor) {
+            return response()->json(['status' => false, 'message' => 'No tienes permisos para editar este usuario'], 403);
+        }
+        if (!$isSelf && in_array($user->role?->description, self::PROTECTED_ROLES, true) && !$this->isSuperAdmin($authUser)) {
+            return response()->json(['status' => false, 'message' => 'No tienes permisos para editar este usuario'], 403);
+        }
+        // Campos operativos: solo supervisión
+        if (!$isSupervisor && ($request->has('delivery_cost') || $request->has('can_handle_no_stock') || $request->has('is_lite_view'))) {
+            return response()->json(['status' => false, 'message' => 'No tienes permisos para cambiar esos campos'], 403);
+        }
+
         $validator = Validator::make($request->all(), [
             'phone' => 'string|max:255',
             'names' => 'string|max:255',
@@ -524,63 +563,6 @@ class AuthController extends Controller
         $logs->save();
         return response()->json(['status' => true, 'message' => 'Se ha editado el usuario', 'user' => $user], 200);
     }
-    public function testRegister(Request $request)
-    {
-        // Validation similar to store/register
-        $request->validate([
-            'names'    => 'required|string|max:100',
-            'email'    => 'required|email|unique:users,email',
-            'password' => 'required|string|min:6',
-            'role_id'  => 'required|exists:roles,id',
-            'phone'    => 'nullable|string',
-            'address'  => 'nullable|string',
-        ]);
-
-        $user = User::create([
-            'names'     => $request->names,
-            'surnames'  => $request->surnames ?? '',
-            'email'     => $request->email,
-            'phone'     => $request->phone ?? '0000000000',
-            'address'   => $request->address ?? 'Address',
-            'password'  => Hash::make($request->password),
-            'role_id'   => $request->role_id,
-            'color'     => '#0073ff',
-            'theme'     => 'light',
-        ]);
-
-        // Ensure active status
-        $status = Status::firstOrNew(['description' => 'Activo']);
-        $status->save();
-        $user->status()->associate($status);
-        $user->save();
-
-        // Create warehouse for Agency
-        $role = Role::find($request->role_id);
-        if ($role && $role->description === 'Agencia') {
-            $type = WarehouseType::where('code', '=', 'AGENCY')->first();
-            if ($type) {
-                Warehouse::create([
-                    'warehouse_type_id' => $type->id,
-                    'user_id' => $user->id,
-                    'code' => 'WH-AG-' . $user->id . '-' . time(),
-                    'name' => 'Bodega Agencia: ' . $user->names,
-                    'is_active' => true,
-                    'is_main' => false
-                ]);
-            }
-        }
-        
-        // Token de auth
-        $token = $user->createToken("auth_token")->plainTextToken;
-
-        return response()->json([
-            'status' => true,
-            'message' => 'Usuario de prueba creado',
-            'user'   => $user,
-            'token'  => $token
-        ], 201);
-    }
-
     // PUT /user/{user}/change/password
     public function edit_password(Request $request, User $user)
     {

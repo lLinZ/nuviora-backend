@@ -39,11 +39,11 @@ Route::post('reset-password', [\App\Http\Controllers\ForgotPasswordController::c
 
 Route::post('order/webhook/{shop_id?}', [ShopifyWebhookController::class, 'handleOrderCreate']);
 
-// Public route for payment receipts (no auth required to view images)
-Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt']);
-Route::get('/orders/receipt/{receipt}', [OrderController::class, 'getReceipt']);
-Route::get('/orders/{order}/change-receipt', [OrderController::class, 'getChangeReceipt']);
-Route::post('test/register', [AuthController::class, 'testRegister']);
+// 🔒 Comprobantes: sin sesión (se abren como <img> o en otra pestaña), pero solo con un enlace firmado
+// que genera el backend al devolver la orden (payment_receipt_url, change_receipt_url, receipts[].url).
+Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt'])->name('receipts.order');
+Route::get('/orders/receipt/{receipt}', [OrderController::class, 'getReceipt'])->name('receipts.show');
+Route::get('/orders/{order}/change-receipt', [OrderController::class, 'getChangeReceipt'])->name('receipts.change');
 
 // --- WhatsApp Webhook (Meta) ---
 Route::get('whatsapp/webhook', [WhatsAppWebhookController::class, 'verify']);
@@ -78,9 +78,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
      * USERS
      * ---------------------**/
     // Listar usuarios
-    Route::get('users', [AuthController::class, 'get_all_users']);
+    Route::get('users', [AuthController::class, 'get_all_users'])->middleware('role:Admin,Gerente,Master');
     // Crear usuario
-    Route::post('users', [AuthController::class, 'store']);
+    Route::post('users', [AuthController::class, 'store'])->middleware('role:Admin,Gerente,Master');
     // Editar datos del usuario
     Route::put('user/{user}', [AuthController::class, 'edit_user_data']);
     // Validar token y obtener datos del usuario logueado
@@ -91,7 +91,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, 'index']);
     
     // 🔥 CLIENT REQUEST: Payment reports by method
-    Route::get('/reports/payments-by-method', [\App\Http\Controllers\PaymentReportController::class, 'paymentsByMethod']);
+    Route::get('/reports/payments-by-method', [\App\Http\Controllers\PaymentReportController::class, 'paymentsByMethod'])->middleware('role:Admin,Gerente,Master');
 
     // ⏱️ Delivered Orders Hours Report (Admin only, temporary)
     Route::get('/reports/delivered-hours', [\App\Http\Controllers\DeliveredOrdersReportController::class, 'index']);
@@ -124,14 +124,14 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     // Cambiar password
     Route::put('user/{user}/change/password', [AuthController::class, 'edit_password']);
     // Registrar agente
-    Route::post('register/agent', [AuthController::class, 'register_agent']);
+    Route::post('register/agent', [AuthController::class, 'register_agent'])->middleware('role:Admin,Gerente,Master');
     // Cerrar sesion
     Route::get('logout', [AuthController::class, 'logout']);
     // Listar agentes
     Route::get('users/agents', [AuthController::class, 'agents']);
     Route::get('users/role/{role}', [AuthController::class, 'usersByRole']);
     // Asignar agente a la orden
-    Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent']);
+    Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent'])->middleware('role:Admin,Gerente,Master');
     Route::put('orders/{order}/assign-agency', [OrderController::class, 'assignAgency']);
     
     // Configuración de Flujo de Ordenes (Reglas de Status)
@@ -154,28 +154,23 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
      * STATUS
      * ---------------------**/
     // Crear status nuevo
-    Route::post('status', [StatusController::class, 'create']);
+    Route::post('status', [StatusController::class, 'create'])->middleware('role:Admin,Master');
     /**---------------------
      * ROLES
      * ---------------------**/
     // Crear rol nuevo
-    Route::post('role', [RoleController::class, 'create']);
+    Route::post('role', [RoleController::class, 'create'])->middleware('role:Admin,Master');
     // Listar roles
     Route::get('roles', [RoleController::class, 'index']);
+    // Repartidores: listar lo usan varios roles; crear/editar/eliminar solo Admin (pantalla /deliverers)
     Route::get('/users/deliverers', [AuthController::class, 'deliverers']);       // listar + buscar
-    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']);  // crear
-    Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
-    Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer']); // eliminar
+    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer'])->middleware('role:Admin,Master');  // crear
+    Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer'])->middleware('role:Admin,Master'); // editar
+    Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer'])->middleware('role:Admin,Master'); // eliminar
 
     Route::get('/products', [ProductController::class, 'index']);
 
-    Route::get('/users/deliverers', [AuthController::class, 'deliverers']);
-    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']); // crear repartidor
     Route::put('/orders/{order}/assign-deliverer', [OrderDelivererController::class, 'assign']);
-    Route::get('/users/deliverers', [AuthController::class, 'deliverers']);       // listar + buscar
-    Route::post('/users/deliverers', [AuthController::class, 'storeDeliverer']);  // crear
-    Route::put('/users/deliverers/{user}', [AuthController::class, 'updateDeliverer']); // editar
-    Route::delete('/users/deliverers/{user}', [AuthController::class, 'destroyDeliverer']); // eliminar
 
     /**---------------------
      * ORDERS
@@ -226,9 +221,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
      * CANCELACIONES DE ORDEN
      * ---------------------**/
     // Aprobar / Rechazar
-    Route::put('cancellations/{cancellation}/review', [OrderCancellationController::class, 'review']);
+    Route::put('cancellations/{cancellation}/review', [OrderCancellationController::class, 'review'])->middleware('role:Admin,Gerente,Master');
     // Listar cancelaciones
-    Route::get('cancellations', [OrderCancellationController::class, 'index']);
+    Route::get('cancellations', [OrderCancellationController::class, 'index'])->middleware('role:Admin,Gerente,Master');
 
     // Productos 
     Route::get('/products', [ProductController::class, 'index']);
@@ -244,7 +239,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::post('/roster/today', [RosterController::class, 'setToday']); // POST lista de agent_ids
     Route::post('/orders/assign-backlog', [AssignmentController::class, 'assignBacklog']);
     // Auto-assign Cities
-    Route::post('orders/auto-assign-cities', [App\Http\Controllers\OrderController::class, 'autoAssignCities']);
+    Route::post('orders/auto-assign-cities', [App\Http\Controllers\OrderController::class, 'autoAssignCities'])->middleware('role:Admin,Gerente,Master');
 
     Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
     Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
@@ -329,7 +324,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::put('/orders/{order}/change', [OrderController::class, 'updateChange']);
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
     Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
-    Route::apiResource('banks', \App\Http\Controllers\BankController::class);
+    // Bancos: cualquiera los lista (vueltos/pagos); solo supervisión los edita
+    Route::apiResource('banks', BankController::class)->only(['index', 'show']);
+    Route::apiResource('banks', BankController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');
 
     Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
     Route::delete('/orders/{order}/payment-receipt/{receiptId}', [OrderController::class, 'deletePaymentReceipt']);
@@ -412,7 +409,6 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     // Warehouse management
     Route::get('warehouse-types', [WarehouseController::class, 'getTypes']);
     Route::apiResource('warehouses', WarehouseController::class);
-    Route::apiResource('banks', BankController::class);
     Route::get('warehouses/{warehouse}/inventory', [WarehouseController::class, 'inventory']);
 
     /**---------------------
@@ -442,34 +438,38 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     /**---------------------
      * METRICS
      * ---------------------**/
-    Route::get('metrics', [\App\Http\Controllers\MetricsController::class, 'index']);
-    Route::get('business-metrics', [\App\Http\Controllers\BusinessMetricsController::class, 'index']);
-    Route::post('metrics/ad-spend', [\App\Http\Controllers\MetricsController::class, 'storeAdSpend']);
+    Route::get('metrics', [\App\Http\Controllers\MetricsController::class, 'index'])->middleware('role:Admin,Gerente,Master');
+    Route::get('business-metrics', [\App\Http\Controllers\BusinessMetricsController::class, 'index'])->middleware('role:Admin,Master');
+    Route::post('metrics/ad-spend', [\App\Http\Controllers\MetricsController::class, 'storeAdSpend'])->middleware('role:Admin,Gerente,Master');
 
 
     /**---------------------
-     * CITIES
+     * CITIES (lectura para todos; ciudades, agencias y precio por carrera solo los edita supervisión)
      * ---------------------**/
-    Route::apiResource('cities', CityController::class);
+    Route::apiResource('cities', CityController::class)->only(['index', 'show']);
+    Route::apiResource('cities', CityController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');
 
     /**---------------------
      * PROVINCES
      * ---------------------**/
-    Route::apiResource('provinces', \App\Http\Controllers\ProvinceController::class);
+    Route::apiResource('provinces', \App\Http\Controllers\ProvinceController::class)->only(['index', 'show']);
+    Route::apiResource('provinces', \App\Http\Controllers\ProvinceController::class)->except(['index', 'show'])->middleware('role:Admin,Master');
 
     /**---------------------
-     * COMPANY ACCOUNTS
+     * COMPANY ACCOUNTS (las vendedoras las ven en la orden; solo supervisión las edita)
      * ---------------------**/
-    Route::apiResource('company-accounts', CompanyAccountController::class);
+    Route::apiResource('company-accounts', CompanyAccountController::class)->only(['index', 'show']);
+    Route::apiResource('company-accounts', CompanyAccountController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');
 
-    // TEST NOTIFICATIONS
+    // TEST NOTIFICATIONS (solo notifica al propio usuario)
     Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);
 
-    Route::apiResource('statuses', \App\Http\Controllers\StatusController::class);
+    Route::apiResource('statuses', \App\Http\Controllers\StatusController::class)->only(['index', 'show']);
+    Route::apiResource('statuses', \App\Http\Controllers\StatusController::class)->except(['index', 'show'])->middleware('role:Admin,Master');
 
     /**---------------------
-     * WEBHOOKS (OUTGOING)
+     * WEBHOOKS (OUTGOING) — solo Admin: pueden enviar datos de clientes a cualquier URL
      * ---------------------**/
-    Route::apiResource('webhooks', \App\Http\Controllers\WebhookController::class);
+    Route::apiResource('webhooks', \App\Http\Controllers\WebhookController::class)->middleware('role:Admin,Master');
 });
 

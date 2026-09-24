@@ -2232,8 +2232,19 @@ class OrderController extends Controller
         ]);
     }
 
+    // 🔒 Los tres endpoints de comprobantes solo responden con un enlace firmado vigente
+    // (Order::payment_receipt_url / change_receipt_url, PaymentReceipt::url). "download" puede añadirse aparte.
+    private function abortUnlessValidReceiptSignature(Request $request): void
+    {
+        if (!$request->hasValidSignatureWhileIgnoring(['download'])) {
+            abort(403, 'Enlace no válido o vencido. Vuelve a abrir la orden.');
+        }
+    }
+
     public function getPaymentReceipt(Request $request, Order $order)
     {
+        $this->abortUnlessValidReceiptSignature($request);
+
         if (!$order->payment_receipt) {
             abort(404, 'No hay comprobante');
         }
@@ -2255,6 +2266,8 @@ class OrderController extends Controller
 
     public function getReceipt(Request $request, PaymentReceipt $receipt)
     {
+        $this->abortUnlessValidReceiptSignature($request);
+
         $path = storage_path('app/public/' . $receipt->path);
 
         if (!file_exists($path)) {
@@ -2333,6 +2346,8 @@ class OrderController extends Controller
 
     public function getChangeReceipt(Request $request, Order $order)
     {
+        $this->abortUnlessValidReceiptSignature($request);
+
         if (!$order->change_receipt) {
             abort(404, 'No hay comprobante de vuelto');
         }

@@ -188,7 +188,22 @@ class Order extends Model
     }
     
     // Virtual attributes
-    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt', 'whatsapp_unread_count', 'is_store_open'];
+    protected $appends = ['ves_price', 'bcv_equivalence', 'change_payment_details', 'change_receipt', 'whatsapp_unread_count', 'is_store_open', 'payment_receipt_url', 'change_receipt_url'];
+
+    // 🔒 Enlaces firmados a los comprobantes (las rutas no piden sesión, pero sí esta firma; vencen en 12 h)
+    public function getPaymentReceiptUrlAttribute()
+    {
+        return $this->payment_receipt
+            ? \Illuminate\Support\Facades\URL::temporarySignedRoute('receipts.order', now()->addHours(12), ['order' => $this->id])
+            : null;
+    }
+
+    public function getChangeReceiptUrlAttribute()
+    {
+        return $this->change_receipt
+            ? \Illuminate\Support\Facades\URL::temporarySignedRoute('receipts.change', now()->addHours(12), ['order' => $this->id])
+            : null;
+    }
 
     public function getIsStoreOpenAttribute()
     {
