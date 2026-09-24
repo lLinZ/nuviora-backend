@@ -2361,9 +2361,11 @@ class OrderController extends Controller
 
     public function uploadChangeReceipt(Request $request, Order $order)
     {
-        // 🔒 LOCK: No editar si está Entregado (excepto Admin)
+        // 🔒 LOCK: No editar si está Entregado (excepto supervisión).
+        // 🔥 Tarea 9: los vueltos se pagan DESPUÉS de entregar, así que el Gerente también debe poder
+        // subir el comprobante (antes solo el Admin podía cerrar un vuelto).
         $order->load(['status']);
-        if ($order->status && $order->status->description === 'Entregado' && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+        if ($order->status && $order->status->description === 'Entregado' && !in_array(\Illuminate\Support\Facades\Auth::user()->role?->description, ['Admin', 'Gerente', 'Master'], true)) {
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
 
