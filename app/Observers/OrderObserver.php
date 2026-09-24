@@ -19,6 +19,14 @@ class OrderObserver
      */
     public static $muteWebhooks = false;
 
+    /**
+     * 🔥 Tarea 2: si es true, created() solo registra la actividad. El flujo que crea la orden
+     * (webhook de Shopify, alta manual) revisa stock, avisa "Nuevo" a n8n y asigna AL FINAL,
+     * cuando ya existen los productos. Antes se asignaba aquí, sin productos, y con la tienda
+     * abierta la orden saltaba a "Asignado a vendedor" sin que n8n recibiera nunca "Nuevo".
+     */
+    public static $deferIntake = false;
+
     public function __construct(WhatsAppService $whatsappService, \App\Services\WebhookService $webhookService)
     {
         $this->whatsappService = $whatsappService;
@@ -34,6 +42,8 @@ class OrderObserver
             'action' => 'created',
             'description' => 'Orden creada/importada.',
         ]);
+
+        if (self::$deferIntake) return;
 
         $originalStatusId = $order->status_id;
 

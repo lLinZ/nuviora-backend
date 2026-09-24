@@ -153,23 +153,34 @@ class ShopifyWebhookController extends Controller
         $nuevoStatus = \App\Models\Status::where('description', 'Nuevo')->first();
         $statusId = $nuevoStatus ? $nuevoStatus->id : 1; // Fallback a 1 si no existe
 
-        $order = Order::updateOrCreate(
-            ['order_id' => $orderData['id']],
-            [
-                'name'                => $orderData['name'],
-                'current_total_price' => round($orderData['current_total_price'] ?? $orderData['total_price'] ?? 0),
-                'order_number'        => $orderData['order_number'],
-                'processed_at'        => $orderData['processed_at']
-                    ? Carbon::parse($orderData['processed_at'])->toDateTimeString()
-                    : null,
-                'currency'            => $orderData['currency'],
-                'client_id'           => $client->id,
-                'status_id'           => $statusId,
-                'shop_id'             => $shop ? $shop->id : null,
-                'city_id'             => $cityId,
-                'province_id'         => $provinceId,
-            ]
-        );
+        // 🔒 El estado "Nuevo" solo se fija al CREAR la orden: si Shopify reenvía el webhook
+        // (reintento por timeout), una orden que ya avanzó no vuelve a "Nuevo".
+        $order = Order::firstOrNew(['order_id' => $orderData['id']]);
+        $order->fill([
+            'name'                => $orderData['name'],
+            'current_total_price' => round($orderData['current_total_price'] ?? $orderData['total_price'] ?? 0),
+            'order_number'        => $orderData['order_number'],
+            'processed_at'        => $orderData['processed_at']
+                ? Carbon::parse($orderData['processed_at'])->toDateTimeString()
+                : null,
+            'currency'            => $orderData['currency'],
+            'client_id'           => $client->id,
+            'shop_id'             => $shop ? $shop->id : null,
+            'city_id'             => $cityId,
+            'province_id'         => $provinceId,
+        ]);
+        if (!$order->exists) {
+            $order->status_id = $statusId;
+        }
+
+        // 🔥 Tarea 2: el observer no asigna al crear; se hace abajo, con los productos ya guardados.
+        \App\Observers\OrderObserver::$deferIntake = true;
+        try {
+            $order->save();
+        } finally {
+            \App\Observers\OrderObserver::$deferIntake = false;
+        }
+        $isNewOrder = $order->wasRecentlyCreated;
 
         // Auto-asignar agencia si la orden no tiene una y la ciudad/provincia tiene una asignada
         if (!$order->agency_id && $candidateAgencyId) {
@@ -320,9 +331,18 @@ class ShopifyWebhookController extends Controller
             );
         }
 
+        // Un reenvío de una orden que ya está en curso solo actualiza datos: no se vuelve a revisar
+        // stock ni a asignar (antes podía mandarla a "Sin Stock" con su stock ya descontado).
+        // Si el primer intento quedó a medias (sigue en "Nuevo" y sin vendedora), se completa.
+        if (!$isNewOrder && !((int) $order->status_id === (int) $statusId && !$order->agent_id)) {
+            return response()->json(['success' => true, 'duplicate' => true], 200);
+        }
+
         // 4️⃣ Verificación de Stock ANTES de auto-asignar
         // ⚠️ Si la orden no tiene stock, la movemos a "Sin Stock" y notificamos a los admins.
         // NUNCA debe llegar a una vendedora una orden sin existencias.
+        // (Sin stock NO se envía el webhook de "Nuevo": regla de Fran, para que n8n no reciba
+        // "Nuevo" y "Sin Stock" casi a la vez.)
         $order->load('products'); // Asegurar que los productos recién guardados estén cargados
         $stockCheck = $order->getStockDetails();
 
@@ -377,6 +397,16 @@ class ShopifyWebhookController extends Controller
             }
 
             return response()->json(['success' => true, 'warning' => 'no_stock'], 200);
+        }
+
+        // 🔥 Tarea 2: avisar a n8n que la orden entró en "Nuevo" ANTES de asignarla
+        // (la asignación la pasa a "Asignado a vendedor" y dispara su propio webhook).
+        if ($isNewOrder) {
+            try {
+                app(\App\Services\WebhookService::class)->triggerOrderStatus($order);
+            } catch (\Throwable $e) {
+                \Log::error("Webhook 'Nuevo' falló para #{$order->name}: " . $e->getMessage());
+            }
         }
 
         // 5️⃣ Intento de Auto-Asignación (Round Robin) — Solo si hay stock

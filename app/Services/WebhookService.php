@@ -10,6 +10,20 @@ use Illuminate\Support\Facades\Log;
 class WebhookService
 {
     /**
+     * Webhook del estado ACTUAL de una orden (lo mismo que recibe n8n en cada cambio de estado).
+     * Se usa al terminar el alta de una orden para avisar "Nuevo" antes de asignarla.
+     * Respeta OrderObserver::$muteWebhooks.
+     */
+    public function triggerOrderStatus(Order $order): void
+    {
+        if (\App\Observers\OrderObserver::$muteWebhooks) return;
+
+        $order->unsetRelation('status');
+        $order->load('status');
+        $this->trigger('order.status_changed', $order);
+    }
+
+    /**
      * Trigger webhooks for a specific event and data.
      */
     public function trigger(string $eventType, $data)

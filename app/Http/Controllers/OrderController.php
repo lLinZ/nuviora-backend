@@ -1842,6 +1842,42 @@ class OrderController extends Controller
     }
 
     public function create() {}
+    /**
+     * 🔥 Tarea 2: cierre del alta manual, con los productos ya guardados.
+     * - Ya trae vendedora: se avisa a n8n su estado actual (como hacía el observer).
+     * - Sin stock: pasa a "Sin Stock" (sin webhook de "Nuevo", regla de Fran) y se reparte si hay stock en otra agencia.
+     * - Con stock: webhook de "Nuevo" y luego auto-asignación (que dispara el de "Asignado a vendedor").
+     */
+    private function finishManualOrderIntake(Order $order): void
+    {
+        try {
+            $order->refresh();
+            $webhooks = app(\App\Services\WebhookService::class);
+            $assigner = app(\App\Services\Assignment\AssignOrderService::class);
+
+            if ($order->agent_id) {
+                $webhooks->triggerOrderStatus($order);
+                return;
+            }
+
+            $order->load('products');
+            if ($order->getStockDetails()['has_warning']) {
+                $sinStock = Status::where('description', \App\Constants\OrderStatus::SIN_STOCK)->first();
+                if ($sinStock && $order->status_id !== $sinStock->id) {
+                    $order->status_id = $sinStock->id;
+                    $order->save();
+                }
+                $assigner->assignOne($order);
+                return;
+            }
+
+            $webhooks->triggerOrderStatus($order);
+            $assigner->assignOne($order);
+        } catch (\Throwable $e) {
+            \Log::error("Cierre de alta manual falló para #{$order->name}: " . $e->getMessage());
+        }
+    }
+
     public function store(Request $request)
     {
         // 1. Validation
@@ -1925,6 +1961,9 @@ class OrderController extends Controller
             // Generate a manual order_id (mocking Shopify ID)
             $manualOrderId = (int) (microtime(true) * 1000);
 
+            // 🔥 Tarea 2: el observer no asigna al crear; se hace al final (finishManualOrderIntake)
+            \App\Observers\OrderObserver::$deferIntake = true;
+            try {
             $order = Order::create([
                 'order_id' => $manualOrderId, // Add generated ID
                 'name' => $orderName,
@@ -1938,6 +1977,9 @@ class OrderController extends Controller
                 'delivery_cost' => $deliveryCost,
                 'status_id' => $status ? $status->id : 1,
             ]);
+            } finally {
+                \App\Observers\OrderObserver::$deferIntake = false;
+            }
 
             // 6. Products
             $total = 0;
@@ -2000,12 +2042,14 @@ class OrderController extends Controller
             } catch (\Exception $e) {}
 
             \DB::commit();
-            
+
+            $this->finishManualOrderIntake($order);
+
             // 📡 BROADCAST EVENT: New Order created
             event(new \App\Events\OrderUpdated($order));
 
             return response()->json([
-                'status' => true, 
+                'status' => true,
                 'order' => $order->fresh(['client', 'status', 'products', 'agent', 'agency', 'deliverer', 'shop']),
                 'message' => 'Orden creada exitosamente'
             ]);
