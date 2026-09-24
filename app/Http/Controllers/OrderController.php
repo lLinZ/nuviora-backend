@@ -1045,6 +1045,33 @@ class OrderController extends Controller
         }
     }
     // Resto de métodos resource (vacíos por ahora)
+    /**
+     * 🔥 Tarea 10: el Kanban operativo oculta las órdenes en estados finales (Entregado, Cancelado,
+     * Rechazado, Novedad Solucionada) que llevan más de N días sin cambios (setting
+     * "kanban_visible_days", 35 por defecto). No se cierran ni cambian de estado: solo no se muestran.
+     * Admin/Master ven el histórico completo; una búsqueda o un rango de fechas también lo muestra todo.
+     */
+    private function applyKanbanWindow($query, Request $request, $user): void
+    {
+        if (in_array($user?->role?->description, ['Admin', 'Master'], true)) return;
+        if ($request->filled('search') || $request->filled('date_from') || $request->filled('date_to')) return;
+
+        $days = (int) (\App\Models\Setting::get('kanban_visible_days', 35) ?: 35);
+        $finalStatusIds = Status::whereIn('description', [
+            \App\Constants\OrderStatus::ENTREGADO,
+            \App\Constants\OrderStatus::CANCELADO,
+            \App\Constants\OrderStatus::RECHAZADO,
+            \App\Constants\OrderStatus::NOVEDAD_SOLUCIONADA,
+        ])->pluck('id');
+        $cutoff = now()->subDays($days);
+        $table = $query->getModel()->getTable();
+
+        $query->where(function ($q) use ($finalStatusIds, $cutoff, $table) {
+            $q->whereNotIn("{$table}.status_id", $finalStatusIds)
+              ->orWhere("{$table}.updated_at", '>=', $cutoff);
+        });
+    }
+
     public function index(Request $request)
     {
         $user = Auth::user();
@@ -1168,6 +1195,8 @@ class OrderController extends Controller
                   });
             });
         }
+
+        $this->applyKanbanWindow($query, $request, $user);
 
         $orders = $query->paginate($perPage);
 
@@ -1296,6 +1325,8 @@ class OrderController extends Controller
 
         $binanceRate = \App\Models\Setting::where('key', '=', 'rate_binance_usd')->first()?->value ?? 0;
         $bcvRate = \App\Models\Setting::where('key', '=', 'rate_bcv_usd')->first()?->value ?? 0;
+
+        $this->applyKanbanWindow($baseQuery, $request, $user);
 
         // Group counts efficiently (no N+1 issues)
         // Clean query for grouping to avoid SQL errors with orderBy
@@ -2698,6 +2729,7 @@ class OrderController extends Controller
             } else {
                 $query->whereDate('orders.updated_at', now());
             }
+            $this->applyKanbanWindow($query, $request, $user);
 
             // 3. Contar por cada status aplicando la lógica específica de cada uno (idéntica a index())
             $statuses = Status::all();
@@ -2722,7 +2754,8 @@ class OrderController extends Controller
             } else {
                  $receiptQuery->whereDate('orders.updated_at', now());
             }
-            
+            $this->applyKanbanWindow($receiptQuery, $request, $user);
+
             // 🔥 COUNT EXTRA: Con Comprobante DE VUELTO
             $receiptCount = $receiptQuery->whereHas('changeExtra', function($q) {
                  $q->whereNotNull('change_receipt')->where('change_receipt', '!=', '');
