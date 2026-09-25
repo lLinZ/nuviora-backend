@@ -21,6 +21,7 @@ use App\Http\Controllers\OrderPostponementController;
 use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\RosterController;
+use App\Http\Controllers\SalesGroupController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
@@ -244,10 +245,23 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
     Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
 
-    // ── Round-Robin Control ───────────────────────────────────────────────────
-    Route::get('/settings/round-robin',           [SettingsController::class, 'getRoundRobin']);
-    Route::post('/settings/round-robin/reset',    [SettingsController::class, 'resetRoundRobin']);
-    Route::post('/settings/round-robin/pointer',  [SettingsController::class, 'setRoundRobinPointer']);
+    // ── Reparto de órdenes por grupos (fase 4) ────────────────────────────────
+    Route::middleware('role:Admin,Gerente,Master')->group(function () {
+        Route::get('/assignment/overview',          [AssignmentController::class, 'overview']);
+        Route::post('/assignment/reset',            [AssignmentController::class, 'reset']);
+        Route::get('/assignment/reassign/preview',  [AssignmentController::class, 'reassignPreview']);
+        Route::post('/assignment/reassign',         [AssignmentController::class, 'reassign']);
+    });
+    // Grupos, % y máximos: solo el Admin (Fran, segunda ronda §2)
+    Route::middleware('role:Admin,Master')->group(function () {
+        Route::get('/sales-groups',                        [SalesGroupController::class, 'index']);
+        Route::post('/sales-groups',                       [SalesGroupController::class, 'store']);
+        Route::put('/sales-groups/{salesGroup}',           [SalesGroupController::class, 'update']);
+        Route::delete('/sales-groups/{salesGroup}',        [SalesGroupController::class, 'destroy']);
+        Route::put('/sales-groups/{salesGroup}/members',   [SalesGroupController::class, 'members']);
+        Route::put('/sales-groups/{salesGroup}/weights',   [SalesGroupController::class, 'weights']);
+        Route::put('/assignment/sellers/{user}',           [AssignmentController::class, 'updateSeller']);
+    });
     Route::put('/settings/strategy',              [SettingsController::class, 'updateStrategy']);
     Route::get('/business/today', [BusinessController::class, 'status']); // estado actual
     Route::get('/business/status', [BusinessController::class, 'status']); // estado actual
