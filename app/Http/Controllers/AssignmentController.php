@@ -156,7 +156,11 @@ class AssignmentController extends Controller
         $data = $request->validate(['from_agent_id' => 'required|integer|exists:users,id']);
         $fromId = (int) $data['from_agent_id'];
 
-        $statuses = Status::whereIn('description', BulkReassignService::REASSIGNABLE_STATUSES)->get(['id', 'description']);
+        $order = array_flip(BulkReassignService::REASSIGNABLE_STATUSES);
+        $statuses = Status::whereIn('description', BulkReassignService::REASSIGNABLE_STATUSES)
+            ->get(['id', 'description'])
+            ->sortBy(fn ($s) => $order[$s->description]) // en el orden del flujo, no por ID
+            ->values();
         $counts = Order::where('agent_id', $fromId)
             ->whereIn('status_id', $statuses->pluck('id'))
             ->groupBy('status_id')
