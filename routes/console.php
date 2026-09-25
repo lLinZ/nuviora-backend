@@ -21,8 +21,11 @@ try {
     Schedule::command('shops:check-schedule')->everyMinute();
 
     Schedule::call(function () {
-        \App\Models\Setting::where('key', 'like', 'round_robin_pointer_%')->delete();
+        app(\App\Services\Assignment\WeightedAssigner::class)->reset();
     })->dailyAt($open);
+
+    // Fase 4: órdenes que esperan en "Nuevo" porque todas las vendedoras estaban en su máximo.
+    Schedule::command('orders:assign-waiting')->everyMinute()->withoutOverlapping();
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

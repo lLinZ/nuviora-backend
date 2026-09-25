@@ -16,14 +16,30 @@ use App\Constants\OrderStatus;
 
 class AssignOrderService
 {
-    protected AssignmentStrategy $strategy;
+    protected bool $loadBalanced;
+    protected WeightedAssigner $weighted;
 
     public function __construct()
     {
-        $mode = Setting::get('assignment_strategy', 'round_robin');
-        $this->strategy = $mode === 'load_balanced'
-            ? new LoadBalancedStrategy()
-            : new RoundRobinStrategy();
+        $this->loadBalanced = Setting::get('assignment_strategy', 'round_robin') === 'load_balanced';
+        $this->weighted = app(WeightedAssigner::class);
+    }
+
+    /**
+     * Elige vendedora con el reparto ponderado por grupos (fase 4), o con el viejo "load balanced"
+     * si alguien lo dejó activado en los settings.
+     *
+     * @return array{0: ?int, 1: string, 2: array}  la elegida (null si todas están llenas), estrategia y detalle.
+     */
+    protected function pickAgent(Collection $agents, Order $order): array
+    {
+        if ($this->loadBalanced) {
+            return [(new LoadBalancedStrategy())->pickAgentId($agents, $order), 'LoadBalancedStrategy', []];
+        }
+
+        [$agentId, $meta] = $this->weighted->pick(WeightedAssigner::poolFor($order->shop_id), $agents);
+
+        return [$agentId, WeightedAssigner::STRATEGY, $meta];
     }
 
     /**
@@ -75,17 +91,26 @@ class AssignOrderService
                     $ord = Order::where('id', '=', $order->id)->lockForUpdate()->first(['*']);
                     if ($ord->agent_id) return $ord->agent;
 
-                    $agentId = $this->strategy->pickAgentId($noStockAgents, $ord);
-                    
+                    [$agentId, $strategy, $meta] = $this->pickAgent($noStockAgents, $ord);
+
+                    if (!$agentId) {
+                        // Todas llegaron a su máximo: queda en Sin Stock sin vendedora hasta que alguna libere cupo.
+                        if ($ord->status_id !== $statusId) {
+                            $ord->update(['status_id' => $statusId]);
+                            event(new \App\Events\OrderUpdated($ord));
+                        }
+                        return null;
+                    }
+
                     $ord->update(['agent_id' => $agentId, 'status_id' => $statusId]);
                     event(new \App\Events\OrderUpdated($ord));
 
                     \App\Models\OrderAssignmentLog::create([
                         'order_id'    => $ord->id,
                         'agent_id'    => $agentId,
-                        'strategy'    => (new \ReflectionClass($this->strategy))->getShortName() . '_NoStock',
+                        'strategy'    => $strategy . '_NoStock',
                         'assigned_by' => null,
-                        'meta'        => ['reason' => 'auto_no_stock'],
+                        'meta'        => ['reason' => 'auto_no_stock'] + $meta,
                     ]);
 
                     return $ord->agent;
@@ -108,7 +133,8 @@ class AssignOrderService
             $ord = Order::where('id', '=', $order->id)->lockForUpdate()->first(['*']);
             if ($ord->agent_id) return $ord->agent;
 
-            $agentId = $this->strategy->pickAgentId($agents, $ord);
+            [$agentId, $strategy, $meta] = $this->pickAgent($agents, $ord);
+            if (!$agentId) return null; // todas llenas: se queda en "Nuevo" y la toma orders:assign-waiting
 
             // Buscar status "Asignado a Vendedor"
             $statusAsignado = Status::where('description', OrderStatus::ASIGNADO_VENDEDOR)->first();
@@ -122,9 +148,9 @@ class AssignOrderService
             \App\Models\OrderAssignmentLog::create([
                 'order_id'    => $ord->id,
                 'agent_id'    => $agentId,
-                'strategy'    => (new \ReflectionClass($this->strategy))->getShortName(),
+                'strategy'    => $strategy,
                 'assigned_by' => null, // sistema
-                'meta'        => ['reason' => 'auto'],
+                'meta'        => ['reason' => 'auto'] + $meta,
             ]);
 
             // 🔔 Notificar al agente asignado
@@ -255,11 +281,11 @@ class AssignOrderService
                 // If it was "Sin Stock" but now has an agent, skip
                 if ($ord->agent_id && $ordModel->status_id === $assignmentStatusId) return;
 
-                $agentId = $this->strategy->pickAgentId($agentsForShop, $ord);
-                
-                // 🛡️ SAFETY CHECK: Si no hay agente, no cambiamos el status a "Asignado..."
+                [$agentId, $strategy, $meta] = $this->pickAgent($agentsForShop, $ord);
+
+                // 🛡️ Si no hay a quién darle (todas en su máximo), no cambiamos el status a "Asignado..."
                 if (!$agentId) {
-                    \Illuminate\Support\Facades\Log::warning("AssignBacklog: pickAgentId returned null/empty for Order #{$ord->id}. Skipping update.");
+                    \Illuminate\Support\Facades\Log::info("AssignBacklog: sin vendedora con cupo para la orden #{$ord->id}.");
                     return;
                 }
 
@@ -306,9 +332,9 @@ class AssignOrderService
                 OrderAssignmentLog::create([
                     'order_id'    => $ord->id,
                     'agent_id'    => $agentId,
-                    'strategy'    => (new \ReflectionClass($this->strategy))->getShortName(),
+                    'strategy'    => $strategy,
                     'assigned_by' => Auth::id(), // lo dispara la gerente desde la UI
-                    'meta'        => ['reason' => 'backlog'],
+                    'meta'        => ['reason' => 'backlog'] + $meta,
                 ]);
 
                 // 🤫 SILENCED: No individual notification during mass backlog processing to avoid spam.

@@ -40,7 +40,8 @@ class BusinessService
         Setting::set('business_is_open', true);
         Setting::set('business_open_dt', $now->toDateTimeString());
         Setting::set('business_last_open_dt', $now->toDateTimeString());
-        Setting::set('round_robin_pointer_' . $shopId, null);
+        // El reparto de la tienda arranca el día desde cero (sin arrastrar saldos de ayer).
+        app(\App\Services\Assignment\WeightedAssigner::class)->reset(\App\Services\Assignment\WeightedAssigner::poolFor($shopId));
 
         // 3. 🔥 CLIENT REQUEST: Detectar órdenes programadas para hoy
         $this->processScheduledOrders($shopId);

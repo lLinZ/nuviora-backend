@@ -113,8 +113,15 @@ class User extends Authenticatable
         'delivery_cost',
         'is_lite_view',
         'is_active_crm',
-        'can_handle_no_stock'
+        'can_handle_no_stock',
+        'max_active_orders'
     ];
+
+    /** Membresía vigente en un grupo de ventas (una sola a la vez). */
+    public function salesGroupMembership()
+    {
+        return $this->hasOne(SalesGroupMember::class)->whereNull('ended_at');
+    }
 
     public function deliverers()
     {
@@ -149,6 +156,7 @@ class User extends Authenticatable
             'is_lite_view' => 'boolean',
             'is_active_crm' => 'boolean',
             'can_handle_no_stock' => 'boolean',
+            'max_active_orders' => 'integer',
         ];
     }
 }
