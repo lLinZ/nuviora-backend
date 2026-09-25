@@ -100,10 +100,27 @@ class AssignmentController extends Controller
             ];
         });
 
+        // Todas las vendedoras (no solo las del roster): para reasignar las órdenes de una que hoy no vino.
+        $sellers = User::where('role_id', Role::where('description', 'Vendedor')->value('id'))
+            ->with('salesGroupMembership.group:id,name,is_active')
+            ->orderBy('names')
+            ->get(['id', 'names', 'surnames']);
+        $sellerActive = $assigner->activeCounts($sellers->pluck('id')->all());
+
         return response()->json([
             'status' => true,
             'data' => [
                 'shops' => $shops,
+                'sellers' => $sellers->map(function (User $u) use ($sellerActive) {
+                    $group = $u->salesGroupMembership?->group;
+
+                    return [
+                        'id' => $u->id,
+                        'name' => trim($u->names . ' ' . $u->surnames),
+                        'group' => $group?->is_active ? ['id' => $group->id, 'name' => $group->name] : null,
+                        'active_orders' => $sellerActive[$u->id] ?? 0,
+                    ];
+                })->values(),
                 'load_balanced' => Setting::get('assignment_strategy', 'round_robin') === 'load_balanced',
             ],
         ]);
