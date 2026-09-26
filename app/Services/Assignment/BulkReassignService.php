@@ -53,7 +53,7 @@ class BulkReassignService
 
         // Mismos % del reparto automático (sin mirar el máximo: es una decisión manual).
         // Si las elegidas no tienen peso (por ejemplo, todas en 0 %), se reparte parejo.
-        $weights = array_intersect_key(EffectiveWeights::compute(...$this->assigner->groupInfo($toIds)), array_flip($toIds));
+        $weights = array_intersect_key(EffectiveWeights::compute($this->assigner->groupInfo($toIds)), array_flip($toIds));
         if (array_sum($weights) <= 0) {
             $weights = array_fill_keys($toIds, 1.0);
         }

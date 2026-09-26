@@ -36,7 +36,6 @@ class SalesGroupController extends Controller
         DB::transaction(function () use ($data) {
             $group = SalesGroup::create([
                 'name' => $data['name'],
-                'leader_load' => $data['leader_load'] ?? 0.65,
                 'leader_commission_pct' => $data['leader_commission_pct'] ?? 0,
                 'created_by' => Auth::id(),
             ]);
@@ -53,7 +52,6 @@ class SalesGroupController extends Controller
         DB::transaction(function () use ($salesGroup, $data) {
             $salesGroup->update([
                 'name' => $data['name'],
-                'leader_load' => $data['leader_load'] ?? $salesGroup->leader_load,
                 'leader_commission_pct' => $data['leader_commission_pct'] ?? $salesGroup->leader_commission_pct,
             ]);
             $this->setLeader($salesGroup, $data['leader_id'] ?? null);
@@ -123,8 +121,11 @@ class SalesGroupController extends Controller
     }
 
     /**
-     * PUT { weights: [{ user_id, weight }] }: % de reparto dentro del grupo.
-     * Todas con % o todas vacías (reparto parejo); en el reparto se normalizan entre las disponibles.
+     * PUT { weights: [{ user_id, weight }] }: % de reparto dentro del grupo, con la Líder incluida.
+     * Su % lo pone solo el Admin (Fran, 2026-09-26). Tres formas válidas:
+     * - todo vacío: parejo, la Líder recibe como una vendedora;
+     * - solo la Líder con %: las vendedoras se reparten parejo lo que queda;
+     * - todas con %: tienen que sumar 100.
      */
     public function weights(Request $request, SalesGroup $salesGroup): JsonResponse
     {
@@ -135,19 +136,34 @@ class SalesGroupController extends Controller
             'weights.*.weight' => 'nullable|numeric|min:0|max:100',
         ]);
 
-        $members = $salesGroup->openMembers()->where('role', SalesGroupMember::ROLE_SELLER)->get()->keyBy('user_id');
-        $weights = collect($data['weights'])->mapWithKeys(fn ($w) => [(int) $w['user_id'] => $w['weight'] ?? null]);
+        $members = $salesGroup->openMembers()->with('user:id,names,surnames')->get()->keyBy('user_id');
+        $weights = collect($data['weights'])->mapWithKeys(fn ($w) => [(int) $w['user_id'] => isset($w['weight']) ? round((float) $w['weight'], 2) : null]);
 
         if ($weights->keys()->diff($members->keys())->isNotEmpty()) {
-            throw ValidationException::withMessages(['weights' => 'Hay vendedoras que no pertenecen a este grupo.']);
+            throw ValidationException::withMessages(['weights' => 'Hay personas que no pertenecen a este grupo.']);
         }
-        $values = $members->keys()->map(fn ($id) => $weights->get($id));
-        $filled = $values->filter(fn ($w) => $w !== null);
-        if ($filled->isNotEmpty() && $filled->count() !== $members->count()) {
-            throw ValidationException::withMessages(['weights' => 'Pon el % de todas las vendedoras del grupo, o déjalas todas vacías para repartir parejo.']);
+
+        $leader = $members->firstWhere('role', SalesGroupMember::ROLE_LEADER);
+        $leaderPct = $leader ? $weights->get($leader->user_id) : null;
+        $sellers = $members->where('role', SalesGroupMember::ROLE_SELLER)->keys()->map(fn ($id) => $weights->get($id));
+        $filled = $sellers->filter(fn ($w) => $w !== null);
+
+        if ($filled->isNotEmpty() && $filled->count() !== $sellers->count()) {
+            throw ValidationException::withMessages(['weights' => 'Pon el % de todas las vendedoras, o déjalas todas vacías para que se repartan parejo.']);
         }
-        if ($filled->isNotEmpty() && $filled->sum() <= 0) {
-            throw ValidationException::withMessages(['weights' => 'Al menos una vendedora debe tener un % mayor que 0.']);
+        if ($filled->isNotEmpty()) {
+            if ($leader && $leaderPct === null) {
+                throw ValidationException::withMessages(['weights' => 'Falta el % de la Líder, ' . $this->name($leader->user) . '.']);
+            }
+            $total = round($filled->sum() + ($leaderPct ?? 0), 2);
+            if (abs($total - 100) > 0.01) {
+                $diff = $this->number(abs(100 - $total));
+                throw ValidationException::withMessages([
+                    'weights' => 'Los % del grupo tienen que sumar 100. Ahora suman ' . $this->number($total) . ($total > 100 ? ", sobran {$diff}." : ", faltan {$diff}."),
+                ]);
+            }
+        } elseif ($sellers->isNotEmpty() && $leaderPct !== null && $leaderPct >= 100) {
+            throw ValidationException::withMessages(['weights' => 'Si la Líder recibe el 100 %, pon 0 % a las vendedoras.']);
         }
 
         DB::transaction(function () use ($members, $weights) {
@@ -178,9 +194,8 @@ class SalesGroupController extends Controller
                 return [
                     'id' => $g->id,
                     'name' => $g->name,
-                    'leader_load' => $g->leader_load,
                     'leader_commission_pct' => $g->leader_commission_pct,
-                    'leader' => $leader ? ['id' => $leader->user_id, 'name' => $this->name($leader->user)] : null,
+                    'leader' => $leader ? ['id' => $leader->user_id, 'name' => $this->name($leader->user), 'weight' => $leader->weight] : null,
                     'members' => $members->map(fn ($m) => [
                         'user_id' => $m->user_id,
                         'name' => $this->name($m->user),
@@ -205,7 +220,6 @@ class SalesGroupController extends Controller
         $data = $request->validate([
             'name' => 'required|string|max:100',
             'leader_id' => 'nullable|integer|exists:users,id',
-            'leader_load' => 'nullable|numeric|min:0|max:1',
             'leader_commission_pct' => 'nullable|numeric|min:0|max:100',
         ]);
         if (!empty($data['leader_id'])) {
@@ -215,7 +229,10 @@ class SalesGroupController extends Controller
         return $data;
     }
 
-    /** Cambia la Líder: cierra la anterior y, si la nueva estaba como vendedora en algún grupo, la saca de ahí. */
+    /**
+     * Cambia la Líder: cierra la anterior y, si la nueva estaba como vendedora en algún grupo, la saca de ahí.
+     * La nueva hereda el % de la anterior, así la lista del grupo sigue sumando lo mismo.
+     */
     private function setLeader(SalesGroup $group, ?int $userId): void
     {
         $current = $group->openMembers()->where('role', SalesGroupMember::ROLE_LEADER)->first();
@@ -235,15 +252,16 @@ class SalesGroupController extends Controller
             ]);
         }
         $elsewhere?->close(Auth::id());
-        $this->open($group, $userId, SalesGroupMember::ROLE_LEADER);
+        $this->open($group, $userId, SalesGroupMember::ROLE_LEADER, $current?->weight);
     }
 
-    private function open(SalesGroup $group, int $userId, string $role): void
+    private function open(SalesGroup $group, int $userId, string $role, ?float $weight = null): void
     {
         SalesGroupMember::create([
             'sales_group_id' => $group->id,
             'user_id' => $userId,
             'role' => $role,
+            'weight' => $weight,
             'started_at' => now(),
             'added_by' => Auth::id(),
         ]);
@@ -270,6 +288,12 @@ class SalesGroupController extends Controller
     private function sellerRoleId(): ?int
     {
         return Role::where('description', 'Vendedor')->value('id');
+    }
+
+    /** 120 → "120 %", 99.5 → "99,5 %". */
+    private function number(float $value): string
+    {
+        return rtrim(rtrim(number_format($value, 2, ',', '.'), '0'), ',') . ' %';
     }
 
     private function name(?User $user): string

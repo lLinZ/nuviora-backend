@@ -56,7 +56,7 @@ class WeightedAssigner
             return [null, ['reason' => 'todas_llenas']];
         }
 
-        $weights = EffectiveWeights::compute(...$this->groupInfo($available));
+        $weights = EffectiveWeights::compute($this->groupInfo($available));
         if ($weights === []) {
             return [null, ['reason' => 'sin_peso']];
         }
@@ -103,19 +103,17 @@ class WeightedAssigner
     /**
      * Datos de grupo para EffectiveWeights.
      *
-     * @return array{0: array<int, array{group: ?int, leader: bool, weight: ?float}>, 1: array<int, float>}
+     * @return array<int, array{group: ?int, leader: bool, weight: ?float}>
      */
     public function groupInfo(array $ids): array
     {
         $memberships = SalesGroupMember::open()
             ->whereIn('user_id', $ids)
             ->whereHas('group', fn ($q) => $q->where('is_active', true))
-            ->with('group:id,leader_load')
             ->get()
             ->keyBy('user_id');
 
         $candidates = [];
-        $leaderLoads = [];
         foreach ($ids as $id) {
             $m = $memberships->get($id);
             $candidates[$id] = [
@@ -123,18 +121,15 @@ class WeightedAssigner
                 'leader' => $m?->role === SalesGroupMember::ROLE_LEADER,
                 'weight' => $m?->weight,
             ];
-            if ($m) {
-                $leaderLoads[$m->sales_group_id] = (float) $m->group->leader_load;
-            }
         }
 
-        return [$candidates, $leaderLoads];
+        return $candidates;
     }
 
     /** Pesos efectivos normalizados (lo que debería recibir cada una, de 0 a 1). */
     public function targetShares(array $ids): array
     {
-        return $this->shares(EffectiveWeights::compute(...$this->groupInfo($this->withCapacity($ids))));
+        return $this->shares(EffectiveWeights::compute($this->groupInfo($this->withCapacity($ids))));
     }
 
     /** Borra el saldo de una tienda, o de todas: el reparto vuelve a empezar desde cero. */

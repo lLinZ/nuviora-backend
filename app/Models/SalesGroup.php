@@ -6,10 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class SalesGroup extends Model
 {
-    protected $fillable = ['name', 'leader_load', 'leader_commission_pct', 'is_active', 'created_by'];
+    protected $fillable = ['name', 'leader_commission_pct', 'is_active', 'created_by'];
 
     protected $casts = [
-        'leader_load' => 'float',
         'leader_commission_pct' => 'float',
         'is_active' => 'boolean',
     ];

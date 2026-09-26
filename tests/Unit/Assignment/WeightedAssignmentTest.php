@@ -71,10 +71,15 @@ describe('Smooth Weighted Round Robin', function () {
 
 describe('Pesos efectivos por grupos', function () {
     $seller = fn (?int $group, ?float $weight = null) => ['group' => $group, 'leader' => false, 'weight' => $weight];
-    $leader = fn (int $group) => ['group' => $group, 'leader' => true, 'weight' => 99.0];
+    $leader = fn (int $group, ?float $weight = null) => ['group' => $group, 'leader' => true, 'weight' => $weight];
+    $shares = function (array $weights): array {
+        $total = array_sum($weights);
+
+        return array_map(fn ($w) => round($w / $total, 4), $weights);
+    };
 
     it('sin grupos todas valen lo mismo', function () use ($seller) {
-        expect(EffectiveWeights::compute([5 => $seller(null), 9 => $seller(null)], []))->toBe([5 => 1.0, 9 => 1.0]);
+        expect(EffectiveWeights::compute([5 => $seller(null), 9 => $seller(null)]))->toBe([5 => 1.0, 9 => 1.0]);
     });
 
     it('un grupo de 7 y uno de 3 dan 70/30, y la Líder reparte dentro del suyo', function () use ($seller) {
@@ -86,7 +91,7 @@ describe('Pesos efectivos por grupos', function () {
             $candidates[$id] = $seller(20);
         }
 
-        $weights = EffectiveWeights::compute($candidates, []);
+        $weights = EffectiveWeights::compute($candidates);
         $total = array_sum($weights);
 
         expect(round(array_sum(array_intersect_key($weights, array_flip(range(1, 7)))) / $total, 4))->toBe(0.7)
@@ -103,23 +108,58 @@ describe('Pesos efectivos por grupos', function () {
         $candidates[8] = $seller(20);
         $candidates[9] = $seller(20); // la 10 no vino hoy
 
-        $weights = EffectiveWeights::compute($candidates, []);
+        $weights = EffectiveWeights::compute($candidates);
 
         expect(round(($weights[8] + $weights[9]) / array_sum($weights), 4))->toBe(round(2 / 9, 4));
     });
 
-    it('la Líder recibe su carga y no la que ella misma se ponga', function () use ($seller, $leader) {
-        $weights = EffectiveWeights::compute([1 => $leader(10), 2 => $seller(10), 3 => $seller(10)], [10 => 0.65]);
+    it('la lista del grupo, con la Líder, se cumple tal cual: 10/30/20/20/20', function () use ($seller, $leader, $shares) {
+        $weights = EffectiveWeights::compute([
+            1 => $leader(10, 10), 2 => $seller(10, 30), 3 => $seller(10, 20), 4 => $seller(10, 20), 5 => $seller(10, 20),
+        ]);
 
-        expect($weights)->toBe([1 => 0.65, 2 => 1.0, 3 => 1.0]);
+        expect($shares($weights))->toBe([1 => 0.1, 2 => 0.3, 3 => 0.2, 4 => 0.2, 5 => 0.2]);
     });
 
-    it('una Líder con carga 0 no vende', function () use ($seller, $leader) {
-        expect(EffectiveWeights::compute([1 => $leader(10), 2 => $seller(10)], [10 => 0]))->toBe([2 => 1.0]);
+    it('todo vacío es parejo: la Líder recibe como una vendedora', function () use ($seller, $leader) {
+        expect(EffectiveWeights::compute([1 => $leader(10), 2 => $seller(10), 3 => $seller(10)]))->toBe([1 => 1.0, 2 => 1.0, 3 => 1.0]);
+    });
+
+    it('con solo el % de la Líder, las vendedoras se reparten parejo lo que queda', function () use ($seller, $leader, $shares) {
+        $weights = EffectiveWeights::compute([1 => $leader(10, 17), 2 => $seller(10), 3 => $seller(10), 4 => $seller(10), 5 => $seller(10)]);
+
+        expect($shares($weights))->toBe([1 => 0.17, 2 => 0.2075, 3 => 0.2075, 4 => 0.2075, 5 => 0.2075]);
+    });
+
+    it('una Líder en 0 % no vende', function () use ($seller, $leader) {
+        expect(EffectiveWeights::compute([1 => $leader(10, 0), 2 => $seller(10, 50), 3 => $seller(10, 50)]))->toBe([2 => 1.0, 3 => 1.0]);
+    });
+
+    it('si falta una vendedora, la Líder sigue con su % y las demás cubren la parte de la ausente', function () use ($seller, $leader, $shares) {
+        // Lista: Líder 10, vendedoras 30/20/20/20. Hoy no vino la de 30.
+        $weights = $shares(EffectiveWeights::compute([1 => $leader(10, 10), 3 => $seller(10, 20), 4 => $seller(10, 20), 5 => $seller(10, 20)]));
+
+        expect($weights[1])->toBe(0.1)
+            ->and($weights[3])->toBe(0.3);
+    });
+
+    it('la parte de la Líder no les quita a sus vendedoras frente a otro grupo', function () use ($seller, $leader) {
+        $weights = EffectiveWeights::compute([
+            1 => $leader(10, 20), 2 => $seller(10), 3 => $seller(10),
+            4 => $seller(20), 5 => $seller(20),
+            6 => $seller(null),
+        ]);
+
+        expect([$weights[2], $weights[3], $weights[4], $weights[5], $weights[6]])->toBe([1.0, 1.0, 1.0, 1.0, 1.0])
+            ->and(round($weights[1] / ($weights[1] + 2), 4))->toBe(0.2);
+    });
+
+    it('una Líder sin vendedoras disponibles recibe como una vendedora', function () use ($leader) {
+        expect(EffectiveWeights::compute([1 => $leader(10, 10)]))->toBe([1 => 1.0]);
     });
 
     it('una vendedora recién agregada, sin %, recibe como el promedio del grupo', function () use ($seller) {
-        $weights = EffectiveWeights::compute([1 => $seller(10, 60), 2 => $seller(10, 20), 3 => $seller(10)], []);
+        $weights = EffectiveWeights::compute([1 => $seller(10, 60), 2 => $seller(10, 20), 3 => $seller(10)]);
 
         // 60, 20 y 40 (el promedio) suman 120: la 1 recibe 3 × 60 / 120 = 1,5 porciones
         expect(round($weights[3], 4))->toBe(1.0)
@@ -127,7 +167,7 @@ describe('Pesos efectivos por grupos', function () {
     });
 
     it('si la Líder pone a todas en 0 %, su grupo no recibe', function () use ($seller) {
-        expect(EffectiveWeights::compute([1 => $seller(10, 0), 2 => $seller(10, 0), 3 => $seller(null)], []))->toBe([3 => 1.0]);
+        expect(EffectiveWeights::compute([1 => $seller(10, 0), 2 => $seller(10, 0), 3 => $seller(null)]))->toBe([3 => 1.0]);
     });
 
     it('junto con el motor, cumple los porcentajes en 1000 órdenes', function () use ($seller) {
@@ -138,11 +178,19 @@ describe('Pesos efectivos por grupos', function () {
         foreach (range(8, 10) as $id) {
             $candidates[$id] = $seller(20);
         }
-        [$sequence] = runTurns(EffectiveWeights::compute($candidates, []), 1000);
+        [$sequence] = runTurns(EffectiveWeights::compute($candidates), 1000);
         $counts = array_count_values($sequence);
 
         expect($counts[1])->toBe(280)
             ->and($counts[2])->toBe(70)
             ->and($counts[8])->toBe(100);
+    });
+
+    it('con la Líder en la lista, 1000 órdenes caen en 100/300/200/200/200', function () use ($seller, $leader) {
+        [$sequence] = runTurns(EffectiveWeights::compute([
+            1 => $leader(10, 10), 2 => $seller(10, 30), 3 => $seller(10, 20), 4 => $seller(10, 20), 5 => $seller(10, 20),
+        ]), 1000);
+
+        expect(array_count_values($sequence))->toBe([2 => 300, 3 => 200, 4 => 200, 5 => 200, 1 => 100]);
     });
 });
