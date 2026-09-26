@@ -151,21 +151,10 @@ class AssignmentController extends Controller
      * GET /assignment/reassign/preview?from_agent_id= — cuántas órdenes tiene por estado y quiénes son
      * las demás de su grupo, para armar la reasignación en bloque.
      */
-    public function reassignPreview(Request $request)
+    public function reassignPreview(Request $request, BulkReassignService $service)
     {
         $data = $request->validate(['from_agent_id' => 'required|integer|exists:users,id']);
         $fromId = (int) $data['from_agent_id'];
-
-        $order = array_flip(BulkReassignService::REASSIGNABLE_STATUSES);
-        $statuses = Status::whereIn('description', BulkReassignService::REASSIGNABLE_STATUSES)
-            ->get(['id', 'description'])
-            ->sortBy(fn ($s) => $order[$s->description]) // en el orden del flujo, no por ID
-            ->values();
-        $counts = Order::where('agent_id', $fromId)
-            ->whereIn('status_id', $statuses->pluck('id'))
-            ->groupBy('status_id')
-            ->selectRaw('status_id, COUNT(*) as c')
-            ->pluck('c', 'status_id');
 
         $membership = SalesGroupMember::open()->where('user_id', $fromId)->whereHas('group', fn ($q) => $q->where('is_active', true))->first();
         $groupMates = $membership
@@ -179,12 +168,7 @@ class AssignmentController extends Controller
         return response()->json([
             'status' => true,
             'data' => [
-                'statuses' => $statuses->map(fn ($s) => [
-                    'id' => $s->id,
-                    'description' => $s->description,
-                    'count' => (int) ($counts[$s->id] ?? 0),
-                    'default' => in_array($s->description, WeightedAssigner::ACTIVE_STATUSES, true),
-                ])->values(),
+                'statuses' => $service->preview($fromId),
                 'group_mate_ids' => $groupMates->values(),
             ],
         ]);

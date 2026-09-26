@@ -123,6 +123,17 @@ class User extends Authenticatable
         return $this->hasOne(SalesGroupMember::class)->whereNull('ended_at');
     }
 
+    /**
+     * Grupo activo que lidera, o null si no es Líder. La Líder sigue siendo una usuaria Vendedor
+     * (Fran, 2026-09-24: "parte de la vendedora"); lo que la hace Líder es su membresía en el grupo.
+     */
+    public function ledGroup(): ?SalesGroup
+    {
+        return SalesGroup::active()
+            ->whereHas('openMembers', fn ($q) => $q->where('user_id', $this->id)->where('role', SalesGroupMember::ROLE_LEADER))
+            ->first();
+    }
+
     public function deliverers()
     {
         return $this->hasMany(User::class, 'agency_id');

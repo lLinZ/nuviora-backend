@@ -214,6 +214,7 @@ class AuthController extends Controller
         $user = User::with('role')->where('email', '=', $request['email'])->firstOrFail();
         $token = $user->createToken('auth_token')->plainTextToken;
         $user->token = $token;
+        $user->leader_group = $this->leaderGroupRef($user);
         $logs = Log::create([
             'description' => "El usuario $user->names $user->surnames ($user->id) inició sesión. ($user->email)",
             'impact' => 'Normal',
@@ -459,7 +460,16 @@ class AuthController extends Controller
     {
         $data = $request->user();
         $user = User::with('role')->where('id', '=', $data->id)->first();
+        $user->leader_group = $this->leaderGroupRef($user);
         return response()->json(['user' => $user]);
+    }
+
+    /** Si es Líder, su grupo ({id, name}): el front muestra "Mi grupo". El permiso real lo valida MyGroupController. */
+    private function leaderGroupRef(User $user): ?array
+    {
+        $group = $user->ledGroup();
+
+        return $group ? ['id' => $group->id, 'name' => $group->name] : null;
     }
     public function edit_user_data(Request $request, User $user)
     {

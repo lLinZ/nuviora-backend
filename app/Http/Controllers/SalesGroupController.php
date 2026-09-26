@@ -7,6 +7,7 @@ use App\Models\SalesGroup;
 use App\Models\SalesGroupMember;
 use App\Models\User;
 use App\Services\Assignment\WeightedAssigner;
+use App\Services\SalesGroups\GroupWeights;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -144,27 +145,12 @@ class SalesGroupController extends Controller
         }
 
         $leader = $members->firstWhere('role', SalesGroupMember::ROLE_LEADER);
-        $leaderPct = $leader ? $weights->get($leader->user_id) : null;
-        $sellers = $members->where('role', SalesGroupMember::ROLE_SELLER)->keys()->map(fn ($id) => $weights->get($id));
-        $filled = $sellers->filter(fn ($w) => $w !== null);
-
-        if ($filled->isNotEmpty() && $filled->count() !== $sellers->count()) {
-            throw ValidationException::withMessages(['weights' => 'Pon el % de todas las vendedoras, o déjalas todas vacías para que se repartan parejo.']);
-        }
-        if ($filled->isNotEmpty()) {
-            if ($leader && $leaderPct === null) {
-                throw ValidationException::withMessages(['weights' => 'Falta el % de la Líder, ' . $this->name($leader->user) . '.']);
-            }
-            $total = round($filled->sum() + ($leaderPct ?? 0), 2);
-            if (abs($total - 100) > 0.01) {
-                $diff = $this->number(abs(100 - $total));
-                throw ValidationException::withMessages([
-                    'weights' => 'Los % del grupo tienen que sumar 100. Ahora suman ' . $this->number($total) . ($total > 100 ? ", sobran {$diff}." : ", faltan {$diff}."),
-                ]);
-            }
-        } elseif ($sellers->isNotEmpty() && $leaderPct !== null && $leaderPct >= 100) {
-            throw ValidationException::withMessages(['weights' => 'Si la Líder recibe el 100 %, pon 0 % a las vendedoras.']);
-        }
+        GroupWeights::validate(
+            (bool) $leader,
+            $leader ? $weights->get($leader->user_id) : null,
+            $members->where('role', SalesGroupMember::ROLE_SELLER)->keys()->mapWithKeys(fn ($id) => [$id => $weights->get($id)])->all(),
+            $leader ? 'Falta el % de la Líder, ' . $this->name($leader->user) . '.' : '',
+        );
 
         DB::transaction(function () use ($members, $weights) {
             foreach ($members as $userId => $membership) {
@@ -288,12 +274,6 @@ class SalesGroupController extends Controller
     private function sellerRoleId(): ?int
     {
         return Role::where('description', 'Vendedor')->value('id');
-    }
-
-    /** 120 → "120 %", 99.5 → "99,5 %". */
-    private function number(float $value): string
-    {
-        return rtrim(rtrim(number_format($value, 2, ',', '.'), '0'), ',') . ' %';
     }
 
     private function name(?User $user): string

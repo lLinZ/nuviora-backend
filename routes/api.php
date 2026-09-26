@@ -22,6 +22,7 @@ use App\Http\Controllers\OrderUpdateController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\RosterController;
 use App\Http\Controllers\SalesGroupController;
+use App\Http\Controllers\MyGroupController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\ShopifyWebhookController;
 use App\Http\Controllers\StatusController;
@@ -262,7 +263,16 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::put('/sales-groups/{salesGroup}/weights',   [SalesGroupController::class, 'weights']);
         Route::put('/assignment/sellers/{user}',           [AssignmentController::class, 'updateSeller']);
     });
-    Route::put('/settings/strategy',              [SettingsController::class, 'updateStrategy']);
+    // "Mi grupo" de la Líder: el controlador comprueba que lidera un grupo activo y limita todo a ese grupo.
+    Route::prefix('my-group')->group(function () {
+        Route::get('/',                  [MyGroupController::class, 'show']);
+        Route::get('/metrics',           [MyGroupController::class, 'metrics']);
+        Route::put('/weights',           [MyGroupController::class, 'weights']);
+        Route::put('/roster',            [MyGroupController::class, 'roster']);
+        Route::get('/reassign/preview',  [MyGroupController::class, 'reassignPreview']);
+        Route::post('/reassign',         [MyGroupController::class, 'reassign']);
+    });
+    Route::put('/settings/strategy',             [SettingsController::class, 'updateStrategy']);
     Route::get('/business/today', [BusinessController::class, 'status']); // estado actual
     Route::get('/business/status', [BusinessController::class, 'status']); // estado actual
     Route::post('/business/open',   [BusinessController::class, 'open']);   // abrir jornada (ahora)

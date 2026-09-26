@@ -5,8 +5,10 @@ namespace App\Services\Assignment;
 use App\Constants\OrderStatus;
 use App\Models\Order;
 use App\Models\OrderAssignmentLog;
+use App\Models\Status;
 use App\Services\Assignment\Weighted\EffectiveWeights;
 use App\Services\Assignment\Weighted\SmoothWeightedRoundRobin;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -37,6 +39,40 @@ class BulkReassignService
 
     public function __construct(private WeightedAssigner $assigner)
     {
+    }
+
+    /** Estados que se pueden mover, en el orden del flujo (no por ID). */
+    public function statuses(): Collection
+    {
+        $order = array_flip(self::REASSIGNABLE_STATUSES);
+
+        return Status::whereIn('description', self::REASSIGNABLE_STATUSES)
+            ->get(['id', 'description'])
+            ->sortBy(fn ($s) => $order[$s->description])
+            ->values();
+    }
+
+    /**
+     * Vista previa para mover las órdenes de $fromId: cada estado con cuántas tiene, marcando por
+     * defecto los activos (los que cuentan para el máximo).
+     *
+     * @return array<int, array{id: int, description: string, count: int, default: bool}>
+     */
+    public function preview(int $fromId): array
+    {
+        $statuses = $this->statuses();
+        $counts = Order::where('agent_id', $fromId)
+            ->whereIn('status_id', $statuses->pluck('id'))
+            ->groupBy('status_id')
+            ->selectRaw('status_id, COUNT(*) as c')
+            ->pluck('c', 'status_id');
+
+        return $statuses->map(fn ($s) => [
+            'id' => $s->id,
+            'description' => $s->description,
+            'count' => (int) ($counts[$s->id] ?? 0),
+            'default' => in_array($s->description, WeightedAssigner::ACTIVE_STATUSES, true),
+        ])->values()->all();
     }
 
     /**
