@@ -48,27 +48,48 @@ class MyGroupController extends Controller
     }
 
     /** GET ?start_date=Y-m-d&end_date=Y-m-d */
+    /**
+     * GET ?start_date=&end_date= y, para comparar (spec §7.2), ?compare_start=&compare_end=: el mismo
+     * cálculo sobre el otro período, para mostrar cuánto subió o bajó cada número.
+     */
     public function metrics(Request $request, GroupMetrics $metrics, LeaderCommissions $commissions): JsonResponse
     {
         $group = $this->group();
         $data = $request->validate([
             'start_date' => 'required|date_format:Y-m-d',
             'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
+            'compare_start' => 'nullable|required_with:compare_end|date_format:Y-m-d',
+            'compare_end' => 'nullable|required_with:compare_start|date_format:Y-m-d|after_or_equal:compare_start',
         ]);
-        if (Carbon::parse($data['start_date'])->diffInDays(Carbon::parse($data['end_date'])) > 366) {
-            throw ValidationException::withMessages(['end_date' => 'Elige un período de un año o menos.']);
+        foreach ([['start_date', 'end_date'], ['compare_start', 'compare_end']] as [$from, $to]) {
+            if (!empty($data[$from]) && Carbon::parse($data[$from])->diffInDays(Carbon::parse($data[$to])) > 366) {
+                throw ValidationException::withMessages([$to => 'Elige un período de un año o menos.']);
+            }
         }
 
         $ids = $this->members($group)->keys()->all();
+        $rows = fn (array $result) => collect($result['rows'])->map(fn ($row, $userId) => ['user_id' => $userId] + $row)->values();
         $result = $metrics->period($ids, $data['start_date'], $data['end_date']);
+
+        $compare = null;
+        if (!empty($data['compare_start'])) {
+            $other = $metrics->period($ids, $data['compare_start'], $data['compare_end']);
+            $compare = [
+                'start_date' => $data['compare_start'],
+                'end_date' => $data['compare_end'],
+                'rows' => $rows($other),
+                'totals' => $other['totals'],
+            ];
+        }
 
         return response()->json([
             'status' => true,
             'data' => [
                 'start_date' => $data['start_date'],
                 'end_date' => $data['end_date'],
-                'rows' => collect($result['rows'])->map(fn ($row, $userId) => ['user_id' => $userId] + $row)->values(),
+                'rows' => $rows($result),
                 'totals' => $result['totals'],
+                'compare' => $compare,
                 // Sus ganancias: como vendedora, por liderazgo y el total (spec §12.2 y §12.4)
                 'earnings' => $commissions->forLeader((int) Auth::id(), $data['start_date'], $data['end_date']),
             ],
