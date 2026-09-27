@@ -96,6 +96,24 @@ class MyGroupController extends Controller
         ]);
     }
 
+    /** GET ?start_date=&end_date=: cada agencia, solo con los pedidos del grupo (spec §10). */
+    public function agencies(Request $request, GroupMetrics $metrics): JsonResponse
+    {
+        $group = $this->group();
+        $data = $request->validate([
+            'start_date' => 'required|date_format:Y-m-d',
+            'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
+        ]);
+        if (Carbon::parse($data['start_date'])->diffInDays(Carbon::parse($data['end_date'])) > 366) {
+            throw ValidationException::withMessages(['end_date' => 'Elige un período de un año o menos.']);
+        }
+
+        return response()->json([
+            'status' => true,
+            'data' => $metrics->agencies($this->members($group)->keys()->all(), $data['start_date'], $data['end_date']),
+        ]);
+    }
+
     /** PUT { weights: [{ user_id, weight }] }: solo las vendedoras. El % de la Líder no se toca aquí. */
     public function weights(Request $request): JsonResponse
     {

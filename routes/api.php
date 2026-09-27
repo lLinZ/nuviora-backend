@@ -267,6 +267,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::prefix('my-group')->group(function () {
         Route::get('/',                  [MyGroupController::class, 'show']);
         Route::get('/metrics',           [MyGroupController::class, 'metrics']);
+        Route::get('/agencies',          [MyGroupController::class, 'agencies']);
         Route::put('/weights',           [MyGroupController::class, 'weights']);
         Route::put('/roster',            [MyGroupController::class, 'roster']);
         Route::get('/reassign/preview',  [MyGroupController::class, 'reassignPreview']);

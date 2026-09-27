@@ -89,6 +89,69 @@ final class GroupMetrics
         return ['rows' => $rows, 'totals' => $totals];
     }
 
+    /**
+     * Métricas de cada agencia limitadas a los pedidos del grupo (spec §10): pedidos creados en el
+     * período, de una vendedora del grupo, que tienen agencia. Nunca incluye pedidos de otros grupos.
+     *
+     * @param  int[]  $userIds
+     * @return array<int, array>
+     */
+    public function agencies(array $userIds, string $start, string $end): array
+    {
+        $id = fn (string $description) => (int) (Status::where('description', $description)->value('id') ?? 0);
+        $delivered = $id(OrderStatus::ENTREGADO);
+        $novelty = $id(OrderStatus::NOVEDADES);
+        $resolved = $id(OrderStatus::NOVEDAD_SOLUCIONADA);
+        $pending = Status::whereIn('description', self::AGENCY_PENDING)->pluck('id')->all() ?: [0];
+        $in = implode(',', array_map('intval', $pending));
+
+        $base = DB::table('orders as o')
+            ->whereIn('o.agent_id', $userIds)
+            ->whereNotNull('o.agency_id')
+            ->whereBetween('o.created_at', [$start . ' 00:00:00', $end . ' 23:59:59']);
+
+        $rows = (clone $base)
+            ->join('users as a', 'a.id', '=', 'o.agency_id')
+            ->groupBy('o.agency_id', 'a.names', 'a.surnames')
+            ->selectRaw("
+                o.agency_id, a.names, a.surnames,
+                COUNT(*) as received,
+                SUM(CASE WHEN o.status_id = ? THEN 1 ELSE 0 END) as delivered,
+                SUM(CASE WHEN o.status_id IN ($in) THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN o.status_id = ? OR EXISTS (SELECT 1 FROM order_tracking_comprehensive_logs n WHERE n.order_id = o.id AND n.to_status_id = ?) THEN 1 ELSE 0 END) as novelties,
+                SUM(CASE WHEN o.status_id = ? OR EXISTS (SELECT 1 FROM order_tracking_comprehensive_logs r WHERE r.order_id = o.id AND r.to_status_id = ?) THEN 1 ELSE 0 END) as resolved
+            ", [$delivered, $novelty, $novelty, $resolved, $resolved])
+            ->orderByDesc('received')
+            ->get();
+
+        $byStatus = (clone $base)
+            ->join('statuses as s', 's.id', '=', 'o.status_id')
+            ->groupBy('o.agency_id', 's.description')
+            ->selectRaw('o.agency_id, s.description, COUNT(*) as c')
+            ->get()
+            ->groupBy('agency_id');
+
+        return $rows->map(fn ($r) => [
+            'agency_id' => (int) $r->agency_id,
+            'name' => trim($r->names . ' ' . $r->surnames),
+            'received' => (int) $r->received,
+            'delivered' => (int) $r->delivered,
+            'effectiveness' => self::pct((int) $r->delivered, (int) $r->received),
+            'pending' => (int) $r->pending,
+            'novelties' => (int) $r->novelties,
+            'novelties_resolved' => (int) $r->resolved,
+            'resolved_pct' => self::pct((int) $r->resolved, (int) $r->novelties),
+            'by_status' => $byStatus->get($r->agency_id, collect())
+                ->map(fn ($s) => ['status' => $s->description, 'count' => (int) $s->c])
+                ->sortByDesc('count')->values()->all(),
+        ])->values()->all();
+    }
+
+    /** Estados en los que el pedido está en manos de la agencia y todavía no terminó. */
+    private const AGENCY_PENDING = [
+        OrderStatus::ASIGNAR_A_AGENCIA, OrderStatus::ASIGNAR_REPARTIDOR, OrderStatus::ASIGNADO_A_REPARTIDOR, OrderStatus::EN_RUTA,
+    ];
+
     private function row(int $assigned, int $delivered, int $cancelled, int $toAgency, int $withUpsell, float $sales, float $upsells): array
     {
         return [
