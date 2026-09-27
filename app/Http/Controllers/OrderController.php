@@ -111,7 +111,7 @@ class OrderController extends Controller
      * Determina si el usuario autenticado puede acceder al detalle de una orden.
      * Mismas reglas de aislamiento que OrderController@index:
      *  - Admin/Gerente/Master (super roles): ven todo.
-     *  - Vendedor/Vendedora: solo sus órdenes (agent_id).
+     *  - Vendedor/Vendedora: solo sus órdenes (agent_id). La Líder, también las de su grupo.
      *  - Agencia: solo las de su agencia (agency_id) y nunca canceladas.
      *  - Repartidor: solo las suyas (deliverer_id).
      *  - Otros roles internos: acceso permitido.
@@ -126,7 +126,12 @@ class OrderController extends Controller
         }
 
         if (str_contains($roleName, 'vende')) {
-            return (int) $order->agent_id === (int) $user->id;
+            if ((int) $order->agent_id === (int) $user->id) {
+                return true;
+            }
+            $group = $order->agent_id ? $user->ledGroup() : null;
+
+            return $group !== null && $group->openMembers()->where('user_id', $order->agent_id)->exists();
         }
 
         if ($roleName === 'agencia') {
@@ -139,6 +144,22 @@ class OrderController extends Controller
         }
 
         return true;
+    }
+
+    /**
+     * De qué vendedoras ve órdenes una vendedora en las listas. Por defecto, solo las suyas. La Líder,
+     * con ?scope=group, las de todo su grupo (y con ?seller_id=, las de una de ellas). El grupo lo
+     * decide el servidor a partir de su membresía; nunca se toman IDs enviados por el cliente.
+     *
+     * @return int[]
+     */
+    private function visibleAgentIds($user, Request $request): array
+    {
+        if ($request->get('scope') === 'group' && ($group = $user->ledGroup())) {
+            return $group->openMembers()->pluck('user_id')->map(fn ($id) => (int) $id)->all();
+        }
+
+        return [(int) $user->id];
     }
 
     public function show($id)
@@ -1090,8 +1111,8 @@ class OrderController extends Controller
         $isAgent = str_contains($roleName, 'vende');
 
         if ($isAgent) {
-            // Un Agente/Vendedor SOLO ve lo que tiene asignado
-            $query->where('agent_id', $user->id);
+            // Un Agente/Vendedor SOLO ve lo que tiene asignado (la Líder, con scope=group, lo de su grupo)
+            $query->whereIn('agent_id', $this->visibleAgentIds($user, $request));
             
             // Restricción: Si es Entregado, mostrar de hoy (opcional, manteniendo lógica previa si existía)
             $query->where(function($q) {
@@ -1265,7 +1286,7 @@ class OrderController extends Controller
         $isAgent = str_contains($roleName, 'vende');
 
         if ($isAgent) {
-            $baseQuery->where('agent_id', $user->id);
+            $baseQuery->whereIn('agent_id', $this->visibleAgentIds($user, $request));
         } elseif ($roleName === 'repartidor') {
             $baseQuery->where('deliverer_id', $user->id)
                       ->whereDate('updated_at', now());
@@ -2727,7 +2748,10 @@ class OrderController extends Controller
 
             // 1. Filtro Usuario
             if ($user && $user->role && $user->role->description === 'Vendedor') {
-                $query->where('orders.agent_id', $user->id);
+                $query->whereIn('orders.agent_id', $this->visibleAgentIds($user, $request));
+                if ($request->filled('seller_id')) {
+                    $query->where('orders.agent_id', $request->seller_id);
+                }
             } else {
                 $query->whereDate('orders.updated_at', now());
             }
@@ -2752,7 +2776,10 @@ class OrderController extends Controller
             // Debemos contar cuántas órdenes (del usuario o del día) tienen comprobante, sin importar el status.
             $receiptQuery = Order::query();
             if ($user && $user->role && $user->role->description === 'Vendedor') {
-                $receiptQuery->where('orders.agent_id', $user->id);
+                $receiptQuery->whereIn('orders.agent_id', $this->visibleAgentIds($user, $request));
+                if ($request->filled('seller_id')) {
+                    $receiptQuery->where('orders.agent_id', $request->seller_id);
+                }
             } else {
                  $receiptQuery->whereDate('orders.updated_at', now());
             }

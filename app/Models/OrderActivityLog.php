@@ -12,6 +12,7 @@ class OrderActivityLog extends Model
     protected $fillable = [
         'order_id',
         'user_id',
+        'actor_role',
         'action',
         'description',
         'properties',
@@ -20,6 +21,25 @@ class OrderActivityLog extends Model
     protected $casts = [
         'properties' => 'array',
     ];
+
+    /**
+     * Guarda con qué rol actuó quien hizo el cambio (spec de la Líder §15). Se hace aquí para no
+     * tocar las decenas de lugares que escriben el historial. La Líder figura como "Líder".
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (OrderActivityLog $log) {
+            if ($log->actor_role !== null) {
+                return;
+            }
+            $user = $log->user_id ? User::with('role:id,description')->find($log->user_id) : null;
+            $log->actor_role = match (true) {
+                $user === null => 'Sistema',
+                $user->ledGroup() !== null => 'Líder',
+                default => $user->role?->description,
+            };
+        });
+    }
 
     public function order()
     {
