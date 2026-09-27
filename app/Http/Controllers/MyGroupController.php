@@ -15,6 +15,7 @@ use App\Services\Assignment\BulkReassignService;
 use App\Services\Assignment\WeightedAssigner;
 use App\Services\SalesGroups\GroupMetrics;
 use App\Services\SalesGroups\GroupWeights;
+use App\Services\SalesGroups\LeaderCommissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -46,7 +47,7 @@ class MyGroupController extends Controller
     }
 
     /** GET ?start_date=Y-m-d&end_date=Y-m-d */
-    public function metrics(Request $request, GroupMetrics $metrics): JsonResponse
+    public function metrics(Request $request, GroupMetrics $metrics, LeaderCommissions $commissions): JsonResponse
     {
         $group = $this->group();
         $data = $request->validate([
@@ -67,6 +68,8 @@ class MyGroupController extends Controller
                 'end_date' => $data['end_date'],
                 'rows' => collect($result['rows'])->map(fn ($row, $userId) => ['user_id' => $userId] + $row)->values(),
                 'totals' => $result['totals'],
+                // Sus ganancias: como vendedora, por liderazgo y el total (spec §12.2 y §12.4)
+                'earnings' => $commissions->forLeader((int) Auth::id(), $data['start_date'], $data['end_date']),
             ],
         ]);
     }

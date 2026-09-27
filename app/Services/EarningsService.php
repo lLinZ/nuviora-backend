@@ -7,6 +7,7 @@ use App\Models\Role;
 use App\Models\Setting;
 use App\Models\Status;
 use App\Models\User;
+use App\Services\SalesGroups\LeaderCommissions;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
@@ -68,8 +69,14 @@ class EarningsService
         // 5. UPSELLS
         $upsells = $this->groupEarningsByRole($allEarnings, 'upsell', $rate);
 
-        // 6. TOTAL POR USUARIO (Independiente del rol)
-        $globalUsers = $this->groupEarningsByUser($allEarnings, $rate);
+        // 6. LÍDERES: comisión de liderazgo (tabla aparte, ver LeaderCommissions)
+        $leaders = app(LeaderCommissions::class)->byLeader($from->toDateString(), $to->toDateString());
+        if ($agencyId) {
+            $leaders = collect();
+        }
+
+        // 7. TOTAL POR USUARIO (Independiente del rol), con el liderazgo sumado a lo que se le paga a cada Líder
+        $globalUsers = $this->addLeadership($this->groupEarningsByUser($allEarnings, $rate), $leaders, $rate);
 
         return [
             'rates' => [
@@ -84,6 +91,7 @@ class EarningsService
             'managers'  => $managers,
             'agencies'   => $agencies,
             'upsells'    => $upsells,
+            'leaders'    => $leaders,
             'global_users' => $globalUsers,
             'totals'    => [
                 'vendors_usd'    => $vendors->sum('amount_usd'),
@@ -91,7 +99,8 @@ class EarningsService
                 'managers_usd'   => $managers->sum('amount_usd'),
                 'agencies_usd'   => $agencies->sum('amount_usd'),
                 'upsells_usd'    => $upsells->sum('amount_usd'),
-                'all_usd'        => $allEarnings->sum('amount_usd'),
+                'leaders_usd'    => round($leaders->sum('amount_usd'), 2),
+                'all_usd'        => $allEarnings->sum('amount_usd') + $leaders->sum('amount_usd'),
             ],
             'orders_with_change' => Order::with('agency')
                 ->whereBetween('updated_at', [$from->startOfDay(), $to->endOfDay()])
@@ -341,6 +350,36 @@ class EarningsService
             ->values();
     }
 
+    /** Suma la comisión de liderazgo al total a pagar de cada Líder (y la agrega si no tenía otras). */
+    private function addLeadership(Collection $users, Collection $leaders, float $rate): Collection
+    {
+        foreach ($leaders as $leader) {
+            $index = $users->search(fn ($u) => $u['user_id'] === $leader['user_id']);
+            if ($index === false) {
+                $users->push([
+                    'user_id'      => $leader['user_id'],
+                    'names'        => $leader['names'],
+                    'surnames'     => $leader['surnames'],
+                    'email'        => $leader['email'],
+                    'color'        => $leader['color'],
+                    'role_name'    => 'Líder',
+                    'orders_count' => 0,
+                    'amount_usd'   => 0.0,
+                    'amount_local' => 0.0,
+                ]);
+                $index = $users->count() - 1;
+            }
+            $row = $users[$index];
+            $row['role_name'] = 'Líder';
+            $row['leadership_usd'] = $leader['amount_usd'];
+            $row['amount_usd'] = round($row['amount_usd'] + $leader['amount_usd'], 2);
+            $row['amount_local'] = $row['amount_usd'] * $rate;
+            $users[$index] = $row;
+        }
+
+        return $users->sortByDesc('amount_usd')->values();
+    }
+
     /**
      * Devuelve las ganancias "personales" de un usuario (por rol).
      */
@@ -357,10 +396,17 @@ class EarningsService
         $totalUsd = (float) $earningsRecords->sum('amount_usd');
         $ordersCount = (int) $earningsRecords->unique('order_id')->count();
 
+        // La Líder también cobra su comisión de liderazgo (spec §12.2)
+        $leadership = (float) \App\Models\LeaderCommission::where('leader_id', $user->id)
+            ->whereBetween('earning_date', [$from->toDateString(), $to->toDateString()])
+            ->sum('amount_usd');
+        $totalUsd += $leadership;
+
         $breakdown = [
             'orders' => (float) $earningsRecords->where('role_type', 'vendedor')->sum('amount_usd'),
             'upsells' => (float) $earningsRecords->where('role_type', 'upsell')->sum('amount_usd'),
             'repartidor' => (float) $earningsRecords->where('role_type', 'repartidor')->sum('amount_usd'),
+            'leadership' => round($leadership, 2),
         ];
 
         // CASO ESPECIAL: Gerente (actualmente ven la bolsa global si así se definió)
