@@ -108,42 +108,12 @@ class OrderController extends Controller
 
 
     /**
-     * Determina si el usuario autenticado puede acceder al detalle de una orden.
-     * Mismas reglas de aislamiento que OrderController@index:
-     *  - Admin/Gerente/Master (super roles): ven todo.
-     *  - Vendedor/Vendedora: solo sus órdenes (agent_id). La Líder, también las de su grupo.
-     *  - Agencia: solo las de su agencia (agency_id) y nunca canceladas.
-     *  - Repartidor: solo las suyas (deliverer_id).
-     *  - Otros roles internos: acceso permitido.
+     * Si el usuario puede ver o tocar una orden. La regla vive en OrderAccess y la usa también el
+     * middleware order.access, que protege las acciones sobre una orden.
      */
     private function userCanAccessOrder(\App\Models\Order $order, $user): bool
     {
-        $roleName = $user->role ? strtolower(trim($user->role->description)) : '';
-        $superRoles = ['admin', 'manager', 'gerente', 'master'];
-
-        if (in_array($roleName, $superRoles)) {
-            return true;
-        }
-
-        if (str_contains($roleName, 'vende')) {
-            if ((int) $order->agent_id === (int) $user->id) {
-                return true;
-            }
-            $group = $order->agent_id ? $user->ledGroup() : null;
-
-            return $group !== null && $group->openMembers()->where('user_id', $order->agent_id)->exists();
-        }
-
-        if ($roleName === 'agencia') {
-            return (int) $order->agency_id === (int) $user->id
-                && $order->status?->description !== 'Cancelado';
-        }
-
-        if ($roleName === 'repartidor') {
-            return (int) $order->deliverer_id === (int) $user->id;
-        }
-
-        return true;
+        return \App\Services\Orders\OrderAccess::can($user, $order);
     }
 
     /**

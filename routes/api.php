@@ -134,7 +134,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('users/role/{role}', [AuthController::class, 'usersByRole']);
     // Asignar agente a la orden
     Route::put('orders/{order}/assign-agent', [OrderController::class, 'assignAgent'])->middleware('role:Admin,Gerente,Master');
-    Route::put('orders/{order}/assign-agency', [OrderController::class, 'assignAgency']);
+    Route::put('orders/{order}/assign-agency', [OrderController::class, 'assignAgency'])->middleware('order.access');
     
     // Configuración de Flujo de Ordenes (Reglas de Status)
     Route::get('config/flow', function (\Illuminate\Http\Request $request) {
@@ -172,14 +172,14 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
 
     Route::get('/products', [ProductController::class, 'index']);
 
-    Route::put('/orders/{order}/assign-deliverer', [OrderDelivererController::class, 'assign']);
+    Route::put('/orders/{order}/assign-deliverer', [OrderDelivererController::class, 'assign'])->middleware('order.access');
 
     /**---------------------
      * ORDERS
      * ---------------------**/
-    Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
-    Route::get('/orders/{order}/available-statuses', [OrderController::class, 'getAvailableStatuses']);
-    Route::put('/orders/{order}/logistics', [OrderController::class, 'updateLogistics']);
+    Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus'])->middleware('order.access');
+    Route::get('/orders/{order}/available-statuses', [OrderController::class, 'getAvailableStatuses'])->middleware('order.access');
+    Route::put('/orders/{order}/logistics', [OrderController::class, 'updateLogistics'])->middleware('order.access');
     // Auto-asignación masiva de logística
     Route::post('/orders/auto-assign-logistics', [OrderController::class, 'autoAssignAllLogistics']);
     Route::get('/orders/pending-vueltos', [OrderController::class, 'getPendingVueltos']);
@@ -187,9 +187,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     // Ver detalles de la orden
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     // Agregar nota a la orden
-    Route::post('/orders/{order}/updates', [OrderUpdateController::class, 'store']);
+    Route::post('/orders/{order}/updates', [OrderUpdateController::class, 'store'])->middleware('order.access');
     // Solicitar cancelación
-    Route::post('orders/{order}/cancel', [OrderCancellationController::class, 'store']);
+    Route::post('orders/{order}/cancel', [OrderCancellationController::class, 'store'])->middleware('order.access');
     // Obtener productos de la orden
     Route::get('orders/{id}/products', [OrderController::class, 'getOrderProducts']);
     // Listar ordenes
@@ -199,11 +199,11 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     // Historial de actividades (Audit log)
     Route::get('orders/{order}/activities', [OrderController::class, 'getActivityLogs']);
     // Upselling
-    Route::post('orders/{order}/upsell', [OrderController::class, 'addUpsell']);
-    Route::delete('orders/{order}/upsell/{itemId}', [OrderController::class, 'removeUpsell']);
-    Route::put('orders/{order}/upsell/{itemId}', [OrderController::class, 'updateProductQuantity']);
+    Route::post('orders/{order}/upsell', [OrderController::class, 'addUpsell'])->middleware('order.access');
+    Route::delete('orders/{order}/upsell/{itemId}', [OrderController::class, 'removeUpsell'])->middleware('order.access');
+    Route::put('orders/{order}/upsell/{itemId}', [OrderController::class, 'updateProductQuantity'])->middleware('order.access');
     // 🔥 CLIENT REQUEST: Admin can manually edit order total
-    Route::put('orders/{order}/total', [OrderController::class, 'updateTotal']);
+    Route::put('orders/{order}/total', [OrderController::class, 'updateTotal'])->middleware('order.access');
     // Productos
     Route::get('products', [ProductController::class, 'index']);
     Route::get('products/{id}', [ProductController::class, 'show']);
@@ -344,19 +344,19 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     // Registrar devolución
     Route::post('/deliverers/{id}/stock/return', [DelivererStockController::class, 'return']);
 
-    Route::put('/orders/{order}/payment', [OrderController::class, 'updatePayment']);
-    Route::put('/orders/{order}/change', [OrderController::class, 'updateChange']);
+    Route::put('/orders/{order}/payment', [OrderController::class, 'updatePayment'])->middleware('order.access');
+    Route::put('/orders/{order}/change', [OrderController::class, 'updateChange'])->middleware('order.access');
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
-    Route::put('/orders/{order}/location', [OrderController::class, 'addLocation']);
+    Route::put('/orders/{order}/location', [OrderController::class, 'addLocation'])->middleware('order.access');
     // Bancos: cualquiera los lista (vueltos/pagos); solo supervisión los edita
     Route::apiResource('banks', BankController::class)->only(['index', 'show']);
     Route::apiResource('banks', BankController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');
 
-    Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt']);
-    Route::delete('/orders/{order}/payment-receipt/{receiptId}', [OrderController::class, 'deletePaymentReceipt']);
-    Route::post('/orders/{order}/change-receipt', [OrderController::class, 'uploadChangeReceipt']);
-    Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder']);
-    Route::put('/orders/{order}/toggle-notification', [OrderController::class, 'toggleChangeNotification']);
+    Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt'])->middleware('order.access');
+    Route::delete('/orders/{order}/payment-receipt/{receiptId}', [OrderController::class, 'deletePaymentReceipt'])->middleware('order.access');
+    Route::post('/orders/{order}/change-receipt', [OrderController::class, 'uploadChangeReceipt'])->middleware('order.access');
+    Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder'])->middleware('order.access');
+    Route::put('/orders/{order}/toggle-notification', [OrderController::class, 'toggleChangeNotification'])->middleware('order.access');
 
     /**---------------------
      * WHATSAPP MESSAGES
@@ -366,10 +366,10 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::put('/whatsapp-templates/{id}', [\App\Http\Controllers\WhatsappTemplateController::class, 'update']);
     Route::delete('/whatsapp-templates/{id}', [\App\Http\Controllers\WhatsappTemplateController::class, 'destroy']);
     Route::apiResource('whatsapp-templates', \App\Http\Controllers\WhatsappTemplateController::class)->except(['update', 'destroy']);
-    Route::get('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'index']);
-    Route::post('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'store']);
-    Route::post('/orders/{order}/whatsapp-media', [\App\Http\Controllers\WhatsappMessageController::class, 'sendMedia']);
-    Route::put('/orders/{order}/read-whatsapp', [\App\Http\Controllers\WhatsappMessageController::class, 'markAsRead']);
+    Route::get('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'index'])->middleware('order.access');
+    Route::post('/orders/{order}/whatsapp-messages', [\App\Http\Controllers\WhatsappMessageController::class, 'store'])->middleware('order.access');
+    Route::post('/orders/{order}/whatsapp-media', [\App\Http\Controllers\WhatsappMessageController::class, 'sendMedia'])->middleware('order.access');
+    Route::put('/orders/{order}/read-whatsapp', [\App\Http\Controllers\WhatsappMessageController::class, 'markAsRead'])->middleware('order.access');
 
     // --- CENTRALIZED WHATSAPP VIEW (NEW) ---
     Route::get('/whatsapp-conversations', [\App\Http\Controllers\WhatsappConversationController::class, 'index']);
@@ -424,8 +424,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::put('/orders/rejection-review/{review}/approve', [\App\Http\Controllers\OrderRejectionReviewController::class, 'approve']);
     Route::put('/orders/rejection-review/{review}/reject', [\App\Http\Controllers\OrderRejectionReviewController::class, 'reject']);
 
-    Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store']);
-    Route::post('/orders/{order}/create-return', [OrderController::class, 'createReturn']);
+    Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store'])->middleware('order.access');
+    Route::post('/orders/{order}/create-return', [OrderController::class, 'createReturn'])->middleware('order.access');
 
     /**---------------------
      * WAREHOUSES
