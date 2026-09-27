@@ -45,7 +45,7 @@ class MyGroupController extends Controller
 
     public function show(): JsonResponse
     {
-        return response()->json(['status' => true, 'data' => $this->payload($this->group())]);
+        return response()->json(['status' => true, 'data' => $this->payload($this->group(true))]);
     }
 
     /** GET ?start_date=Y-m-d&end_date=Y-m-d */
@@ -55,7 +55,7 @@ class MyGroupController extends Controller
      */
     public function metrics(Request $request, GroupMetrics $metrics, LeaderCommissions $commissions): JsonResponse
     {
-        $group = $this->group();
+        $group = $this->group(true);
         $data = $request->validate([
             'start_date' => 'required|date_format:Y-m-d',
             'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
@@ -92,7 +92,9 @@ class MyGroupController extends Controller
                 'totals' => $result['totals'],
                 'compare' => $compare,
                 // Sus ganancias: como vendedora, por liderazgo y el total (spec §12.2 y §12.4)
-                'earnings' => $commissions->forLeader((int) Auth::id(), $data['start_date'], $data['end_date']),
+                'earnings' => $this->leaderId($group)
+                    ? $commissions->forLeader($this->leaderId($group), $data['start_date'], $data['end_date'])
+                    : null,
             ],
         ]);
     }
@@ -100,7 +102,7 @@ class MyGroupController extends Controller
     /** GET ?start_date=&end_date=: cada agencia, solo con los pedidos del grupo (spec §10). */
     public function agencies(Request $request, GroupMetrics $metrics): JsonResponse
     {
-        $group = $this->group();
+        $group = $this->group(true);
         $data = $request->validate([
             'start_date' => 'required|date_format:Y-m-d',
             'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
@@ -118,7 +120,7 @@ class MyGroupController extends Controller
     /** GET ?seller_id=: notas privadas de la Líder sobre sus vendedoras, escritas en este grupo (spec §13). */
     public function notes(Request $request): JsonResponse
     {
-        $group = $this->group();
+        $group = $this->group(true);
         $data = $request->validate(['seller_id' => 'nullable|integer']);
 
         $notes = SellerNote::with(['author:id,names,surnames', 'group:id,name'])
@@ -313,12 +315,33 @@ class MyGroupController extends Controller
 
     /* ─────────────────────────── helpers ─────────────────────────── */
 
-    private function group(): SalesGroup
+    /**
+     * El grupo de quien llama. Con $adminCanView, el Admin (o Master) puede mirar el de cualquier Líder
+     * con ?group_id= (spec §18: analizar una Líder y ver su pantalla). Es solo para mirar: las acciones
+     * (%, roster, reasignar, notas) siguen exigiendo ser la Líder, para que nada quede hecho en su nombre.
+     */
+    private function group(bool $adminCanView = false): SalesGroup
     {
-        $group = Auth::user()->ledGroup();
+        $user = Auth::user();
+        if ($adminCanView && request()->filled('group_id') && $this->isAdmin()) {
+            return SalesGroup::active()->findOrFail((int) request('group_id'));
+        }
+        $group = $user->ledGroup();
         abort_unless($group, 403, 'Esta sección es solo para la Líder de un grupo de venta.');
 
         return $group;
+    }
+
+    private function isAdmin(): bool
+    {
+        return in_array(Auth::user()->role?->description, ['Admin', 'Master'], true);
+    }
+
+    private function leaderId(SalesGroup $group): ?int
+    {
+        $id = $group->openMembers()->where('role', SalesGroupMember::ROLE_LEADER)->value('user_id');
+
+        return $id ? (int) $id : null;
     }
 
     /** Integrantes vigentes (Líder y vendedoras), por user_id. */
@@ -378,7 +401,9 @@ class MyGroupController extends Controller
                 'name' => $group->name,
                 'leader_commission_pct' => $group->leader_commission_pct,
             ],
-            'me' => Auth::id(),
+            // La Líder del grupo (quien no recibe sus propias reasignaciones). Si mira el Admin, solo lectura.
+            'me' => $this->leaderId($group) ?? Auth::id(),
+            'read_only' => !(Auth::user()->ledGroup()?->id === $group->id),
             'statuses' => $statuses->map(fn ($s) => ['id' => $s->id, 'description' => $s->description])->values(),
             // Carga activa (Asignado a vendedor + Reprogramado para hoy) y alerta de saturación (spec §9)
             'saturation' => [
