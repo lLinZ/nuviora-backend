@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\BusinessDay;
 use App\Models\DailyAgentRoster;
 use App\Models\Log;
+use App\Models\MeetingRecord;
 use App\Models\Order;
 use App\Models\RosterChange;
 use App\Models\SalesGroup;
@@ -24,6 +25,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -153,6 +155,105 @@ class MyGroupController extends Controller
         ]);
 
         return response()->json(['status' => true, 'message' => 'Nota guardada', 'data' => $note->load('author:id,names,surnames', 'group:id,name')->toPayload()]);
+    }
+
+    /** GET: grabaciones y archivos de reuniones del grupo (spec §14). */
+    public function meetings(): JsonResponse
+    {
+        $group = $this->group(true);
+        $records = MeetingRecord::with(['sellers:id,names,surnames', 'author:id,names,surnames'])
+            ->where('sales_group_id', $group->id)
+            ->orderByDesc('meeting_date')->orderByDesc('id')
+            ->get();
+
+        return response()->json(['status' => true, 'data' => $records->map->toPayload()->values()]);
+    }
+
+    /**
+     * POST (multipart) { meeting_type, meeting_date, title, notes?, seller_ids[], file? | url?, consent }:
+     * archivo (hasta 15 MB, al disco privado) o enlace. Si es una grabación, hay que confirmar el
+     * consentimiento de las personas grabadas.
+     */
+    public function storeMeeting(Request $request): JsonResponse
+    {
+        $group = $this->group();
+        $data = $request->validate([
+            'meeting_type' => ['required', Rule::in(array_keys(MeetingRecord::TYPES))],
+            'meeting_date' => 'required|date_format:Y-m-d|before_or_equal:today',
+            'title' => 'required|string|max:150',
+            'notes' => 'nullable|string|max:2000',
+            'seller_ids' => 'required|array|min:1',
+            'seller_ids.*' => 'integer|distinct',
+            'file' => 'nullable|file|max:15360|mimes:mp3,m4a,wav,ogg,oga,opus,mp4,mov,webm,pdf,jpg,jpeg,png,doc,docx',
+            'url' => 'nullable|url|max:500',
+            'consent' => 'accepted',
+        ], [
+            'consent.accepted' => 'Confirma que las personas de la reunión saben que quedó registrada y están de acuerdo.',
+            'file.max' => 'El archivo pasa de 15 MB. Súbelo a Drive y pega el enlace.',
+        ]);
+        if (!$request->hasFile('file') && empty($data['url'])) {
+            throw ValidationException::withMessages(['file' => 'Adjunta un archivo o pega un enlace.']);
+        }
+        $sellers = $this->members($group)->where('role', SalesGroupMember::ROLE_SELLER)->keys()->all();
+        if (array_diff(array_map('intval', $data['seller_ids']), $sellers) !== []) {
+            throw ValidationException::withMessages(['seller_ids' => 'Elige vendedoras de tu grupo.']);
+        }
+
+        $file = $request->file('file');
+        $path = $file?->store("reuniones/{$group->id}", 'local');
+        try {
+            $record = DB::transaction(function () use ($group, $data, $file, $path) {
+                $record = MeetingRecord::create([
+                    'sales_group_id' => $group->id,
+                    'created_by' => Auth::id(),
+                    'meeting_type' => $data['meeting_type'],
+                    'meeting_date' => $data['meeting_date'],
+                    'title' => trim($data['title']),
+                    'notes' => $data['notes'] ?? null,
+                    'file_path' => $path,
+                    'file_name' => $file?->getClientOriginalName(),
+                    'url' => $data['url'] ?? null,
+                    'consent_confirmed' => true,
+                ]);
+                $record->sellers()->sync(array_map('intval', $data['seller_ids']));
+
+                return $record;
+            });
+        } catch (\Throwable $e) {
+            // Si no se pudo guardar, el archivo no queda huérfano en el disco
+            if ($path) {
+                Storage::disk('local')->delete($path);
+            }
+            throw $e;
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Reunión guardada',
+            'data' => $record->load(['sellers:id,names,surnames', 'author:id,names,surnames'])->toPayload(),
+        ]);
+    }
+
+    /** GET: descarga el archivo de una reunión (la Líder de ese grupo o el Admin). */
+    public function meetingFile(MeetingRecord $meeting)
+    {
+        $group = $this->group(true);
+        abort_unless($meeting->sales_group_id === $group->id && $meeting->file_path, 404);
+        abort_unless(Storage::disk('local')->exists($meeting->file_path), 404, 'El archivo ya no está.');
+
+        return Storage::disk('local')->download($meeting->file_path, $meeting->file_name ?? basename($meeting->file_path));
+    }
+
+    /** DELETE: solo el Admin borra una reunión y su archivo (políticas de retención, spec §14). */
+    public function destroyMeeting(MeetingRecord $meeting): JsonResponse
+    {
+        abort_unless($this->isAdmin(), 403, 'Solo el administrador puede borrar grabaciones.');
+        if ($meeting->file_path) {
+            Storage::disk('local')->delete($meeting->file_path);
+        }
+        $meeting->delete();
+
+        return response()->json(['status' => true, 'message' => 'Reunión borrada']);
     }
 
     /** PUT { weights: [{ user_id, weight }] }: solo las vendedoras. El % de la Líder no se toca aquí. */
