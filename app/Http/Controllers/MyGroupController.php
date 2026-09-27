@@ -16,6 +16,7 @@ use App\Services\Assignment\WeightedAssigner;
 use App\Services\SalesGroups\GroupMetrics;
 use App\Services\SalesGroups\GroupWeights;
 use App\Services\SalesGroups\LeaderCommissions;
+use App\Services\SalesGroups\SaturationMonitor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -271,6 +272,7 @@ class MyGroupController extends Controller
         $ids = $members->keys()->all();
         $statuses = $this->bulk->statuses();
         $active = $this->assigner->activeCounts($ids);
+        $saturation = app(SaturationMonitor::class)->groupStatus($group);
 
         $pipeline = Order::whereIn('agent_id', $ids)
             ->whereIn('status_id', $statuses->pluck('id'))
@@ -300,6 +302,12 @@ class MyGroupController extends Controller
             ],
             'me' => Auth::id(),
             'statuses' => $statuses->map(fn ($s) => ['id' => $s->id, 'description' => $s->description])->values(),
+            // Carga activa (Asignado a vendedor + Reprogramado para hoy) y alerta de saturación (spec §9)
+            'saturation' => [
+                'average' => $saturation['average'],
+                'threshold' => SaturationMonitor::THRESHOLD,
+                'min_load' => SaturationMonitor::MIN_LOAD,
+            ],
             'members' => $ordered->map(fn (SalesGroupMember $m) => [
                 'id' => $m->user_id,
                 'name' => $this->name($m->user),
@@ -308,6 +316,9 @@ class MyGroupController extends Controller
                 'max_active_orders' => $m->user->max_active_orders,
                 'active_orders' => $active[$m->user_id] ?? 0,
                 'pipeline' => $pipeline->get($m->user_id, collect())->pluck('c', 'status_id')->map(fn ($c) => (int) $c),
+                'load' => $saturation['members'][$m->user_id]['load'] ?? 0,
+                'saturated' => $saturation['members'][$m->user_id]['saturated'] ?? false,
+                'over_pct' => $saturation['members'][$m->user_id]['over_pct'] ?? null,
             ])->values(),
             'shops' => Shop::orderBy('id')->get(['id', 'name'])->map(fn (Shop $shop) => [
                 'id' => $shop->id,

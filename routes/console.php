@@ -26,6 +26,8 @@ try {
 
     // Fase 4: órdenes que esperan en "Nuevo" porque todas las vendedoras estaban en su máximo.
     Schedule::command('orders:assign-waiting')->everyMinute()->withoutOverlapping();
+    // Alerta de saturación de las vendedoras respecto de su grupo (spec de la Líder §9)
+    Schedule::command('groups:check-saturation')->everyMinute()->withoutOverlapping();
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready
