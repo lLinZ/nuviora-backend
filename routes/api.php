@@ -271,6 +271,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/agencies',          [MyGroupController::class, 'agencies']);
         Route::get('/notes',             [MyGroupController::class, 'notes']);
         Route::post('/notes',            [MyGroupController::class, 'storeNote']);
+        Route::get('/report',            [MyGroupController::class, 'report']);
+        Route::put('/report',            [MyGroupController::class, 'saveReport']);
         Route::get('/meetings',          [MyGroupController::class, 'meetings']);
         Route::post('/meetings',         [MyGroupController::class, 'storeMeeting']);
         Route::get('/meetings/{meeting}/file', [MyGroupController::class, 'meetingFile']);

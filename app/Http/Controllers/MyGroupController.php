@@ -13,12 +13,14 @@ use App\Models\SalesGroupMember;
 use App\Models\SellerNote;
 use App\Models\Shop;
 use App\Models\User;
+use App\Models\WeeklyReport;
 use App\Services\Assignment\BulkReassignService;
 use App\Services\Assignment\WeightedAssigner;
 use App\Services\SalesGroups\GroupMetrics;
 use App\Services\SalesGroups\GroupWeights;
 use App\Services\SalesGroups\LeaderCommissions;
 use App\Services\SalesGroups\SaturationMonitor;
+use App\Services\SalesGroups\WeeklyReportBuilder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -155,6 +157,35 @@ class MyGroupController extends Controller
         ]);
 
         return response()->json(['status' => true, 'message' => 'Nota guardada', 'data' => $note->load('author:id,names,surnames', 'group:id,name')->toPayload()]);
+    }
+
+    /** GET ?week=Y-m-d: el reporte semanal del grupo (spec §16), con lo automático y lo que escribió la Líder. */
+    public function report(Request $request, WeeklyReportBuilder $builder): JsonResponse
+    {
+        $group = $this->group(true);
+        $data = $request->validate(['week' => 'nullable|date_format:Y-m-d']);
+        $week = Carbon::parse($data['week'] ?? now()->toDateString());
+
+        return response()->json(['status' => true, 'data' => $builder->build($group, $week)]);
+    }
+
+    /** PUT { week, problems, actions, ... }: guarda lo que escribe la Líder para esa semana. */
+    public function saveReport(Request $request, WeeklyReportBuilder $builder): JsonResponse
+    {
+        $group = $this->group();
+        $rules = ['week' => 'required|date_format:Y-m-d'];
+        foreach (array_keys(WeeklyReport::FIELDS) as $field) {
+            $rules[$field] = 'nullable|string|max:5000';
+        }
+        $data = $request->validate($rules);
+        $week = Carbon::parse($data['week'])->startOfWeek(Carbon::MONDAY);
+
+        WeeklyReport::updateOrCreate(
+            ['sales_group_id' => $group->id, 'week_start' => $week->toDateString()],
+            collect(WeeklyReport::FIELDS)->keys()->mapWithKeys(fn ($f) => [$f => $data[$f] ?? null])->all() + ['updated_by' => Auth::id()],
+        );
+
+        return response()->json(['status' => true, 'message' => 'Reporte guardado', 'data' => $builder->build($group, $week)]);
     }
 
     /** GET: grabaciones y archivos de reuniones del grupo (spec §14). */

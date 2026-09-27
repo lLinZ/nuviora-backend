@@ -30,6 +30,7 @@ final class GroupMetrics
     {
         $id = fn (string $description) => (int) (Status::where('description', $description)->value('id') ?? 0);
         [$delivered, $cancelled, $agency] = [$id(OrderStatus::ENTREGADO), $id(OrderStatus::CANCELADO), $id(OrderStatus::ASIGNAR_A_AGENCIA)];
+        [$novelty, $resolved] = [$id(OrderStatus::NOVEDADES), $id(OrderStatus::NOVEDAD_SOLUCIONADA)];
 
         $sellerIds = User::whereHas('role', fn ($q) => $q->where('description', 'Vendedor'))->pluck('id');
         $firstAssignment = DB::table('order_tracking_comprehensive_logs as tl')
@@ -51,8 +52,10 @@ final class GroupMetrics
                 SUM(CASE WHEN o.status_id = ? THEN 1 ELSE 0 END) as cancelled,
                 SUM(CASE WHEN EXISTS (SELECT 1 FROM order_tracking_comprehensive_logs ag WHERE ag.order_id = o.id AND ag.to_status_id = ?) THEN 1 ELSE 0 END) as to_agency,
                 SUM(CASE WHEN o.status_id = ? AND o.agent_id = tl.seller_id
-                    AND EXISTS (SELECT 1 FROM order_products op WHERE op.order_id = o.id AND op.is_upsell = 1) THEN 1 ELSE 0 END) as delivered_with_upsell
-            ', [$delivered, $cancelled, $agency, $delivered])
+                    AND EXISTS (SELECT 1 FROM order_products op WHERE op.order_id = o.id AND op.is_upsell = 1) THEN 1 ELSE 0 END) as delivered_with_upsell,
+                SUM(CASE WHEN o.status_id = ? OR EXISTS (SELECT 1 FROM order_tracking_comprehensive_logs nv WHERE nv.order_id = o.id AND nv.to_status_id = ?) THEN 1 ELSE 0 END) as novelties,
+                SUM(CASE WHEN o.status_id = ? OR EXISTS (SELECT 1 FROM order_tracking_comprehensive_logs rs WHERE rs.order_id = o.id AND rs.to_status_id = ?) THEN 1 ELSE 0 END) as novelties_resolved
+            ', [$delivered, $cancelled, $agency, $delivered, $novelty, $novelty, $resolved, $resolved])
             ->get()
             ->keyBy('user_id');
 
@@ -77,6 +80,8 @@ final class GroupMetrics
                 (int) ($o->delivered_with_upsell ?? 0),
                 (float) ($e['vendedor'] ?? 0),
                 (float) ($e['upsell'] ?? 0),
+                (int) ($o->novelties ?? 0),
+                (int) ($o->novelties_resolved ?? 0),
             );
         }
 
@@ -84,6 +89,7 @@ final class GroupMetrics
         $totals = $this->row(
             $sum('assigned'), $sum('delivered'), $sum('cancelled'), $sum('to_agency'),
             $sum('delivered_with_upsell'), $sum('commission_sales'), $sum('commission_upsells'),
+            $sum('novelties'), $sum('novelties_resolved'),
         );
 
         return ['rows' => $rows, 'totals' => $totals];
@@ -152,7 +158,7 @@ final class GroupMetrics
         OrderStatus::ASIGNAR_A_AGENCIA, OrderStatus::ASIGNAR_REPARTIDOR, OrderStatus::ASIGNADO_A_REPARTIDOR, OrderStatus::EN_RUTA,
     ];
 
-    private function row(int $assigned, int $delivered, int $cancelled, int $toAgency, int $withUpsell, float $sales, float $upsells): array
+    private function row(int $assigned, int $delivered, int $cancelled, int $toAgency, int $withUpsell, float $sales, float $upsells, int $novelties = 0, int $resolved = 0): array
     {
         return [
             'assigned' => $assigned,
@@ -167,6 +173,10 @@ final class GroupMetrics
             'commission_sales' => round($sales, 2),
             'commission_upsells' => round($upsells, 2),
             'commission_total' => round($sales + $upsells, 2),
+            // Pasaron por Novedades y cuántas se resolvieron (spec §8.3)
+            'novelties' => $novelties,
+            'novelties_resolved' => $resolved,
+            'resolved_pct' => self::pct($resolved, $novelties),
         ];
     }
 
