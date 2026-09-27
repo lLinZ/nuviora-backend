@@ -9,6 +9,7 @@ use App\Models\Order;
 use App\Models\RosterChange;
 use App\Models\SalesGroup;
 use App\Models\SalesGroupMember;
+use App\Models\SellerNote;
 use App\Models\Shop;
 use App\Models\User;
 use App\Services\Assignment\BulkReassignService;
@@ -112,6 +113,44 @@ class MyGroupController extends Controller
             'status' => true,
             'data' => $metrics->agencies($this->members($group)->keys()->all(), $data['start_date'], $data['end_date']),
         ]);
+    }
+
+    /** GET ?seller_id=: notas privadas de la Líder sobre sus vendedoras, escritas en este grupo (spec §13). */
+    public function notes(Request $request): JsonResponse
+    {
+        $group = $this->group();
+        $data = $request->validate(['seller_id' => 'nullable|integer']);
+
+        $notes = SellerNote::with(['author:id,names,surnames', 'group:id,name'])
+            ->where('sales_group_id', $group->id)
+            ->when($data['seller_id'] ?? null, fn ($q, $id) => $q->where('seller_id', $id))
+            ->latest('id')
+            ->get();
+
+        return response()->json(['status' => true, 'data' => $notes->map->toPayload()->values()]);
+    }
+
+    /** POST { seller_id, body }: nueva nota. Solo sobre vendedoras de su grupo; no se editan ni se borran. */
+    public function storeNote(Request $request): JsonResponse
+    {
+        $group = $this->group();
+        $data = $request->validate([
+            'seller_id' => 'required|integer',
+            'body' => 'required|string|max:2000',
+        ]);
+        $member = $this->members($group)->get((int) $data['seller_id']);
+        if (!$member || $member->role !== SalesGroupMember::ROLE_SELLER) {
+            throw ValidationException::withMessages(['seller_id' => 'Solo puedes anotar sobre las vendedoras de tu grupo.']);
+        }
+
+        $note = SellerNote::create([
+            'sales_group_id' => $group->id,
+            'seller_id' => $member->user_id,
+            'author_id' => Auth::id(),
+            'body' => trim($data['body']),
+        ]);
+
+        return response()->json(['status' => true, 'message' => 'Nota guardada', 'data' => $note->load('author:id,names,surnames', 'group:id,name')->toPayload()]);
     }
 
     /** PUT { weights: [{ user_id, weight }] }: solo las vendedoras. El % de la Líder no se toca aquí. */

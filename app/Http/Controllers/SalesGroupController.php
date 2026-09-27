@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Role;
 use App\Models\SalesGroup;
 use App\Models\SalesGroupMember;
+use App\Models\SellerNote;
 use App\Models\User;
 use App\Services\Assignment\WeightedAssigner;
 use App\Services\SalesGroups\GroupWeights;
@@ -159,6 +160,19 @@ class SalesGroupController extends Controller
         });
 
         return response()->json(['status' => true, 'message' => 'Porcentajes guardados', 'data' => $this->payload()]);
+    }
+
+    /** GET ?seller_id=: notas privadas de las Líderes sobre una vendedora, de todos sus grupos (spec §13). */
+    public function notes(Request $request): JsonResponse
+    {
+        $data = $request->validate(['seller_id' => 'required|integer|exists:users,id']);
+
+        $notes = SellerNote::with(['author:id,names,surnames', 'group:id,name'])
+            ->where('seller_id', $data['seller_id'])
+            ->latest('id')
+            ->get();
+
+        return response()->json(['status' => true, 'data' => $notes->map->toPayload()->values()]);
     }
 
     /* ─────────────────────────── helpers ─────────────────────────── */

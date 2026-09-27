@@ -261,6 +261,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::delete('/sales-groups/{salesGroup}',        [SalesGroupController::class, 'destroy']);
         Route::put('/sales-groups/{salesGroup}/members',   [SalesGroupController::class, 'members']);
         Route::put('/sales-groups/{salesGroup}/weights',   [SalesGroupController::class, 'weights']);
+        Route::get('/sales-groups/notes',                  [SalesGroupController::class, 'notes']);
         Route::put('/assignment/sellers/{user}',           [AssignmentController::class, 'updateSeller']);
     });
     // "Mi grupo" de la Líder: el controlador comprueba que lidera un grupo activo y limita todo a ese grupo.
@@ -268,6 +269,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/',                  [MyGroupController::class, 'show']);
         Route::get('/metrics',           [MyGroupController::class, 'metrics']);
         Route::get('/agencies',          [MyGroupController::class, 'agencies']);
+        Route::get('/notes',             [MyGroupController::class, 'notes']);
+        Route::post('/notes',            [MyGroupController::class, 'storeNote']);
         Route::put('/weights',           [MyGroupController::class, 'weights']);
         Route::put('/roster',            [MyGroupController::class, 'roster']);
         Route::get('/reassign/preview',  [MyGroupController::class, 'reassignPreview']);
