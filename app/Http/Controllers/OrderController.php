@@ -196,6 +196,7 @@ class OrderController extends Controller
                 'name'                 => $order->name,
                 'currency'             => $order->currency,
                 'current_total_price'  => $order->current_total_price ?? $computedTotal,
+                'refunded_usd'         => (float) $order->refunded_usd, // devoluciones = reembolsos (tarea 3b)
                 'client'               => $order->client,
                 'agent'                => (\Illuminate\Support\Facades\Auth::user()->role?->description === 'Agencia') ? null : $order->agent,
                 'status'               => $order->status,
@@ -601,8 +602,8 @@ class OrderController extends Controller
             $order->was_shipped = true;
             $order->shipped_at = now();
 
-            // Asignación automática de agencia por ciudad
-            if ($order->city_id) {
+            // Agencia por ciudad solo si la orden no tiene una: la asignada a mano se respeta (tarea 3, punto 3)
+            if (!$order->agency_id && $order->city_id) {
                 $city = \App\Models\City::find($order->city_id);
                 if ($city && $city->agency_id) {
                     $order->agency_id = $city->agency_id;
@@ -610,23 +611,7 @@ class OrderController extends Controller
                 }
             }
 
-
-            // 🚀 Generar gasto de agencia cuando pasa por "En ruta" (solo la primera vez)
-            if ($order->agency_id) {
-                $agencyUser = \App\Models\User::find($order->agency_id);
-                if ($agencyUser) {
-                    \App\Models\Earning::firstOrCreate([
-                        'order_id'     => $order->id,
-                        'user_id'      => $agencyUser->id,
-                        'role_type'    => 'agencia',
-                    ], [
-                        'amount_usd'   => $agencyUser->delivery_cost > 0 ? $agencyUser->delivery_cost : ($order->delivery_cost ?? 0),
-                        'currency'     => 'USD',
-                        'rate'         => 1,
-                        'earning_date' => now()->toDateString(),
-                    ]);
-                }
-            }
+            // La carrera de la agencia (y su pago) se registra en OrderLogisticsObserver → AgencyTrips
         }
 
         $order->save();
@@ -654,121 +639,8 @@ class OrderController extends Controller
             }
        }
 
-        // ----------------------------------------------------------------------
-        // 📦 GESTIÓN DE INVENTARIO (Deducción anticipada de Stock)
-        // ----------------------------------------------------------------------
-        // Según requerimiento: Descontar al pasar a los estados definidos en OrderStatus
-        $deductionStatuses = Status::whereIn('description', OrderStatus::DEDUCTION_STATUSES)->pluck('id')->toArray();
-
-        if (in_array((int)$order->status_id, $deductionStatuses)) {
-            // Solo descontamos si NO ha sido descontada antes para evitar doble descuento
-            if (!$order->isStockDeducted()) {
-                foreach ($order->products as $op) {
-                    // Descontamos de la BODEGA DE LA AGENCIA (o principal).
-                    $warehouseId = $order->agency?->warehouse?->id ?? Warehouse::where('is_main', '=', true)->first()?->id;
-                    if ($warehouseId) {
-                        $inv = \App\Models\Inventory::where('product_id', '=', $op->product_id)
-                            ->where('warehouse_id', '=', $warehouseId)
-                            ->first();
-
-                        if ($inv) {
-                            // 1. Descuento General
-                            $inv->decrement('quantity', $op->quantity);
-                            
-                            // 2. Descuento Específico por Talla (Sub-Variant Matrix)
-                            if ($op->size) {
-                                // Obtener array fresco del inventario actualizado
-                                $currentInv = \App\Models\Inventory::find($inv->id);
-                                $sizesStock = is_string($currentInv->sizes_stock) 
-                                    ? json_decode($currentInv->sizes_stock, true) 
-                                    : ($currentInv->sizes_stock ?? []);
-                                
-                                if (!is_array($sizesStock)) $sizesStock = [];
-                                
-                                // Si la talla existe en el stock, la descontamos (si no, la forzamos negativo para auditoría)
-                                if (isset($sizesStock[$op->size])) {
-                                    $sizesStock[$op->size] -= $op->quantity;
-                                } else {
-                                    $sizesStock[$op->size] = -$op->quantity;
-                                }
-                                
-                                $currentInv->sizes_stock = $sizesStock;
-                                $currentInv->save();
-                            }
-                            
-                            $movementNote = ($order->is_return || $order->is_exchange) 
-                                ? "Devolución/Cambio - Reserva por asignación - Orden #{$order->name}" 
-                                : "Venta - Reserva por asignación - Orden #{$order->name}";
-                                
-                            InventoryMovement::create([
-                                'product_id' => $op->product_id,
-                                'from_warehouse_id' => $warehouseId,
-                                'to_warehouse_id' => null,
-                                'quantity' => $op->quantity,
-                                'movement_type' => 'out',
-                                'reference_type' => 'Order',
-                                'reference_id' => $order->id,
-                                'user_id' => Auth::id() ?? 1,
-                                'notes' => $movementNote,
-                            ]);
-                        }
-                    }
-                }
-            }
-        }
-
-        // ----------------------------------------------------------------------
-        // ↩️ DEVOLUCIÓN DE STOCK (Si se quita de tránsito/entrega y ya se había descontado)
-        // ----------------------------------------------------------------------
-        $returnStatuses = Status::whereIn('description', OrderStatus::RETURN_STATUSES)->pluck('id')->toArray();
-
-        if (in_array((int)$order->status_id, $returnStatuses) && $order->isStockDeducted()) {
-            foreach ($order->products as $op) {
-                // Devolvemos a la BODEGA DE LA AGENCIA (o principal).
-                $warehouseId = $order->agency?->warehouse?->id ?? Warehouse::where('is_main', '=', true)->first()?->id;
-                if ($warehouseId) {
-                    $inv = \App\Models\Inventory::where('product_id', '=', $op->product_id)
-                        ->where('warehouse_id', '=', $warehouseId)
-                        ->first();
-
-                        if ($inv) {
-                            // 1. Devolución General
-                            $inv->increment('quantity', $op->quantity);
-                            
-                            // 2. Devolución Específica por Talla (Sub-Variant Matrix)
-                            if ($op->size) {
-                                $currentInv = \App\Models\Inventory::find($inv->id);
-                                $sizesStock = is_string($currentInv->sizes_stock) 
-                                    ? json_decode($currentInv->sizes_stock, true) 
-                                    : ($currentInv->sizes_stock ?? []);
-                                
-                                if (!is_array($sizesStock)) $sizesStock = [];
-                                
-                                if (isset($sizesStock[$op->size])) {
-                                    $sizesStock[$op->size] += $op->quantity;
-                                } else {
-                                    $sizesStock[$op->size] = $op->quantity;
-                                }
-                                
-                                $currentInv->sizes_stock = $sizesStock;
-                                $currentInv->save();
-                            }
-                            
-                            InventoryMovement::create([
-                            'product_id' => $op->product_id,
-                            'from_warehouse_id' => null,
-                            'to_warehouse_id' => $warehouseId,
-                            'quantity' => $op->quantity,
-                            'movement_type' => 'in',
-                            'reference_type' => 'Order',
-                            'reference_id' => $order->id,
-                            'user_id' => Auth::id() ?? 1,
-                            'notes' => "Devolución de stock por cambio de estado: {$order->status?->description} - Orden #{$order->name}",
-                        ]);
-                    }
-                }
-            }
-        }
+        // 📦 El stock (descontar al pasar a "Asignar a agencia", devolver al volver atrás) lo lleva
+        // OrderLogisticsObserver → App\Services\Inventory\OrderStock, igual desde cualquier pantalla.
 
         // 🚛 LÓGICA FINAL DE ENTREGA (Solo para estado Entregado)
         if ($statusEntregado && (int) $statusEntregado->id === (int) $order->status_id) {
@@ -2607,6 +2479,11 @@ class OrderController extends Controller
         ]);
 
         $order->fill($validated);
+        // Almacén de la agencia nueva, igual que en assignAgency. Si la orden ya tenía el stock
+        // descontado, OrderStock lo devuelve al almacén de donde salió y lo descuenta del nuevo.
+        if ($order->isDirty('agency_id')) {
+            $order->warehouse_id = $order->agency_id ? Warehouse::where('user_id', $order->agency_id)->value('id') : null;
+        }
         $order->save();
 
         return response()->json([
@@ -2622,8 +2499,10 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
         }
 
-        // 1. Buscar todas las órdenes sin agencia
-        $orders = Order::whereNull('agency_id')->with('client')->get();
+        // 1. Buscar las órdenes sin agencia que siguen en curso: las entregadas, canceladas o
+        //    rechazadas no se tocan (antes se les ponía agencia a todas, incluso a las viejas)
+        $closedIds = Status::whereIn('description', [OrderStatus::ENTREGADO, OrderStatus::CANCELADO, OrderStatus::RECHAZADO])->pluck('id');
+        $orders = Order::whereNull('agency_id')->whereNotIn('status_id', $closedIds)->with('client')->get();
         $assignedCount = 0;
 
         // 2. Mapeo de ciudades/provincias y sus agencias asignadas
@@ -2659,7 +2538,7 @@ class OrderController extends Controller
         return response()->json([
             'status' => true,
             'message' => "Se han auto-asignado {$assignedCount} órdenes exitosamente.",
-            'total_pending' => Order::whereNull('agency_id')->count()
+            'total_pending' => Order::whereNull('agency_id')->whereNotIn('status_id', $closedIds)->count()
         ]);
     }
     public function getActivityLogs(Order $order)
@@ -2773,20 +2652,25 @@ class OrderController extends Controller
     }
 
     /**
-     * Create a return order based on an existing order.
-     * Rules:
-     * - is_return = true
-     * - name appends "(DEVOLUCION)"
-     * - current_total_price = 0 (client doesn't pay)
-     * - agent_id = same as original
-     * - status = "Asignado a agencia"
-     * - agency_id = auto-assigned by city
-     * - Products are cloned from original
+     * Crea la orden de CAMBIO de una orden entregada (Fran §8).
+     * - is_exchange = true, el nombre termina en "(CAMBIO)" y el total es 0 (el cliente no paga).
+     * - Misma vendedora; la agencia es la de la orden original o, si no tenía, la de su ciudad.
+     * - Nace en "Asignar a agencia" con los productos (y tallas) de la original: la pieza buena sale del
+     *   almacén de la agencia (OrderStock), y al entregarse la defectuosa entra a ese almacén como defectuosa.
+     * - Es una sola carrera, de tipo cambio (AgencyTrips).
+     * Las devoluciones ya no crean orden: son un reembolso (OrderRefundController).
      */
     public function createReturn(Request $request, Order $order)
     {
         $user = Auth::user();
-        $type = $request->get('type', 'devolucion'); // 'devolucion' or 'cambio'
+        $type = $request->get('type', 'cambio');
+
+        if ($type !== 'cambio') {
+            return response()->json([
+                'status' => false,
+                'message' => 'Las devoluciones ahora se registran como reembolso desde la orden: el producto se queda con el cliente y no sale ninguna agencia.',
+            ], 422);
+        }
 
         // Only Admin, Gerente, or Vendedor can create returns/exchanges
         if (!in_array($user->role?->description, ['Admin', 'Gerente', 'Vendedor'])) {
@@ -2809,22 +2693,21 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'Status "Asignar a agencia" no encontrado'], 500);
         }
 
-        // Find agency by city
-        $agencyId = null;
-        if ($order->city_id) {
-            $city = City::find($order->city_id);
-            if ($city && $city->agency_id) {
-                $agencyId = $city->agency_id;
-            }
+        // La agencia que entregó la orden; si no tenía, la de su ciudad
+        $agencyId = $order->agency_id;
+        if (!$agencyId && $order->city_id) {
+            $agencyId = City::find($order->city_id)?->agency_id;
         }
 
-        // Create return/exchange order
-        // Generate unique numeric IDs (9 billion+ to distinguish from Shopify)
+        // IDs numéricos propios (desde 9.000.000.000, para no chocar con Shopify): uno por orden original
         $returnOrderId = 9000000000 + $order->id;
         $returnOrderNumber = 9000000000 + $order->id;
-        
-        $suffix = ($type === 'cambio') ? ' (CAMBIO)' : ' (DEVOLUCION)';
-        
+        if (Order::where('order_id', $returnOrderId)->exists()) {
+            return response()->json(['status' => false, 'message' => 'Esta orden ya tiene un cambio creado.'], 422);
+        }
+
+        $suffix = ' (CAMBIO)';
+
         $returnOrder = Order::create([
             'order_id' => $returnOrderId,
             'order_number' => $returnOrderNumber,
@@ -2838,14 +2721,16 @@ class OrderController extends Controller
             'city_id' => $order->city_id,
             'province_id' => $order->province_id,
             'agency_id' => $agencyId,
+            'warehouse_id' => $agencyId ? Warehouse::where('user_id', $agencyId)->value('id') : null,
             'shop_id' => $order->shop_id,
             'location' => $order->location, // Copy delivery address/location link
-            'is_return' => ($type === 'devolucion'),
-            'is_exchange' => ($type === 'cambio'),
+            'is_return' => false,
+            'is_exchange' => true,
             'parent_order_id' => $order->id,
         ]);
 
-        // Clone products from original order
+        // Los mismos productos y tallas (antes no se copiaba la talla). Al crearse cada línea,
+        // OrderStock descuenta la pieza buena del almacén de la agencia.
         foreach ($order->products as $product) {
             OrderProduct::create([
                 'order_id' => $returnOrder->id,
@@ -2855,13 +2740,14 @@ class OrderController extends Controller
                 'showable_name' => $product->showable_name,
                 'price' => 0, // No cost for return
                 'quantity' => $product->quantity,
+                'size' => $product->size,
                 'image' => $product->image,
                 'is_upsell' => false,
             ]);
         }
 
         // Log activity
-        $labelLabel = ($type === 'cambio') ? 'cambio' : 'devolución';
+        $labelLabel = 'cambio';
         \App\Models\OrderActivityLog::create([
             'order_id' => $returnOrder->id,
             'user_id' => $user->id,
@@ -2873,10 +2759,9 @@ class OrderController extends Controller
             ]
         ]);
 
-        $successLabel = ($type === 'cambio') ? 'cambio' : 'devolución';
         return response()->json([
             'status' => true,
-            'message' => "Orden de {$successLabel} creada exitosamente",
+            'message' => 'Orden de cambio creada exitosamente',
             'order' => $returnOrder->fresh(['client', 'status', 'products', 'agency']),
         ]);
     }

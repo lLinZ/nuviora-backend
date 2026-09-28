@@ -2,8 +2,10 @@
 
 namespace App\Observers;
 
+use App\Models\Order;
 use App\Models\OrderProduct;
 use App\Models\OrderActivityLog;
+use App\Services\Inventory\OrderStock;
 
 class OrderProductObserver
 {
@@ -17,6 +19,14 @@ class OrderProductObserver
             'description' => "Añadió {$type}: {$orderProduct->quantity}x {$orderProduct->title} a un precio de {$orderProduct->price}",
             'properties' => $orderProduct->toArray()
         ]);
+        $this->syncStock($orderProduct);
+    }
+
+    public function updated(OrderProduct $orderProduct): void
+    {
+        if ($orderProduct->wasChanged(['quantity', 'product_id', 'size'])) {
+            $this->syncStock($orderProduct);
+        }
     }
 
     public function deleted(OrderProduct $orderProduct): void
@@ -29,5 +39,19 @@ class OrderProductObserver
             'description' => "Eliminó {$type}: {$orderProduct->title}",
             'properties' => $orderProduct->toArray()
         ]);
+        $this->syncStock($orderProduct);
+    }
+
+    /** Si la orden ya tenía su stock descontado, un producto agregado, quitado o cambiado se ajusta en el almacén (tarea 3a). */
+    private function syncStock(OrderProduct $orderProduct): void
+    {
+        try {
+            $order = Order::find($orderProduct->order_id);
+            if ($order) {
+                app(OrderStock::class)->sync($order);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }

@@ -20,8 +20,12 @@ class Inventory extends Model
     {
         parent::boot();
 
+        // Si solo se cambió el desglose por tallas, el total pasa a ser su suma. Si se cambió el total
+        // (una venta sin talla, un traslado), se respeta: antes se recalculaba siempre y esos cambios
+        // se perdían sin aviso (tarea 3, punto 5).
         static::saving(function ($inventory) {
-            if (isset($inventory->sizes_stock) && is_array($inventory->sizes_stock)) {
+            if ($inventory->isDirty('sizes_stock') && !$inventory->isDirty('quantity')
+                && is_array($inventory->sizes_stock) && $inventory->sizes_stock) {
                 $inventory->quantity = array_sum($inventory->sizes_stock);
             }
         });

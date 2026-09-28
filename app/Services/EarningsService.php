@@ -105,6 +105,7 @@ class EarningsService
             'orders_with_change' => Order::with('agency')
                 ->whereBetween('updated_at', [$from->startOfDay(), $to->endOfDay()])
                 ->where('change_amount', '>', 0)
+                ->when($agencyId, fn($q) => $q->where('agency_id', $agencyId)) // cada agencia, solo sus vueltos
                 ->get()
                 ->map(function($o) {
                     $amtCompany = (float) $o->change_amount_company;
@@ -128,12 +129,31 @@ class EarningsService
                         'agency_id'        => $o->agency_id,
                     ];
                 }),
-            'agency_settlement' => $this->calculateAgencySettlement($from, $to, $agencyId)
+            'agency_settlement' => $this->calculateAgencySettlement($from, $to, $agencyId),
+            'refunds' => $agencyId ? [] : $this->refunds($from, $to),
+        ];
+    }
+
+    /** Reembolsos del período (devoluciones, tarea 3b), por la fecha en que se hicieron. */
+    public function refunds(Carbon $from, Carbon $to): array
+    {
+        $rows = \App\Models\OrderRefund::with(['order:id,name,agent_id', 'order.agent:id,names', 'user:id,names'])
+            ->whereBetween('refunded_at', [$from->toDateString(), $to->toDateString()])
+            ->orderBy('refunded_at')->orderBy('id')->get();
+
+        return [
+            'total_usd' => round($rows->sum('amount_usd'), 2),
+            'count' => $rows->count(),
+            'items' => $rows->map(fn ($r) => $r->toPayload() + ['seller_name' => $r->order?->agent?->names])->values(),
         ];
     }
 
     /**
-     * Calcula la liquidación de agencias: Efectivo cobrado - Vuelto entregado
+     * Liquidación de agencias.
+     *  - Carreras (tarea 5): se paga cada intento, con la tarifa que tenía la agencia, en la semana en
+     *    que se hizo. Sale de sus ganancias (earnings agencia, una por carrera, más las de antes de este
+     *    registro, una por orden) con fecha en el período.
+     *  - Efectivo: lo cobrado menos el vuelto dado, de las órdenes entregadas en el período.
      */
     public function calculateAgencySettlement(Carbon $from, Carbon $to, ?int $agencyId = null): Collection
     {
@@ -158,33 +178,43 @@ class EarningsService
         }
 
         $orders = $query->get();
-
-        // Ya tenemos el ID, no necesitamos buscarlo de nuevo
-        //$statusDeliveredId = \App\Models\Status::where('description', 'Entregado')->value('id');
         $statusTransitId = \App\Models\Status::where('description', 'En ruta')->value('id');
 
-        // PRE-CALCULAR CONTEOS DE RUTA
-        $orderIds = $orders->pluck('id');
-        $routeCounts = $orderIds->isEmpty() ? collect() : \App\Models\OrderStatusLog::whereIn('order_id', $orderIds)
-            ->where('to_status_id', $statusTransitId)
-            ->select('order_id', \Illuminate\Support\Facades\DB::raw('count(*) as count'))
-            ->groupBy('order_id')
-            ->get()
-            ->pluck('count', 'order_id');
+        // Carreras del período, por su fecha (cada una es una ganancia de la agencia)
+        $tripEarnings = \App\Models\Earning::with('order:id,name,is_exchange')
+            ->where('role_type', 'agencia')
+            ->whereBetween('earning_date', [$startDate->toDateString(), $endDate->toDateString()])
+            ->when($agencyId, fn ($q) => $q->where('user_id', $agencyId))
+            ->get();
+        $tripRows = \App\Models\AgencyTrip::whereIn('earning_id', $tripEarnings->pluck('id'))->get()->keyBy('earning_id');
+        $tripsByAgency = $tripEarnings->groupBy('user_id');
 
-        return $orders->groupBy('agency_id')
-            ->map(function (Collection $agencyOrders) use ($statusDeliveredId, $statusTransitId, $rateBinanceNow, $rateEuroNow) {
-                // If the relationship is not eager loaded or missing, fallback to the object itself if it's the agency record
-                $agency = $agencyOrders->first()->agency;
-                
-                // If still no agency, try to find it (should not happen with with(['agency']) but for safety)
-                if (!$agency && $agencyOrders->first()->agency_id) {
-                    $agency = User::find($agencyOrders->first()->agency_id);
-                }
+        $agencyIds = $orders->pluck('agency_id')->merge($tripEarnings->pluck('user_id'))->filter()->unique()->values();
+        $agencies = User::whereIn('id', $agencyIds)->get()->keyBy('id');
 
+        return $agencyIds
+            ->map(function ($id) use ($orders, $agencies, $tripsByAgency, $tripRows, $statusDeliveredId, $statusTransitId, $rateBinanceNow, $rateEuroNow) {
+                $agency = $agencies->get($id);
                 if (!$agency) return null;
+                $agencyOrders = $orders->where('agency_id', $id)->values();
 
-                $details = $agencyOrders->map(function (Order $o) use ($rateBinanceNow, $rateEuroNow) {
+                $trips = ($tripsByAgency->get($id) ?? collect())->map(function ($e) use ($tripRows) {
+                    $trip = $tripRows->get($e->id);
+
+                    return [
+                        'trip_id'      => $trip?->id,
+                        'order_id'     => $e->order_id,
+                        'order_name'   => $e->order?->name ?? "#{$e->order_id}",
+                        'trip_date'    => $e->earning_date,
+                        'type'         => $trip?->type ?? ($e->order?->is_exchange ? 'cambio' : 'normal'),
+                        // 'anterior': pagada antes de que existiera el registro de carreras (una por orden)
+                        'result'       => $trip ? $trip->result : 'anterior',
+                        'amount_usd'   => (float) $e->amount_usd,
+                    ];
+                })->sortBy('trip_date')->values();
+                $costByOrder = $trips->groupBy('order_id')->map(fn ($t) => $t->sum('amount_usd'));
+
+                $details = $agencyOrders->map(function (Order $o) use ($rateBinanceNow, $rateEuroNow, $costByOrder) {
                     $cashUSD = (float) $o->payments->where('method', 'DOLARES_EFECTIVO')->sum('amount');
                     
                     // 1. INGRESOS (Payments in VES) -> Siempre Tasa Binance
@@ -233,7 +263,8 @@ class EarningsService
                         'change_company' => $amtCompany,
                         'method_company' => $methodCompany ?? 'N/A',
                         'updated_at'     => $o->updated_at->toDateTimeString(),
-                        'delivery_cost'  => ($routeCounts[$o->id] ?? ($o->was_shipped ? 1 : 0)) * (float) $o->delivery_cost,
+                        // Lo que se le paga por sus carreras de este período (se liquidan en tripDetails)
+                        'delivery_cost'  => (float) ($costByOrder[$o->id] ?? 0),
                     ];
                 })
                 // Filtrar órdenes ENTREGADAS EXCLUSIVAMENTE para la liquidación
@@ -243,17 +274,22 @@ class EarningsService
                     return $order && ((int)$order->status_id === (int)$statusDeliveredId);
                 });
 
-                if ($details->isEmpty()) return null;
+                if ($details->isEmpty() && $trips->isEmpty()) return null;
 
                 return [
                     'agency_id'           => $agency->id,
                     'agency_name'         => $agency->names,
                     'agency_color'        => $agency->color,
+                    'delivery_rate'       => (float) $agency->delivery_cost,
                     'total_orders'        => $agencyOrders->where('status_id', $statusDeliveredId)->count(),
                     'count_delivered'     => $agencyOrders->where('status_id', $statusDeliveredId)->count(),
                     'count_in_transit'    => $agencyOrders->where('status_id', $statusTransitId)->count(),
                     'count_shipped'       => $agencyOrders->where('was_shipped', true)->count(),
-                    'total_shipping_cost' => $details->sum('delivery_cost'),
+                    'count_trips'         => $trips->count(),
+                    'trips_by_type'       => $trips->countBy('type'),
+                    'trips_by_result'     => $trips->countBy(fn ($t) => $t['result'] ?? 'en_curso'),
+                    'total_shipping_cost' => round($trips->sum('amount_usd'), 2),
+                    'trip_details'        => $trips,
                     'total_collected_usd' => $details->sum('collected_usd'),
                     'total_collected_ves' => $details->sum('collected_ves'),
                     'total_change_usd'    => $details->sum('change_usd'),

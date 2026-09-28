@@ -437,6 +437,13 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::post('/orders/{order}/postpone', [OrderPostponementController::class, 'store'])->middleware('order.access');
     Route::post('/orders/{order}/create-return', [OrderController::class, 'createReturn'])->middleware('order.access');
 
+    // Devoluciones = reembolsos (tarea 3b) y carreras de las agencias (tarea 5)
+    Route::get('/orders/{order}/refunds', [\App\Http\Controllers\OrderRefundController::class, 'index'])->middleware('order.access');
+    Route::post('/orders/{order}/refunds', [\App\Http\Controllers\OrderRefundController::class, 'store'])->middleware('order.access');
+    Route::get('/orders/{order}/refunds/{refund}/receipt', [\App\Http\Controllers\OrderRefundController::class, 'receipt'])->middleware('order.access');
+    Route::get('/orders/{order}/trips', [\App\Http\Controllers\AgencyTripController::class, 'index'])->middleware('order.access');
+    Route::post('/agency-trips/{trip}/void', [\App\Http\Controllers\AgencyTripController::class, 'void'])->middleware('role:Admin,Master');
+
     /**---------------------
      * WAREHOUSES
      * ---------------------**/

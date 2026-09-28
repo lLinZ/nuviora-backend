@@ -14,6 +14,7 @@ class InventoryMovement extends Model
         'from_warehouse_id',
         'to_warehouse_id',
         'quantity',
+        'size',
         'movement_type',
         'reference_type',
         'reference_id',

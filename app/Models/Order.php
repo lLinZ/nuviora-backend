@@ -285,7 +285,8 @@ class Order extends Model
         $hasWarning = false;
 
         foreach ($this->products as $op) {
-            $available = $inventory->get($op->product_id)->quantity ?? 0;
+            // Stock útil: sin lo reservado, defectuoso (p. ej. piezas retiradas en cambios) ni bloqueado
+            $available = $inventory->get($op->product_id)?->useful_stock ?? 0;
             $hasStock = $available >= $op->quantity;
             
             if (!$hasStock) {
@@ -499,5 +500,15 @@ class Order extends Model
     public function activityLogs()
     {
         return $this->hasMany(OrderActivityLog::class);
+    }
+
+    public function refunds()
+    {
+        return $this->hasMany(OrderRefund::class);
+    }
+
+    public function agencyTrips()
+    {
+        return $this->hasMany(AgencyTrip::class);
     }
 }
