@@ -6,6 +6,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Models\StockMovement;
+use App\Models\Warehouse;
+use App\Services\InventoryService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
@@ -23,152 +25,83 @@ class StockMovementController extends Controller
 
         return response()->json(['status' => true, 'data' => $q->paginate(50)]);
     }
-    public function store(Request $request)
+    /**
+     * POST /stock/movements. Entradas y salidas manuales, ahora en el sistema de almacenes
+     * (InventoryService: inventories + inventory_movements), con tallas si vienen. Antes tocaba las tallas
+     * del inventario pero dejaba el movimiento en stock_movements, fuera del historial (tarea 3, punto 7).
+     * El stock de repartidores se mueve desde su almacén (DelivererStockController).
+     */
+    public function store(Request $request, InventoryService $inventory)
     {
-        $user = Auth::user();
-        $role = $user->role?->description; // Admin, Gerente, Vendedor, Repartidor
+        $role = Auth::user()->role?->description;
 
         $data = $request->validate([
             'product_id'   => ['required', 'exists:products,id'],
             'type'         => ['required', 'in:IN,OUT,ASSIGN,RETURN,SALE'],
             'quantity'     => ['required', 'integer', 'min:1'],
-            'deliverer_id' => ['nullable', 'exists:users,id'],
-            'order_id'     => ['nullable', 'exists:orders,id'],
-            'sizes'        => ['nullable', 'array'],   // 🔥 {"S/M": 3, "X/XL": 7}
+            'warehouse_id' => ['nullable', 'exists:warehouses,id'],
+            'sizes'        => ['nullable', 'array'],   // {"S/M": 3, "X/XL": 7}
+            'notes'        => ['nullable', 'string', 'max:255'],
         ]);
 
-        // 🔒 Reglas por tipo y rol
-        switch ($data['type']) {
-            case 'IN':
-            case 'OUT':
-                // solo Admin / Gerente pueden meter o sacar del stock general
-                if (!in_array($role, ['Admin', 'Gerente'])) {
-                    return response()->json([
-                        'status'  => false,
-                        'message' => 'No autorizado para este tipo de movimiento',
-                    ], 403);
-                }
-                break;
-
-            case 'ASSIGN':
-                // Asignar stock a repartidor → solo Admin / Gerente
-                if (!in_array($role, ['Admin', 'Gerente'])) {
-                    return response()->json([
-                        'status'  => false,
-                        'message' => 'No autorizado para asignar stock a repartidores',
-                    ], 403);
-                }
-
-                if (empty($data['deliverer_id'])) {
-                    return response()->json([
-                        'status'  => false,
-                        'message' => 'deliverer_id es obligatorio para movimientos ASSIGN',
-                    ], 422);
-                }
-                break;
-
-            case 'RETURN':
-            case 'SALE':
-                // Devolver o vender pueden hacerlo Admin / Gerente / Repartidor
-                if (!in_array($role, ['Admin', 'Gerente', 'Repartidor'])) {
-                    return response()->json([
-                        'status'  => false,
-                        'message' => 'No autorizado para este tipo de movimiento',
-                    ], 403);
-                }
-
-                // Si viene desde el repartidor, forzamos deliverer_id = user->id
-                if ($role === 'Repartidor') {
-                    $data['deliverer_id'] = $user->id;
-                }
-                break;
+        if (!in_array($data['type'], ['IN', 'OUT'], true)) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'El stock de repartidores se asigna y se devuelve desde su almacén (Inventario → Stock Repartidores).',
+            ], 422);
+        }
+        if (!in_array($role, ['Admin', 'Gerente'])) {
+            return response()->json(['status' => false, 'message' => 'No autorizado para este tipo de movimiento'], 403);
         }
 
-        // (Opcional) validar que el producto exista y no se vaya a negativo
-        $product = Product::findOrFail($data['product_id']);
-
-        // 🔥 Actualizar sizes_stock en la bodega seleccionada si vienen tallas
-        if (!empty($data['sizes']) && is_array($data['sizes'])) {
-            $warehouseId = $data['warehouse_id'] ?? null;
-            
-            if (!$warehouseId) {
-                $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
-                $warehouseId = $mainWarehouse ? $mainWarehouse->id : 1;
-            }
-
-            $inv = \App\Models\Inventory::firstOrCreate(
-                ['product_id' => $product->id, 'warehouse_id' => $warehouseId],
-                ['quantity' => 0, 'sizes_stock' => []]
-            );
-
-            $sizesStock = $inv->sizes_stock ?? [];
-            if (!is_array($sizesStock)) $sizesStock = [];
-
-            foreach ($data['sizes'] as $size => $qty) {
-                $qty = (int) $qty;
-                if ($data['type'] === 'IN') {
-                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) + $qty;
-                } else {
-                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) - $qty;
-                }
-            }
-            $inv->sizes_stock = $sizesStock;
-            $inv->quantity = array_sum($sizesStock); // Sincronizar total
-            $inv->save();
+        $warehouseId = $data['warehouse_id'] ?? Warehouse::where('is_main', true)->value('id');
+        if (!$warehouseId) {
+            return response()->json(['status' => false, 'message' => 'No hay almacén principal'], 422);
         }
 
-        $movement = StockMovement::create([
-            'product_id'   => $data['product_id'],
-            'type'         => $data['type'],
-            'quantity'     => $data['quantity'],
-            'deliverer_id' => $data['deliverer_id'] ?? null,
-            'order_id'     => $data['order_id'] ?? null,
-            'created_by'   => $user->id,
-        ]);
+        $sizes = $data['sizes'] ?? null;
+        if ($sizes && array_sum(array_map('intval', $sizes)) !== (int) $data['quantity']) {
+            return response()->json(['status' => false, 'message' => 'La suma de las tallas no coincide con la cantidad.'], 422);
+        }
+
+        try {
+            $args = [$data['product_id'], $warehouseId, $data['quantity'], Auth::id(), $data['notes'] ?? 'Movimiento manual', null, null, $sizes];
+            $movement = $data['type'] === 'IN' ? $inventory->addStock(...$args) : $inventory->removeStock(...$args);
+        } catch (\Exception $e) {
+            return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+        }
 
         return response()->json([
             'status'   => true,
             'message'  => 'Movimiento de stock registrado correctamente',
-            'movement' => $movement->load(['product', 'deliverer', 'order', 'creator']),
+            'movement' => $movement->load(['product', 'toWarehouse', 'fromWarehouse']),
         ], 201);
     }
-    public function adjust(Request $request)
+
+    /** POST /stock/adjust: entrada o salida en el almacén principal (antes cambiaba products.stock). */
+    public function adjust(Request $request, InventoryService $inventory)
     {
+        if (!in_array(Auth::user()->role?->description, ['Admin', 'Gerente'])) {
+            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
+        }
         $data = $request->validate([
             'product_id' => 'required|exists:products,id',
             'type' => 'required|in:IN,OUT',
             'quantity' => 'required|integer|min:1',
             'reason' => 'nullable|string|max:255',
         ]);
+        $warehouseId = Warehouse::where('is_main', true)->value('id');
+        if (!$warehouseId) {
+            return response()->json(['status' => false, 'message' => 'No hay almacén principal'], 422);
+        }
 
-        return DB::transaction(function () use ($data) {
-            $p = Product::lockForUpdate()->find($data['product_id']);
+        try {
+            $args = [$data['product_id'], $warehouseId, $data['quantity'], Auth::id(), $data['reason'] ?? 'Ajuste manual'];
+            $movement = $data['type'] === 'IN' ? $inventory->addStock(...$args) : $inventory->removeStock(...$args);
+        } catch (\Exception $e) {
+            return response()->json(['status' => false, 'message' => 'Stock insuficiente'], 422);
+        }
 
-            $newStock = $data['type'] === 'IN'
-                ? $p->stock + $data['quantity']
-                : $p->stock - $data['quantity'];
-
-            if ($newStock < 0) {
-                return response()->json(['status' => false, 'message' => 'Stock insuficiente'], 422);
-            }
-
-            $p->update(['stock' => $newStock]);
-
-            $m = StockMovement::create([
-                'product_id' => $p->id,
-                'user_id' => Auth::id(),
-                'type' => $data['type'],
-                'quantity' => $data['quantity'],
-                'reason' => $data['reason'] ?? null,
-                'meta' => null,
-            ]);
-
-            return response()->json([
-                'status' => true,
-                'message' => 'Stock actualizado',
-                'product' => $p,
-                'movement' => $m
-            ]);
-        });
+        return response()->json(['status' => true, 'message' => 'Stock actualizado', 'movement' => $movement]);
     }
 }

@@ -24,6 +24,41 @@ class DelivererStockController extends Controller
     }
 
     /**
+     * Almacén del repartidor (tarea 3, punto 7): su stock vive en el sistema de almacenes, como el de
+     * las agencias. Si no tiene uno y $create, se le crea al asignarle stock por primera vez.
+     */
+    protected function delivererWarehouse(int $delivererId, bool $create = false): ?\App\Models\Warehouse
+    {
+        $warehouse = \App\Models\Warehouse::where('user_id', $delivererId)->first();
+        if ($warehouse || !$create) {
+            return $warehouse;
+        }
+        $deliverer = User::find($delivererId);
+        $typeId = \App\Models\WarehouseType::whereIn('code', ['repartidor', 'deliverer'])->orderByRaw("code = 'repartidor' desc")->value('id');
+        if (!$deliverer || $deliverer->role?->description !== 'Repartidor' || !$typeId) {
+            return null;
+        }
+
+        return \App\Models\Warehouse::create([
+            'warehouse_type_id' => $typeId,
+            'user_id' => $deliverer->id,
+            'code' => 'rep-' . $deliverer->id,
+            'name' => 'Repartidor: ' . $deliverer->names,
+            'is_active' => true,
+            'is_main' => false,
+        ]);
+    }
+
+    /** El inventario anterior (products.stock y stock_movements) ya no se usa. */
+    protected function legacyGone()
+    {
+        return response()->json([
+            'status' => false,
+            'message' => 'El stock de repartidores ahora se maneja desde su almacén (Inventario → Stock Repartidores).',
+        ], 410);
+    }
+
+    /**
      * Stock actual de un repartidor (para hoy, o por fecha).
      */
     public function show(Request $request, $delivererId)
@@ -66,39 +101,14 @@ class DelivererStockController extends Controller
             ]);
         }
 
-        // LEGACY LOGIC
-        $movs = StockMovement::where('deliverer_id', $delivererId)
-            ->whereDate('created_at', $date)
-            ->get()
-            ->groupBy('product_id');
-
-        $items = [];
-
-        foreach ($movs as $productId => $group) {
-            $assigned = $group->where('type', 'ASSIGN')->sum('quantity');
-            $returned = $group->where('type', 'RETURN')->sum('quantity');
-            $sold     = $group->where('type', 'SALE')->sum('quantity');
-
-            $qty = $assigned - $returned - $sold;
-
-            if ($qty > 0) {
-                $product = Product::find($productId);
-                if ($product) {
-                    $items[] = [
-                        'product_id' => $product->id,
-                        'name'       => $product->name,
-                        'sku'        => $product->sku,
-                        'quantity'   => $qty,
-                    ];
-                }
-            }
-        }
-
+        // Sin almacén todavía: no tiene stock asignado
         return response()->json([
             'status' => true,
             'data'   => [
                 'date'   => $date,
-                'items'  => $items,
+                'is_warehouse' => true,
+                'warehouse_id' => null,
+                'items'  => [],
             ]
         ]);
     }
@@ -110,8 +120,7 @@ class DelivererStockController extends Controller
     {
         $this->ensureManagerOrAdmin();
 
-        // Check if there's a warehouse linked
-        $warehouse = \App\Models\Warehouse::where('user_id', $delivererId)->first();
+        $warehouse = $this->delivererWarehouse((int) $delivererId, true);
         if ($warehouse) {
             $mainWarehouse = \App\Models\Warehouse::where('is_main', true)->first();
             if (!$mainWarehouse) {
@@ -167,36 +176,7 @@ class DelivererStockController extends Controller
             }
         }
 
-        // LEGACY ASSIGN LOGIC
-        $createdBy = Auth::id();
-
-        // Validar stock general suficiente
-        foreach ($request->items as $item) {
-            $available = $this->getWarehouseStock($item['product_id']);
-            if ($available < $item['quantity']) {
-                return response()->json([
-                    'status'  => false,
-                    'message' => "Stock insuficiente para el producto ID {$item['product_id']}",
-                ], 422);
-            }
-        }
-
-        // Crear movimientos ASSIGN
-        foreach ($request->items as $item) {
-            StockMovement::create([
-                'product_id'   => $item['product_id'],
-                'type'         => 'ASSIGN',
-                'quantity'     => $item['quantity'],
-                'deliverer_id' => $delivererId,
-                'order_id'     => null,
-                'created_by'   => $createdBy,
-            ]);
-        }
-
-        return response()->json([
-            'status'  => true,
-            'message' => 'Stock asignado al repartidor correctamente',
-        ]);
+        return response()->json(['status' => false, 'message' => 'Ese usuario no es un repartidor o no se le pudo crear su almacén.'], 422);
     }
 
     /**
@@ -277,25 +257,7 @@ class DelivererStockController extends Controller
             }
         }
 
-        // LEGACY RETURN LOGIC
-        $createdBy = Auth::id();
-
-        foreach ($request->items as $item) {
-            // Podrías validar que no devuelva más de lo que tiene, pero lo dejamos simple
-            StockMovement::create([
-                'product_id'   => $item['product_id'],
-                'type'         => 'RETURN',
-                'quantity'     => $item['quantity'],
-                'deliverer_id' => $delivererId,
-                'order_id'     => null,
-                'created_by'   => $createdBy,
-            ]);
-        }
-
-        return response()->json([
-            'status'  => true,
-            'message' => 'Devolución registrada correctamente',
-        ]);
+        return response()->json(['status' => false, 'message' => 'Este repartidor no tiene stock asignado.'], 422);
     }
 
     /**
@@ -428,152 +390,25 @@ class DelivererStockController extends Controller
 
 
 
+    // Jornada del repartidor con products.stock (inventario anterior): reemplazada por su almacén
     public function open(Request $request)
     {
-        // Repartidor abre SU jornada con items
-        if ($this->role() !== 'Repartidor') abort(403, 'Solo repartidores pueden abrir su jornada');
-
-        $request->validate([
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => 'required|integer|min:1',
-        ]);
-
-        $userId = Auth::id();
-        $today = now()->toDateString();
-
-        // evita duplicado
-        if (DelivererStock::where('deliverer_id', $userId)->where('date', $today)->exists()) {
-            return response()->json(['status' => false, 'message' => 'Ya tienes una jornada abierta hoy'], 422);
-        }
-
-        $stock = DB::transaction(function () use ($request, $userId, $today) {
-            $header = DelivererStock::create([
-                'date' => $today,
-                'deliverer_id' => $userId,
-                'status' => 'open',
-            ]);
-
-            foreach ($request->items as $it) {
-                $p = Product::lockForUpdate()->find($it['product_id']);
-                if (!$p) abort(422, 'Producto no encontrado');
-                if ($p->stock < $it['qty']) abort(422, "Stock insuficiente para {$p->title}");
-
-                // descuenta del inventario general
-                $p->decrement('stock', $it['qty']);
-
-                DelivererStockItem::create([
-                    'deliverer_stock_id' => $header->id,
-                    'product_id' => $p->id,
-                    'qty_assigned' => $it['qty'],
-                    'qty_delivered' => 0,
-                    'qty_returned' => 0,
-                ]);
-            }
-
-            return $header->load('items.product:id,title,sku,price,cost');
-        });
-
-        return response()->json(['status' => true, 'message' => 'Jornada abierta', 'data' => $stock]);
+        return $this->legacyGone();
     }
 
     public function addItems(Request $request)
     {
-        if ($this->role() !== 'Repartidor') abort(403, 'Solo repartidores');
-
-        $request->validate([
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => 'required|integer|min:1',
-        ]);
-
-        $userId = Auth::id();
-        $today = now()->toDateString();
-        $stock = DelivererStock::where('deliverer_id', $userId)->where('date', $today)->where('status', 'open')->first();
-        if (!$stock) return response()->json(['status' => false, 'message' => 'No tienes jornada abierta'], 422);
-
-        DB::transaction(function () use ($request, $stock) {
-            foreach ($request->items as $it) {
-                $p = Product::lockForUpdate()->find($it['product_id']);
-                if ($p->stock < $it['qty']) abort(422, "Stock insuficiente para {$p->title}");
-                $p->decrement('stock', $it['qty']);
-
-                $row = DelivererStockItem::firstOrCreate(
-                    ['deliverer_stock_id' => $stock->id, 'product_id' => $p->id],
-                    ['qty_assigned' => 0, 'qty_delivered' => 0, 'qty_returned' => 0]
-                );
-                $row->increment('qty_assigned', $it['qty']);
-            }
-        });
-
-        $stock->refresh()->load('items.product:id,title,sku,price,cost');
-
-        return response()->json(['status' => true, 'message' => 'Stock agregado', 'data' => $stock]);
+        return $this->legacyGone();
     }
 
     public function registerDeliver(Request $request)
     {
-        if ($this->role() !== 'Repartidor') abort(403, 'Solo repartidores');
-        $request->validate([
-            'product_id' => 'required|integer|exists:products,id',
-            'qty' => 'required|integer|min:1',
-        ]);
-
-        $userId = Auth::id();
-        $today = now()->toDateString();
-
-        $stock = DelivererStock::where('deliverer_id', $userId)->where('date', $today)->where('status', 'open')->first();
-        if (!$stock) return response()->json(['status' => false, 'message' => 'No tienes jornada abierta'], 422);
-
-        $item = DelivererStockItem::where('deliverer_stock_id', $stock->id)->where('product_id', $request->product_id)->first();
-        if (!$item) return response()->json(['status' => false, 'message' => 'Producto no está en tu stock'], 422);
-
-        $onHand = $item->qty_assigned - $item->qty_delivered - $item->qty_returned;
-        if ($request->qty > $onHand) return response()->json(['status' => false, 'message' => 'Cantidad supera disponible'], 422);
-
-        $item->increment('qty_delivered', $request->qty);
-        $item->refresh();
-
-        return response()->json(['status' => true, 'message' => 'Entrega registrada', 'data' => $item]);
+        return $this->legacyGone();
     }
 
     public function close(Request $request)
     {
-        if ($this->role() !== 'Repartidor') abort(403, 'Solo repartidores');
-
-        $request->validate([
-            'returns' => 'required|array|min:0',
-            'returns.*.product_id' => 'required|integer|exists:products,id',
-            'returns.*.qty' => 'required|integer|min:0',
-        ]);
-
-        $userId = Auth::id();
-        $today = now()->toDateString();
-
-        $stock = DelivererStock::with('items')->where('deliverer_id', $userId)->where('date', $today)->where('status', 'open')->first();
-        if (!$stock) return response()->json(['status' => false, 'message' => 'No tienes jornada abierta'], 422);
-
-        DB::transaction(function () use ($request, $stock) {
-            // aplicar devoluciones
-            foreach ($request->returns as $rtn) {
-                $item = $stock->items->firstWhere('product_id', $rtn['product_id']);
-                if (!$item) continue;
-                $onHand = $item->qty_assigned - $item->qty_delivered - $item->qty_returned;
-                $qty = min($rtn['qty'], max(0, $onHand)); // no permitir devolver más de lo disponible
-
-                if ($qty > 0) {
-                    $item->increment('qty_returned', $qty);
-                    // devolver al inventario general
-                    Product::where('id', $item->product_id)->lockForUpdate()->increment('stock', $qty);
-                }
-            }
-
-            $stock->update(['status' => 'closed']);
-        });
-
-        $stock->refresh()->load('items.product:id,title,sku,price,cost');
-
-        return response()->json(['status' => true, 'message' => 'Jornada cerrada', 'data' => $stock]);
+        return $this->legacyGone();
     }
 
     // Gerente/Admin: ver filtros

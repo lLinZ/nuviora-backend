@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
-use App\Models\OrderStatusLog;
+use App\Models\StatusChangeLog;
 use App\Models\OrderAssignmentLog;
 use App\Models\Status;
 use App\Models\User;
@@ -42,7 +42,7 @@ class BusinessMetricsController extends Controller
         $orderIds = $orders->pluck('id');
 
         // Historial de estados para los pedidos en el rango
-        $statusLogs = OrderStatusLog::whereIn('order_id', $orderIds)->get();
+        $statusLogs = StatusChangeLog::whereIn('order_id', $orderIds)->get();
 
         // 1. SECCIÓN A: FLUJO DE PEDIDOS NUEVOS
         $sectionA = $this->getSectionA($startDate, $endDate, $sellerId, $agencyId);
@@ -87,7 +87,7 @@ class BusinessMetricsController extends Controller
         ];
 
         // ✅ 1. Órdenes con cambios de status hoy
-    $orderIdsWithLogs = OrderStatusLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+    $orderIdsWithLogs = StatusChangeLog::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
         ->pluck('order_id');
 
     // ✅ 2. Órdenes que entren en el "Universo" del reporte:
@@ -142,7 +142,7 @@ class BusinessMetricsController extends Controller
                 $finalIds = collect([]);
             } else {
                 // Logs de hoy para este estado
-                $logsQuery = OrderStatusLog::where('to_status_id', $statusId)
+                $logsQuery = StatusChangeLog::where('to_status_id', $statusId)
                     ->whereBetween('updated_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
                 
                 if ($sellerId || $agencyId) {
@@ -298,21 +298,21 @@ class BusinessMetricsController extends Controller
             // No dependemos de si la orden fue asignada hoy, sino de si se entregó/canceló HOY.
             
             // Entregadas
-            $entregadasCount = OrderStatusLog::whereBetween('created_at', [$startDateFull, $endDateFull])
+            $entregadasCount = StatusChangeLog::whereBetween('created_at', [$startDateFull, $endDateFull])
                 ->where('to_status_id', $statusEntregadoId)
                 ->whereHas('order', fn($q) => $q->where('agent_id', $v->id))
                 ->distinct('order_id')
                 ->count('order_id');
                 
             // Canceladas
-            $canceladasCount = OrderStatusLog::whereBetween('created_at', [$startDateFull, $endDateFull])
+            $canceladasCount = StatusChangeLog::whereBetween('created_at', [$startDateFull, $endDateFull])
                 ->where('to_status_id', $statusCanceladoId)
                 ->whereHas('order', fn($q) => $q->where('agent_id', $v->id))
                 ->distinct('order_id')
                 ->count('order_id');
                 
             // Agencia
-            $agenciaCount = OrderStatusLog::whereBetween('created_at', [$startDateFull, $endDateFull])
+            $agenciaCount = StatusChangeLog::whereBetween('created_at', [$startDateFull, $endDateFull])
                 ->where('to_status_id', $statusAgenciaId)
                 ->whereHas('order', fn($q) => $q->where('agent_id', $v->id))
                 ->distinct('order_id')
@@ -362,7 +362,7 @@ class BusinessMetricsController extends Controller
         $metrics = $agencies->map(function($a) use ($startDate, $endDate, $statusAgenciaId, $statusRutaId, $statusEntregadoId, $statusCanceladoId) {
             // ✅ Obtener todas las órdenes que fueron asignadas a esta agencia en el rango de fechas
             // Buscamos cuando el estado cambió a "Asignar a agencia" y la orden tiene este agency_id
-            $assignedToAgencyLogs = OrderStatusLog::where('to_status_id', '=', $statusAgenciaId)
+            $assignedToAgencyLogs = StatusChangeLog::where('to_status_id', '=', $statusAgenciaId)
                 ->whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
                 ->get();
 
@@ -380,7 +380,7 @@ class BusinessMetricsController extends Controller
             if ($total === 0) return null;
 
             // Obtener los logs de estado de estas órdenes
-            $aStatusLogs = OrderStatusLog::whereIn('order_id', $agencyOrderIds)->get();
+            $aStatusLogs = StatusChangeLog::whereIn('order_id', $agencyOrderIds)->get();
  
             // ✅ Calcular órdenes en ruta
             $enRutaCount = $aOrders->filter(function($o) use ($statusRutaId, $aStatusLogs) {
