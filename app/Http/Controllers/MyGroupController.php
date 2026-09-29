@@ -95,6 +95,8 @@ class MyGroupController extends Controller
                 'rows' => $rows($result),
                 'totals' => $result['totals'],
                 'compare' => $compare,
+                // Para los gráficos (spec §17): evolución por día o semana y dónde están hoy las órdenes
+                'series' => $metrics->series($ids, $data['start_date'], $data['end_date']),
                 // Sus ganancias: como vendedora, por liderazgo y el total (spec §12.2 y §12.4)
                 'earnings' => $this->leaderId($group)
                     ? $commissions->forLeader($this->leaderId($group), $data['start_date'], $data['end_date'])

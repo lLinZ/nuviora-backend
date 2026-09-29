@@ -5,6 +5,7 @@ namespace App\Services\SalesGroups;
 use App\Constants\OrderStatus;
 use App\Models\Status;
 use App\Models\User;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -32,18 +33,7 @@ final class GroupMetrics
         [$delivered, $cancelled, $agency] = [$id(OrderStatus::ENTREGADO), $id(OrderStatus::CANCELADO), $id(OrderStatus::ASIGNAR_A_AGENCIA)];
         [$novelty, $resolved] = [$id(OrderStatus::NOVEDADES), $id(OrderStatus::NOVEDAD_SOLUCIONADA)];
 
-        $sellerIds = User::whereHas('role', fn ($q) => $q->where('description', 'Vendedor'))->pluck('id');
-        $firstAssignment = DB::table('order_tracking_comprehensive_logs as tl')
-            ->join('orders as o', 'o.id', '=', 'tl.order_id')
-            ->whereBetween('o.created_at', [$start . ' 00:00:00', $end . ' 23:59:59'])
-            ->whereIn('tl.seller_id', $sellerIds)
-            ->groupBy('tl.order_id')
-            ->selectRaw('MIN(tl.id) as first_log_id');
-
-        $orders = DB::table('order_tracking_comprehensive_logs as tl')
-            ->joinSub($firstAssignment, 'fa', 'fa.first_log_id', '=', 'tl.id')
-            ->join('orders as o', 'o.id', '=', 'tl.order_id')
-            ->whereIn('tl.seller_id', $userIds)
+        $orders = $this->cohort($userIds, $start, $end)
             ->groupBy('tl.seller_id')
             ->selectRaw('
                 tl.seller_id as user_id,
@@ -94,6 +84,119 @@ final class GroupMetrics
 
         return ['rows' => $rows, 'totals' => $totals];
     }
+
+    /**
+     * Las órdenes del período que cuentan para el grupo: creadas en esas fechas y cuya PRIMERA vendedora
+     * es del grupo (alias tl = ese primer registro, o = la orden).
+     *
+     * @param  int[]  $userIds
+     */
+    private function cohort(array $userIds, string $start, string $end): \Illuminate\Database\Query\Builder
+    {
+        $sellerIds = User::whereHas('role', fn ($q) => $q->where('description', 'Vendedor'))->pluck('id');
+        $firstAssignment = DB::table('order_tracking_comprehensive_logs as tl')
+            ->join('orders as o', 'o.id', '=', 'tl.order_id')
+            ->whereBetween('o.created_at', [$start . ' 00:00:00', $end . ' 23:59:59'])
+            ->whereIn('tl.seller_id', $sellerIds)
+            ->groupBy('tl.order_id')
+            ->selectRaw('MIN(tl.id) as first_log_id');
+
+        return DB::table('order_tracking_comprehensive_logs as tl')
+            ->joinSub($firstAssignment, 'fa', 'fa.first_log_id', '=', 'tl.id')
+            ->join('orders as o', 'o.id', '=', 'tl.order_id')
+            ->whereIn('tl.seller_id', $userIds);
+    }
+
+    /**
+     * Para los gráficos (spec §17), con las mismas reglas que period():
+     * - por día (o por semana, lunes a domingo, si el período pasa de 31 días): órdenes asignadas,
+     *   entregadas y efectividad de las que entraron ese día; y entregas hechas ese día (por la fecha
+     *   en que pasaron a Entregado, de pedidos de vendedoras del grupo);
+     * - dónde están hoy las órdenes del período, por etapa del embudo (spec §8.4).
+     *
+     * @param  int[]  $userIds
+     */
+    public function series(array $userIds, string $start, string $end): array
+    {
+        $delivered = (int) (Status::where('description', OrderStatus::ENTREGADO)->value('id') ?? 0);
+        $weekly = Carbon::parse($start)->diffInDays(Carbon::parse($end)) + 1 > 31;
+        $bucket = fn (string $date) => $weekly ? Carbon::parse($date)->startOfWeek(Carbon::MONDAY)->toDateString() : $date;
+
+        $points = [];
+        for ($day = Carbon::parse($start); $day->lte(Carbon::parse($end)); $day->addDay()) {
+            $key = $bucket($day->toDateString());
+            $points[$key] ??= ['date' => $key, 'assigned' => 0, 'delivered' => 0, 'deliveries' => 0];
+        }
+
+        $cohort = $this->cohort($userIds, $start, $end)
+            ->groupBy(DB::raw('DATE(o.created_at)'))
+            ->selectRaw('DATE(o.created_at) as d, COUNT(*) as assigned, SUM(CASE WHEN o.status_id = ? AND o.agent_id = tl.seller_id THEN 1 ELSE 0 END) as delivered', [$delivered])
+            ->get();
+        foreach ($cohort as $row) {
+            $key = $bucket((string) $row->d);
+            if (isset($points[$key])) {
+                $points[$key]['assigned'] += (int) $row->assigned;
+                $points[$key]['delivered'] += (int) $row->delivered;
+            }
+        }
+
+        $deliveries = DB::table('order_tracking_comprehensive_logs as l')
+            ->join('orders as o', 'o.id', '=', 'l.order_id')
+            ->where('l.to_status_id', $delivered)
+            ->whereIn('o.agent_id', $userIds)
+            ->whereBetween('l.created_at', [$start . ' 00:00:00', $end . ' 23:59:59'])
+            ->groupBy(DB::raw('DATE(l.created_at)'))
+            ->selectRaw('DATE(l.created_at) as d, COUNT(DISTINCT l.order_id) as c')
+            ->get();
+        foreach ($deliveries as $row) {
+            $key = $bucket((string) $row->d);
+            if (isset($points[$key])) {
+                $points[$key]['deliveries'] += (int) $row->c;
+            }
+        }
+
+        $byStatus = $this->cohort($userIds, $start, $end)
+            ->join('statuses as s', 's.id', '=', 'o.status_id')
+            ->groupBy('s.description')
+            ->selectRaw('s.description, COUNT(*) as c')
+            ->pluck('c', 'description');
+
+        $funnel = [];
+        $used = [];
+        foreach (self::FUNNEL as $label => $statuses) {
+            $count = 0;
+            foreach ($statuses as $status) {
+                $count += (int) ($byStatus[$status] ?? 0);
+                $used[] = $status;
+            }
+            $funnel[] = ['stage' => $label, 'count' => $count];
+        }
+        $others = $byStatus->except($used)->sum();
+        if ($others > 0) {
+            $funnel[] = ['stage' => 'Otros', 'count' => (int) $others];
+        }
+
+        return [
+            'granularity' => $weekly ? 'week' : 'day',
+            'points' => array_values(array_map(fn ($p) => $p + ['effectiveness' => self::pct($p['delivered'], $p['assigned'])], $points)),
+            'funnel' => $funnel,
+        ];
+    }
+
+    /** Etapas del embudo de la spec §8.4, en orden, con los estados que agrupa cada una. */
+    private const FUNNEL = [
+        'Asignadas' => [OrderStatus::ASIGNADO_VENDEDOR],
+        'Reprogramadas para hoy' => [OrderStatus::REPROGRAMADO_HOY],
+        'Llamado 1' => [OrderStatus::LLAMADO_1],
+        'Llamado 2' => [OrderStatus::LLAMADO_2],
+        'Llamado 3' => [OrderStatus::LLAMADO_3],
+        'Programadas' => [OrderStatus::PROGRAMADO_MAS_TARDE, OrderStatus::PROGRAMADO_OTRO_DIA, OrderStatus::ESPERANDO_UBICACION],
+        'En la agencia' => [OrderStatus::PENDIENTE_AGENCIA, OrderStatus::ASIGNAR_A_AGENCIA, OrderStatus::ASIGNAR_REPARTIDOR, OrderStatus::ASIGNADO_A_REPARTIDOR, OrderStatus::EN_RUTA],
+        'Novedades' => [OrderStatus::NOVEDADES],
+        'Novedades resueltas' => [OrderStatus::NOVEDAD_SOLUCIONADA],
+        'Entregadas' => [OrderStatus::ENTREGADO],
+        'Canceladas o rechazadas' => [OrderStatus::CANCELADO, OrderStatus::RECHAZADO],
+    ];
 
     /**
      * Métricas de cada agencia limitadas a los pedidos del grupo (spec §10): pedidos creados en el
