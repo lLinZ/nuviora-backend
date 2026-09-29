@@ -25,8 +25,9 @@ class SyncInventoryTotals extends Command
                 $join->on('iv.warehouse_id', '=', 'inventories.warehouse_id')->on('iv.product_id', '=', 'inventories.product_id');
             })
             ->groupBy('inventories.id', 'inventories.quantity', 'products.title', 'warehouses.name')
-            ->selectRaw('inventories.id, inventories.quantity, products.title, warehouses.name, COALESCE(SUM(iv.quantity), 0) AS assigned, COALESCE(SUM(CASE WHEN iv.quantity < 0 THEN 1 ELSE 0 END), 0) AS negatives')
-            ->havingRaw('assigned > inventories.quantity OR negatives > 0')
+            ->selectRaw('inventories.id, inventories.quantity, products.title, warehouses.name, COUNT(iv.id) AS rows_count, COALESCE(SUM(iv.quantity), 0) AS assigned, COALESCE(SUM(CASE WHEN iv.quantity < 0 THEN 1 ELSE 0 END), 0) AS negatives')
+            // Solo productos con stock por variante; un total en negativo sin variantes es cosa de inventory:audit
+            ->havingRaw('(rows_count > 0 AND assigned > inventories.quantity) OR negatives > 0')
             ->get();
 
         foreach ($rows as $row) {
