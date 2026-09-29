@@ -304,6 +304,28 @@ class OrderController extends Controller
             $statusRechazado = Status::where('description', '=', OrderStatus::RECHAZADO)->first();
             $statusNuevo = Status::where('description', '=', OrderStatus::NUEVO)->first();
 
+            // 🚚 Reparto entre las agencias de la ciudad (tareas 3c y 6): al pasar a "Asignar a agencia",
+            // si nadie eligió la agencia a mano, se elige por % y cupo entre las que tienen stock.
+            // Si todas las que tienen stock están llenas, la orden espera en "Pendiente de asignación a agencia".
+            // Sin ciudad, sin agencias configuradas o sin stock en ninguna, sigue como antes.
+            if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
+                && (int) $order->status_id !== (int) $statusAsignarAgencia->id && !$order->agency_locked) {
+                $router = app(\App\Services\Agencies\AgencyRouter::class);
+                [$agency, $reason, $info] = $router->pick($order);
+                if ($agency) {
+                    $router->place($order, $agency);
+                } elseif ($reason === 'todas_llenas') {
+                    $router->queue($order, $info['city']);
+                    event(new \App\Events\OrderUpdated($order));
+
+                    return response()->json([
+                        'status' => true,
+                        'message' => "Todas las agencias de {$info['city']} están llenas: la orden queda en \"" . OrderStatus::PENDIENTE_AGENCIA . '" y se asigna sola cuando alguna libere cupo.',
+                        'order' => $order->fresh(['status', 'client', 'agent', 'agency', 'deliverer']),
+                    ]);
+                }
+            }
+
             // 🛑 VALIDACIÓN DE STOCK ANTES DE PASAR A "Asignar a agencia", "Entregado" o "En ruta"
             if (($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id) ||
                 ($statusEntregado && (int) $statusEntregado->id === (int) $request->status_id) || 
@@ -1351,8 +1373,28 @@ class OrderController extends Controller
         // deben quedar sincronizados para que el chequeo de stock apunte al
         // almacén correcto. (Si el almacén no tiene usuario-agencia asociado,
         // se mantiene el comportamiento legacy: solo warehouse_id.)
+        // Cupo de la agencia (tarea 6): el Admin puede forzar una asignación sobre el máximo; los demás no.
+        $router = app(\App\Services\Agencies\AgencyRouter::class);
+        $canForce = in_array(Auth::user()->role?->description, ['Admin', 'Master'], true);
+        $forced = false;
+        if ($agencyUser && !$router->hasRoom($agencyUser, $order)) {
+            if (!$canForce) {
+                return response()->json(['status' => false, 'message' => "{$agencyUser->names} está en su máximo de órdenes activas ({$agencyUser->max_active_orders}). Elige otra agencia o pídele al administrador que la fuerce."], 422);
+            }
+            $forced = true;
+        }
+
         $order->agency_id    = $agencyUser?->id;
         $order->warehouse_id = $warehouse?->id;
+        $order->agency_locked = true; // elegida a mano: el reparto automático no la cambia
+        if ($forced) {
+            \App\Models\OrderActivityLog::create([
+                'order_id' => $order->id,
+                'user_id' => Auth::id(),
+                'action' => 'agency_routing',
+                'description' => "Asignación forzada a {$agencyUser->names}, que estaba en su máximo ({$agencyUser->max_active_orders} activas).",
+            ]);
+        }
 
         // ⏱️ TIMER: Iniciar cronómetro si no existe
         if (!$order->received_at) {
@@ -1755,6 +1797,7 @@ class OrderController extends Controller
             }
 
             $order->load('products');
+            app(\App\Services\Agencies\AgencyRouter::class)->provisional($order); // otra agencia de la ciudad con stock (tarea 3c)
             if ($order->getStockDetails()['has_warning']) {
                 $sinStock = Status::where('description', \App\Constants\OrderStatus::SIN_STOCK)->first();
                 if ($sinStock && $order->status_id !== $sinStock->id) {
@@ -2483,6 +2526,7 @@ class OrderController extends Controller
         // descontado, OrderStock lo devuelve al almacén de donde salió y lo descuenta del nuevo.
         if ($order->isDirty('agency_id')) {
             $order->warehouse_id = $order->agency_id ? Warehouse::where('user_id', $order->agency_id)->value('id') : null;
+            $order->agency_locked = (bool) $order->agency_id; // elegida a mano (tarea 3c)
         }
         $order->save();
 
@@ -2722,6 +2766,7 @@ class OrderController extends Controller
             'province_id' => $order->province_id,
             'agency_id' => $agencyId,
             'warehouse_id' => $agencyId ? Warehouse::where('user_id', $agencyId)->value('id') : null,
+            'agency_locked' => (bool) $agencyId, // la del cambio no la cambia el reparto
             'shop_id' => $order->shop_id,
             'location' => $order->location, // Copy delivery address/location link
             'is_return' => false,

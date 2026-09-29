@@ -28,6 +28,8 @@ try {
     Schedule::command('orders:assign-waiting')->everyMinute()->withoutOverlapping();
     // Alerta de saturación de las vendedoras respecto de su grupo (spec de la Líder §9)
     Schedule::command('groups:check-saturation')->everyMinute()->withoutOverlapping();
+    // Órdenes que esperan agencia porque todas las de su ciudad estaban llenas (tarea 6)
+    Schedule::command('orders:assign-agencies')->everyMinute()->withoutOverlapping();
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

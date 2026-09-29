@@ -17,6 +17,7 @@ class Order extends Model
     protected $casts = [
         'change_payment_details' => 'array',
         'scheduled_for'          => 'datetime',
+        'agency_locked'          => 'boolean',
     ];
 
     // Relationship methods follow...
@@ -146,6 +147,7 @@ class Order extends Model
         'city_id',
         'province_id',
         'agency_id',
+        'agency_locked', // la agencia se eligió a mano: el reparto automático no la cambia
         'delivery_cost',
         'cash_received',
         'change_amount',
@@ -457,6 +459,14 @@ class Order extends Model
         // hasStock() incluye la validación de isStockDeducted() para no quitarle
         // el estatus a las órdenes que ya hicieron su reserva de bodega.
         if (!$this->hasStock()) {
+            // Varias agencias por ciudad (tarea 3c): si otra de la ciudad tiene stock, la orden pasa a esa
+            try {
+                if (app(\App\Services\Agencies\AgencyRouter::class)->provisional($this)) {
+                    return false;
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
             $sinStockStatus = Status::where('description', '=', 'Sin Stock')->first();
             if ($sinStockStatus && $this->status_id !== $sinStockStatus->id) {
                 $oldStatusId = $this->status_id; // 💾 Guardar status anterior

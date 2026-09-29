@@ -379,6 +379,10 @@ class InventoryService
             // Utilizamos hasStock() que internamente ya sabe si la orden
             // tiene su stock reservado y descontado previamente.
             if (!$order->hasStock()) {
+                // Varias agencias por ciudad (tarea 3c): si otra de la ciudad tiene stock, la orden pasa a esa
+                if (app(\App\Services\Agencies\AgencyRouter::class)->provisional($order)) {
+                    continue;
+                }
                 $oldStatusId = $order->status_id; // 💾 Guardar status anterior
 
                 $order->previous_status_id = $oldStatusId; // 💾 Persistir para restaurar después

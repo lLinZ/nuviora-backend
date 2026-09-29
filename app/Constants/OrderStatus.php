@@ -29,6 +29,8 @@ class OrderStatus
     public const CAMBIO_UBICACION            = 'Cambio de ubicacion';
     public const POR_APROBAR_UBICACION       = 'Por aprobar cambio de ubicacion';
     public const POR_APROBAR_RECHAZO         = 'Por aprobar rechazo';
+    /** Todas las agencias de la ciudad están llenas: espera a que alguna libere cupo (Fran §19). */
+    public const PENDIENTE_AGENCIA           = 'Pendiente de asignación a agencia';
 
     /**
      * Terminating statuses where the order is considered "finished" or "stopped".

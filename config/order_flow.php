@@ -14,7 +14,7 @@ return [
     'Vendedor' => [
         'visible_columns' => [
             'Reprogramado para hoy', 'Asignado a vendedor', 'Sin Stock', 'Llamado 1', 'Llamado 2', 'Llamado 3',
-            'Esperando Ubicacion', 'Asignar a agencia', 'Programado para mas tarde',
+            'Esperando Ubicacion', 'Pendiente de asignación a agencia', 'Asignar a agencia', 'Programado para mas tarde',
             'Programado para otro dia', 'Novedades', 'Novedad Solucionada',
             'Cancelado', 'Entregado'
         ],
@@ -33,6 +33,8 @@ return [
             'Esperando Ubicacion'       => ['Programado para mas tarde', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Programado para mas tarde' => ['Llamado 1', 'Esperando Ubicacion', 'Programado para otro dia', 'Asignar a agencia', 'Cancelado'],
             'Programado para otro dia'  => ['Llamado 1', 'Esperando Ubicacion', 'Programado para mas tarde', 'Asignar a agencia', 'Cancelado'],
+            // Todas las agencias de la ciudad llenas: se asigna sola al liberarse cupo (tarea 6)
+            'Pendiente de asignación a agencia' => ['Asignar a agencia', 'Programado para otro dia', 'Cancelado'],
             'Asignar a agencia'         => [], // 🔒 BLOQUEADO
             'Entregado'                 => [], // 🔒 BLOQUEADO
         ]

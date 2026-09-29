@@ -490,6 +490,13 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::apiResource('cities', CityController::class)->only(['index', 'show']);
     Route::apiResource('cities', CityController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');
 
+    // Varias agencias por ciudad, su % y su máximo, y la reasignación en bloque (tareas 3c, 6 y 8)
+    Route::get('agency-routing', [\App\Http\Controllers\AgencyRoutingController::class, 'index'])->middleware('role:Admin,Gerente,Master');
+    Route::put('agency-routing/agencies/{agency}', [\App\Http\Controllers\AgencyRoutingController::class, 'updateAgency'])->middleware('role:Admin,Master');
+    Route::put('agency-routing/cities/{city}', [\App\Http\Controllers\AgencyRoutingController::class, 'updateCity'])->middleware('role:Admin,Master');
+    Route::get('agency-routing/agencies/{agency}/reassign', [\App\Http\Controllers\AgencyRoutingController::class, 'reassignPreview'])->middleware('role:Admin,Gerente,Master');
+    Route::post('agency-routing/agencies/{agency}/reassign', [\App\Http\Controllers\AgencyRoutingController::class, 'reassign'])->middleware('role:Admin,Gerente,Master');
+
     /**---------------------
      * PROVINCES
      * ---------------------**/

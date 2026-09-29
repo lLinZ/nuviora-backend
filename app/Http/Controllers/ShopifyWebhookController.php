@@ -344,6 +344,12 @@ class ShopifyWebhookController extends Controller
         // (Sin stock NO se envía el webhook de "Nuevo": regla de Fran, para que n8n no reciba
         // "Nuevo" y "Sin Stock" casi a la vez.)
         $order->load('products'); // Asegurar que los productos recién guardados estén cargados
+        // Varias agencias por ciudad (tarea 3c): si la de la ciudad no tiene stock y otra sí, la orden pasa a esa
+        try {
+            app(\App\Services\Agencies\AgencyRouter::class)->provisional($order);
+        } catch (\Throwable $e) {
+            report($e);
+        }
         $stockCheck = $order->getStockDetails();
 
         if ($stockCheck['has_warning']) {
