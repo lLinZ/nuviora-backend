@@ -1774,10 +1774,16 @@ class OrderController extends Controller
         $newSubtotal = $newQuantity * $newPrice;
         $diff = $newSubtotal - $oldSubtotal;
 
+        // Cambiar solo la talla no toca cantidad, precio ni total: el total de Shopify puede traer
+        // cargos que no están en las líneas, y recalcularlo los borraba (hallazgo H1 de la guía)
+        $onlyVariant = $oldQuantity == $newQuantity && $oldPrice == $newPrice;
+
         // Update item
         $oldVariantTitle = $item->variant_id ? $item->size : null;
-        $item->quantity = $newQuantity;
-        $item->price = round($newPrice);
+        if (!$onlyVariant) {
+            $item->quantity = $newQuantity;
+            $item->price = round($newPrice);
+        }
         if ($newVariant) {
             // La variante cambia el nombre de la talla; si la orden ya tenía el stock fuera, OrderStock
             // devuelve la talla vieja y saca la nueva (OrderProductObserver)
@@ -1787,7 +1793,7 @@ class OrderController extends Controller
         $item->save();
 
         // Update order total
-        if (!($order->is_return || $order->is_exchange)) {
+        if (!$onlyVariant && !($order->is_return || $order->is_exchange)) {
             // 🔥 FIX: Recalcular TOTAL desde cero sumando todos los items
             // Esto corrige errores de cálculo incremental si el precio base cambia
             $newTotal = \App\Models\OrderProduct::where('order_id', $order->id)
