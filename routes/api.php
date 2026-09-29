@@ -300,6 +300,11 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/inventory/products', [ProductController::class, 'index']);
     Route::post('/inventory/products', [ProductController::class, 'store']);
     Route::put('/inventory/products/{id}', [ProductController::class, 'update']);
+    // Variantes (tallas, colores) de cada producto (tarea 4)
+    Route::get('/products/{product}/variants', [\App\Http\Controllers\ProductVariantController::class, 'index']);
+    Route::post('/products/{product}/variants', [\App\Http\Controllers\ProductVariantController::class, 'store'])->middleware('role:Admin,Gerente,Master');
+    Route::put('/product-variants/{variant}', [\App\Http\Controllers\ProductVariantController::class, 'update'])->middleware('role:Admin,Gerente,Master');
+    Route::delete('/product-variants/{variant}', [\App\Http\Controllers\ProductVariantController::class, 'destroy'])->middleware('role:Admin,Gerente,Master');
 
     // Movimientos de stock
     Route::get('/stock/movements', [StockMovementController::class, 'index']); // opcional: filtro por fechas/sku

@@ -20,7 +20,10 @@ class InventoryController extends Controller
             ], 403);
         }
 
-        $query = \App\Models\Inventory::with(['product', 'warehouse']);
+        $query = \App\Models\Inventory::with(['product.variants', 'warehouse']);
+        // Tarea 4: stock por variante (talla, color) de cada fila, y lo que quedó sin variante
+        $variantStock = app(\App\Services\Inventory\VariantStock::class);
+        $breakdown = $variantStock->breakdown();
 
         if ($role === 'Agencia') {
             $query->whereHas('warehouse', function ($q) {
@@ -37,8 +40,8 @@ class InventoryController extends Controller
         $rawInventory = $query->get();
 
         if ($request->has('overview') && $request->overview === 'true') {
-            $allProducts = \App\Models\Product::all();
-            
+            $allProducts = \App\Models\Product::with('variants')->get();
+
             $flattened = [];
             $processedProductIds = [];
 
@@ -51,10 +54,9 @@ class InventoryController extends Controller
                     'product'      => $inv->product,
                     'warehouse_id' => $inv->warehouse_id,
                     'warehouse'    => $inv->warehouse ? $inv->warehouse->toArray() : null,
-                    'quantity'     => !empty($inv->sizes_stock) ? array_sum($inv->sizes_stock) : $inv->quantity,
-                    'sizes_stock'  => $inv->sizes_stock ?? [],
-                    'available_sizes' => $inv->product?->available_sizes ?? []
-                ];
+                    'quantity'     => (int) $inv->quantity,
+                    'defective_stock' => (int) $inv->defective_stock,
+                ] + $variantStock->present((int) $inv->quantity, $inv->product->variants, $breakdown->get("{$inv->warehouse_id}|{$inv->product_id}"));
                 $processedProductIds[] = $inv->product_id;
             }
 
@@ -71,9 +73,8 @@ class InventoryController extends Controller
                             'code' => 'N/A'
                         ],
                         'quantity'     => 0,
-                        'sizes_stock'  => [],
-                        'available_sizes' => $p->available_sizes ?? []
-                    ];
+                        'defective_stock' => 0,
+                    ] + $variantStock->present(0, $p->variants, null);
                 }
             }
 
@@ -83,8 +84,8 @@ class InventoryController extends Controller
             ]);
         }
 
-        $rawInventory = \App\Models\Inventory::with(['product', 'warehouse'])->get();
-        $allProducts = Product::all();
+        $rawInventory = \App\Models\Inventory::with(['product.variants', 'warehouse'])->get();
+        $allProducts = Product::with('variants')->get();
         $processedProductIds = [];
         $mappedInventory = [];
 
@@ -98,10 +99,8 @@ class InventoryController extends Controller
                 'name'            => $inv->product?->name ?? 'Sin nombre',
                 'sku'             => $inv->product?->sku ?? 'S/SKU',
                 'stock_available' => $inv->quantity,
-                'sizes_stock'     => $inv->sizes_stock ?? [],
-                'available_sizes' => $inv->product?->available_sizes ?? [],
                 'warehouse_name'  => $inv->warehouse?->name ?? 'N/A',
-            ];
+            ] + $variantStock->present((int) $inv->quantity, $inv->product?->variants ?? collect(), $breakdown->get("{$inv->warehouse_id}|{$inv->product_id}"));
             $processedProductIds[] = $inv->product_id;
         }
 
@@ -116,10 +115,8 @@ class InventoryController extends Controller
                     'name'            => $p->title ?? $p->name ?? 'Sin nombre',
                     'sku'             => $p->sku ?? 'S/SKU',
                     'stock_available' => 0,
-                    'sizes_stock'     => [],
-                    'available_sizes' => $p->available_sizes ?? [],
                     'warehouse_name'  => 'Sin Stock',
-                ];
+                ] + $variantStock->present(0, $p->variants, null);
             }
         }
 

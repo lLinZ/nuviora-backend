@@ -24,7 +24,7 @@ class OrderProductObserver
 
     public function updated(OrderProduct $orderProduct): void
     {
-        if ($orderProduct->wasChanged(['quantity', 'product_id', 'size'])) {
+        if ($orderProduct->wasChanged(['quantity', 'product_id', 'variant_id', 'size'])) {
             $this->syncStock($orderProduct);
         }
     }

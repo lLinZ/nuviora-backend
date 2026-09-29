@@ -4,35 +4,36 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class Inventory extends Model
+/**
+ * Stock de una variante en un almacén (tarea 4). inventories.quantity sigue siendo el total del producto
+ * en ese almacén e incluye esto; la diferencia es stock "sin variante" (cargado sin decir la talla).
+ */
+class InventoryVariant extends Model
 {
     protected $fillable = [
         'warehouse_id',
         'product_id',
+        'variant_id',
         'quantity',
-        'reserved_stock',
         'defective_stock',
-        'blocked_stock',
-        'sizes_stock', // ya no se escribe: el stock por talla está en inventory_variants (tarea 4)
     ];
 
     protected $casts = [
-        'quantity'        => 'integer',
-        'reserved_stock'  => 'integer',
+        'quantity' => 'integer',
         'defective_stock' => 'integer',
-        'blocked_stock'   => 'integer',
-        'sizes_stock'     => 'array',
     ];
 
     protected $appends = ['useful_stock'];
 
-    /**
-     * Stock Útil = Físico - Reservado - Defectuoso - Bloqueado
-     * Regla de Oro #1 del plan SCM
-     */
+    /** Lo que se puede vender de esta variante: sin las piezas defectuosas. */
     public function getUsefulStockAttribute(): int
     {
-        return max(0, $this->quantity - $this->reserved_stock - $this->defective_stock - $this->blocked_stock);
+        return max(0, $this->quantity - $this->defective_stock);
+    }
+
+    public function variant()
+    {
+        return $this->belongsTo(ProductVariant::class, 'variant_id');
     }
 
     public function warehouse()

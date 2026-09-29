@@ -169,7 +169,8 @@ class InventoryMovementController extends Controller
                 $request->to_warehouse_id,
                 $request->quantity,
                 auth()->id(),
-                $request->notes
+                $request->notes,
+                $this->variantsFrom($request)
             );
 
             return response()->json([
@@ -220,7 +221,7 @@ class InventoryMovementController extends Controller
                 $request->notes,
                 $request->reference_type,
                 $request->reference_id,
-                $request->sizes
+                $this->variantsFrom($request)
             );
 
             return response()->json([
@@ -271,7 +272,7 @@ class InventoryMovementController extends Controller
                 $request->notes,
                 $request->reference_type,
                 $request->reference_id,
-                $request->sizes
+                $this->variantsFrom($request)
             );
 
             return response()->json([
@@ -318,7 +319,7 @@ class InventoryMovementController extends Controller
                 $request->new_quantity,
                 auth()->id(),
                 $request->notes,
-                $request->sizes
+                $this->variantsFrom($request)
             );
 
             return response()->json([
@@ -332,6 +333,12 @@ class InventoryMovementController extends Controller
                 'message' => $e->getMessage(),
             ], 400);
         }
+    }
+
+    /** Desglose por variante (tarea 4): `variants` ({variant_id: cantidad}) o el viejo `sizes` (por nombre de talla). */
+    private function variantsFrom(Request $request)
+    {
+        return $request->input('variants') ?: $request->input('sizes');
     }
 
     /**

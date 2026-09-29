@@ -189,6 +189,7 @@ class ShopifyWebhookController extends Controller
         }
 
         // 3️⃣ Procesar productos de la orden
+        $variantCatalog = app(\App\Services\Inventory\VariantCatalog::class);
         foreach ($orderData['line_items'] as $item) {
             // Saltar items sin product_id (ej: productos personalizados, descuentos)
             if (empty($item['product_id'])) {
@@ -220,44 +221,50 @@ class ShopifyWebhookController extends Controller
 
             // Buscar producto usando el nombre completo
             $baseName = trim($item['name'] ?? $item['title']);
-            
-            // 🔥 Extraer la talla si el formulario la manda como propiedad personalizada o atributo adicional
-            $talla = null;
-            // 1. Buscar en propiedades del producto (line item properties)
+
+            // 🔥 Talla que manda el formulario: como propiedad de la línea o, para toda la orden, en la nota
             $properties = collect($item['properties'] ?? []);
-            $talla = $properties->firstWhere('name', 'Talla')['value'] 
-                  ?? $properties->firstWhere('name', 'talla')['value'] 
+            $talla = $properties->firstWhere('name', 'Talla')['value']
+                  ?? $properties->firstWhere('name', 'talla')['value']
                   ?? null;
-                  
-            // 2. Si no está en el producto, buscar en los atributos de la orden (note_attributes)
+            $noteTalla = null;
             if (!$talla) {
                 $noteAttributes = collect($orderData['note_attributes'] ?? []);
-                $talla = $noteAttributes->firstWhere('name', 'Talla')['value'] 
-                      ?? $noteAttributes->firstWhere('name', 'talla')['value'] 
+                $noteTalla = $noteAttributes->firstWhere('name', 'Talla')['value']
+                      ?? $noteAttributes->firstWhere('name', 'talla')['value']
                       ?? null;
             }
 
-            // Si encontró una talla personalizada y aún no está en el nombre del producto, se la pegamos
+            // 🔥 NATIVO SHOPIFY: Extraer la variante oficial de Shopify (si existe y no es el default)
+            $variantTitle = isset($item['variant_title']) && $item['variant_title'] !== '' && stripos($item['variant_title'], 'Default') === false
+                ? trim($item['variant_title'])
+                : null;
+            $shopifyVariantId = !empty($item['variant_id']) ? (int) $item['variant_id'] : null;
+
+            // 1. Tarea 4: si la variante de Shopify ya está en el catálogo, su producto. Si no, el producto
+            //    por su TÍTULO BASE, como siempre (para no dañar el inventario de Fran).
+            $productTitle = trim($item['title']);
+            $knownVariant = $variantTitle ? $variantCatalog->byShopifyId($shopifyVariantId) : null;
+            $existingProduct = $knownVariant?->product
+                ?? \App\Models\Product::whereRaw('LOWER(title) = ?', [strtolower($productTitle)])->first();
+
+            // La talla de la nota es de toda la orden: solo se aplica si la orden tiene un solo producto o si
+            // este ya maneja variantes (antes se le ponía a todos, y un producto sin tallas terminaba con una)
+            if (!$talla && $noteTalla) {
+                $productLines = collect($orderData['line_items'])->filter(fn ($i) => !empty($i['product_id']))->count();
+                if ($productLines === 1 || ($existingProduct && $existingProduct->variants()->exists())) {
+                    $talla = $noteTalla;
+                }
+            }
+
+            // Nombre para la vendedora: el producto con su talla o variante
             $productName = $baseName;
             if ($talla && stripos($productName, $talla) === false) {
                 $productName .= " - " . $talla;
             }
-            
-            // 🔥 NATIVO SHOPIFY: Extraer la variante oficial de Shopify (si existe y no es el default)
-            $variantTitle = isset($item['variant_title']) && $item['variant_title'] !== '' && stripos($item['variant_title'], 'Default') === false 
-                ? trim($item['variant_title']) 
-                : null;
-                
-            // Si encontró una variante oficial y no está en el nombre, se la pegamos
             if ($variantTitle && stripos($productName, $variantTitle) === false) {
                 $productName .= " - " . $variantTitle;
             }
-
-            $productTitle = trim($item['title']);
-            
-            // 1. SIEMPRE buscar el producto original por su TITULO BASE (Para no dañar el inventario de Fran)
-            $productTitle = trim($item['title']);
-            $existingProduct = \App\Models\Product::whereRaw('LOWER(title) = ?', [strtolower($productTitle)])->first();
 
             // Precio seguro: solo redondear si viene un valor positivo del webhook
             $safePrice = (isset($item['price']) && $item['price'] > 0) ? round($item['price']) : null;
@@ -270,21 +277,12 @@ class ShopifyWebhookController extends Controller
                 $updateData = [
                     'product_id' => $item['product_id'],
                     'variant_id' => $item['variant_id'] ?? null,
-                    'title'      => $productTitle,
+                    'title'      => $existingProduct->title ?: $productTitle,
                     'name'       => $item['name'] ?? null,
-                    'sku'        => $item['sku'] ?? null,
                 ];
-                
-                // Actualizar available_sizes si hay una talla nueva
-                if ($finalSize) {
-                    $sizes = is_string($existingProduct->available_sizes) 
-                        ? json_decode($existingProduct->available_sizes, true) 
-                        : ($existingProduct->available_sizes ?? []);
-                    if (!is_array($sizes)) $sizes = [];
-                    if (!in_array($finalSize, $sizes)) {
-                        $sizes[] = $finalSize;
-                        $updateData['available_sizes'] = $sizes;
-                    }
+                // El SKU de una variante real es de la variante, no del producto; y uno vacío no borra el que hay
+                if (!$variantTitle && !empty($item['sku'])) {
+                    $updateData['sku'] = $item['sku'];
                 }
 
                 // Solo actualizar precio si viene un valor válido (evita sobreescribir con 0)
@@ -305,18 +303,25 @@ class ShopifyWebhookController extends Controller
                     'title'           => $productTitle,
                     'name'            => $item['name'] ?? null,
                     'price'           => $safePrice ?? 0,
-                    'sku'             => $item['sku'] ?? null,
+                    'sku'             => $variantTitle ? null : ($item['sku'] ?? null),
                     'image'           => $imageUrl,
-                    'available_sizes' => $finalSize ? [$finalSize] : null,
                 ]);
             }
 
-            // Relación en OrderProducts (evita duplicados)
+            // 2. La variante del catálogo: por su id de Shopify o por su nombre ("S/M" = "s / m"). Si es nueva, se
+            //    agrega. Sin variante (producto sin tallas), la línea descuenta del total como siempre.
+            $variant = $finalSize
+                ? $variantCatalog->resolve($product->id, $finalSize, $variantTitle ? $shopifyVariantId : null, $variantTitle ? ($item['sku'] ?? null) : null)
+                : null;
+
+            // Relación en OrderProducts (evita duplicados). Una línea por producto Y variante: antes, dos tallas
+            // del mismo producto en una orden quedaban en una sola línea con la cantidad de la última.
             $orderProductPrice = $safePrice ?? ($existingProduct ? $existingProduct->price : 0);
             OrderProduct::updateOrCreate(
                 [
                     'order_id'   => $order->id,
                     'product_id' => $product->id,
+                    'variant_id' => $variant?->id,
                 ],
                 [
                     'product_number' => $product->product_id,
@@ -326,7 +331,7 @@ class ShopifyWebhookController extends Controller
                     'quantity'       => $item['quantity'],
                     'image'          => $imageUrl ?? $product->image, // Preservar imagen existente si no se obtuvo nueva
                     'showable_name'  => $productName, // 🔥 Guardamos la talla solo a nivel de orden para que la vendedora la vea, sin afectar el inventario maestro
-                    'size'           => $finalSize,   // Guardamos la talla exacta para el descuento de inventario
+                    'size'           => $variant?->title,   // El nombre de la variante, para leerlo
                 ]
             );
         }
@@ -360,15 +365,10 @@ class ShopifyWebhookController extends Controller
                 $order->save();
             }
 
-            // Construir lista de productos sin stock para el mensaje
-            $outOfStockItems = collect($stockCheck['items'])
-                ->filter(fn($item) => !$item['has_stock'])
-                ->keys()
-                ->toArray();
-
+            // Construir lista de productos sin stock para el mensaje (con la talla que falta, tarea 4)
             $productNames = $order->products
-                ->whereIn('product_id', $outOfStockItems)
-                ->pluck('title')
+                ->filter(fn ($op) => !($stockCheck['lines'][$op->id]['has_stock'] ?? true))
+                ->map(fn ($op) => $op->title . ($op->size ? " ({$op->size})" : ''))
                 ->join(', ');
 
             $alertMessage = "🚨 Orden #{$order->name} recibida SIN STOCK. Productos sin existencias: {$productNames}. La orden está en espera de suministro.";

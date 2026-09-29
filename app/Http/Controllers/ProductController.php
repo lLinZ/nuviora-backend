@@ -15,7 +15,8 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Product::query();
+        // Con sus variantes (tarea 4): al agregar un producto a una orden se elige la talla
+        $query = Product::query()->with('variants');
 
         if (Auth::check() && (Auth::user()->can_handle_no_stock || in_array(Auth::user()->role?->description, ['Admin', 'Gerente']))) {
             $query->with(['inventories' => function($q) {
@@ -54,7 +55,7 @@ class ProductController extends Controller
 
     public function show($id)
     {
-        $product = Product::with('gallery')->findOrFail($id);
+        $product = Product::with(['gallery', 'variants'])->findOrFail($id);
         return response()->json([
             'status'  => true,
             'product' => $product

@@ -5,7 +5,6 @@ namespace App\Services\Agencies;
 use App\Constants\OrderStatus;
 use App\Models\AssignmentPool;
 use App\Models\City;
-use App\Models\Inventory;
 use App\Models\Order;
 use App\Models\OrderActivityLog;
 use App\Models\OrderUpdate;
@@ -14,6 +13,7 @@ use App\Models\User;
 use App\Models\Warehouse;
 use App\Notifications\OrderAssignedNotification;
 use App\Services\Assignment\Weighted\SmoothWeightedRoundRobin;
+use App\Services\Inventory\StockCheck;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -192,14 +192,8 @@ class AgencyRouter
         if (!$warehouseId) {
             return false;
         }
-        $needed = $order->products()->get(['product_id', 'quantity'])
-            ->groupBy('product_id')->map(fn ($lines) => (int) $lines->sum('quantity'));
-        if ($needed->isEmpty()) {
-            return true;
-        }
-        $stock = Inventory::where('warehouse_id', $warehouseId)->whereIn('product_id', $needed->keys())->get()->keyBy('product_id');
-
-        return $needed->every(fn ($qty, $productId) => ($stock->get($productId)?->useful_stock ?? 0) >= $qty);
+        // Por producto y por variante: una talla que la agencia no tiene no pasa (tarea 4)
+        return app(StockCheck::class)->at($order, $warehouseId)['ok'];
     }
 
     /**

@@ -3,46 +3,36 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use App\Models\Inventory;
+use Illuminate\Support\Facades\DB;
 
 /**
- * Compara el total de cada inventario con la suma de sus tallas. Por defecto solo informa: forzar el
- * total a la suma de tallas borraba ventas sin talla y traslados (tarea 3, punto 5). Con --apply lo
- * sigue haciendo, para quien lo necesite a propósito.
+ * Revisa el stock por variante contra el total de cada inventario (tarea 4). Solo informa:
+ *  - lo repartido por variante no puede superar el total (el resto es stock "sin variante");
+ *  - una variante en negativo vendió más de lo que tenía cargado.
+ * Antes comparaba el total con el JSON de tallas y con --apply lo pisaba; ese JSON ya no se usa.
  */
 class SyncInventoryTotals extends Command
 {
-    protected $signature = 'inventory:sync-totals {--apply : Poner el total igual a la suma de tallas}';
-    protected $description = 'Informa (o con --apply corrige) inventarios cuyo total no coincide con la suma de sus tallas';
+    protected $signature = 'inventory:sync-totals';
+    protected $description = 'Informa inventarios cuyo stock por variante no cuadra con el total (solo lectura)';
 
     public function handle()
     {
-        $inventories = Inventory::all();
-        $this->info("Revisando {$inventories->count()} inventarios...");
-        $mismatches = 0;
+        $rows = DB::table('inventories')
+            ->join('products', 'products.id', '=', 'inventories.product_id')
+            ->join('warehouses', 'warehouses.id', '=', 'inventories.warehouse_id')
+            ->leftJoin('inventory_variants as iv', function ($join) {
+                $join->on('iv.warehouse_id', '=', 'inventories.warehouse_id')->on('iv.product_id', '=', 'inventories.product_id');
+            })
+            ->groupBy('inventories.id', 'inventories.quantity', 'products.title', 'warehouses.name')
+            ->selectRaw('inventories.id, inventories.quantity, products.title, warehouses.name, COALESCE(SUM(iv.quantity), 0) AS assigned, COALESCE(SUM(CASE WHEN iv.quantity < 0 THEN 1 ELSE 0 END), 0) AS negatives')
+            ->havingRaw('assigned > inventories.quantity OR negatives > 0')
+            ->get();
 
-        foreach ($inventories as $inv) {
-            if (empty($inv->sizes_stock) || !is_array($inv->sizes_stock)) {
-                continue;
-            }
-
-            $totalFromSizes = array_sum($inv->sizes_stock);
-            $expected = $totalFromSizes + (int) $inv->defective_stock;
-
-            if ((int) $inv->quantity !== $totalFromSizes && (int) $inv->quantity !== $expected) {
-                $mismatches++;
-                $this->warn("ID {$inv->id} (producto {$inv->product_id}, almacén {$inv->warehouse_id}): total {$inv->quantity} | suma de tallas {$totalFromSizes}");
-                if ($this->option('apply')) {
-                    $inv->quantity = $totalFromSizes;
-                    $inv->save();
-                    $this->info('Corregido.');
-                }
-            }
+        foreach ($rows as $row) {
+            $this->warn("{$row->name} · {$row->title}: total {$row->quantity}, repartido por variante {$row->assigned}"
+                . ($row->negatives ? ", {$row->negatives} variante(s) en negativo" : ''));
         }
-
-        $this->info($mismatches ? "{$mismatches} con diferencias." : 'Sin diferencias.');
-        if ($mismatches && !$this->option('apply')) {
-            $this->line('No se cambió nada. Para forzar el total a la suma de tallas: --apply');
-        }
+        $this->info($rows->isEmpty() ? 'El stock por variante cuadra con los totales.' : "{$rows->count()} inventarios para revisar en el conteo.");
     }
 }

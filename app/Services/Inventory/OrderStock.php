@@ -8,6 +8,7 @@ use App\Models\InventoryMovement;
 use App\Models\Order;
 use App\Models\OrderActivityLog;
 use App\Models\Product;
+use App\Models\ProductVariant;
 use App\Models\Status;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -16,10 +17,11 @@ use Illuminate\Support\Facades\DB;
 /**
  * Stock de una orden (tarea 3a). Una sola regla para descontar y devolver:
  *  - Lo que la orden tiene fuera se lee de sus propios movimientos (reference Order), por almacén,
- *    producto y talla. Al devolver, vuelve exactamente eso y al almacén de donde salió.
+ *    producto y variante. Al devolver, vuelve exactamente eso y al almacén de donde salió.
  *  - sync() compara eso con lo que debería tener fuera según su estado, su agencia y sus productos, y
- *    registra solo la diferencia. Sirve igual para un cambio de estado, de agencia o de productos.
+ *    registra solo la diferencia. Sirve igual para un cambio de estado, de agencia, de productos o de talla.
  * Las devoluciones (is_return) no mueven stock: el producto se queda con el cliente (Fran §7).
+ * Tarea 4: la variante (talla, color) se mueve en su fila de inventory_variants, además del total.
  */
 class OrderStock
 {
@@ -27,10 +29,14 @@ class OrderStock
     /** Pieza defectuosa que la agencia retira en un cambio (Fran §8). No cuenta como stock de la orden. */
     public const DEFECTIVE_REFERENCE = 'DefectivePickup';
 
+    public function __construct(private VariantStock $variants)
+    {
+    }
+
     /**
      * Lleva el stock de la orden a lo que corresponde. Devuelve los movimientos que hizo.
      *
-     * @return array<int, array{type:string, warehouse_id:int, product_id:int, size:string, quantity:int}>
+     * @return array<int, array{type:string, warehouse_id:int, product_id:int, variant_id:?int, quantity:int}>
      */
     public function sync(Order $order): array
     {
@@ -54,7 +60,7 @@ class OrderStock
                     'type' => $delta > 0 ? 'out' : 'in',
                     'warehouse_id' => $row['warehouse_id'],
                     'product_id' => $row['product_id'],
-                    'size' => $row['size'],
+                    'variant_id' => $row['variant_id'],
                     'quantity' => abs($delta),
                 ];
             }
@@ -95,7 +101,7 @@ class OrderStock
         $count = 0;
 
         DB::transaction(function () use ($order, $held, $fallback, &$count) {
-            foreach ($order->products()->get(['product_id', 'size', 'quantity']) as $line) {
+            foreach ($order->products()->get(['product_id', 'variant_id', 'size', 'quantity']) as $line) {
                 $qty = (int) $line->quantity;
                 $warehouseId = $held->firstWhere('product_id', $line->product_id)['warehouse_id'] ?? $fallback;
                 if ($qty <= 0 || !$warehouseId) {
@@ -107,12 +113,16 @@ class OrderStock
                     'defective_stock' => $inv->defective_stock + $qty,
                     'updated_at' => now(),
                 ]);
+                if ($line->variant_id) {
+                    $this->variants->add($warehouseId, (int) $line->product_id, (int) $line->variant_id, $qty, $qty);
+                }
                 InventoryMovement::create([
                     'product_id' => $line->product_id,
+                    'variant_id' => $line->variant_id,
                     'from_warehouse_id' => null,
                     'to_warehouse_id' => $warehouseId,
                     'quantity' => $qty,
-                    'size' => $this->size($line->size) ?: null,
+                    'size' => trim((string) $line->size) ?: null,
                     'movement_type' => 'in',
                     'status' => 'completed',
                     'reference_type' => self::DEFECTIVE_REFERENCE,
@@ -132,40 +142,43 @@ class OrderStock
     }
 
     /**
-     * Lo que la orden tiene fuera ahora, por almacén, producto y talla (salidas menos reingresos).
-     * Los movimientos anteriores a esta versión no tienen talla: se toma la de su línea si hay una sola.
+     * Lo que la orden tiene fuera ahora, por almacén, producto y variante (salidas menos reingresos).
+     * Un movimiento viejo sin variante se toma como de la variante de su línea, si el producto tiene una sola.
      *
-     * @return Collection<string, array{warehouse_id:int, product_id:int, size:string, quantity:int}>
+     * @return Collection<string, array{warehouse_id:int, product_id:int, variant_id:?int, quantity:int}>
      */
     public function held(Order $order): Collection
     {
         $rows = InventoryMovement::where('reference_type', self::REFERENCE)
             ->where('reference_id', $order->id)
             ->whereIn('movement_type', ['out', 'in'])
-            ->selectRaw("COALESCE(from_warehouse_id, to_warehouse_id) AS wh, product_id, size, SUM(CASE WHEN movement_type = 'out' THEN quantity ELSE -quantity END) AS qty")
-            ->groupBy('wh', 'product_id', 'size')
+            ->selectRaw("COALESCE(from_warehouse_id, to_warehouse_id) AS wh, product_id, variant_id, size, SUM(CASE WHEN movement_type = 'out' THEN quantity ELSE -quantity END) AS qty")
+            ->groupBy('wh', 'product_id', 'variant_id', 'size')
             ->get();
         if ($rows->isEmpty()) {
             return collect();
         }
 
-        $lineSizes = null;
+        $lineVariants = null;
         $held = collect();
         foreach ($rows as $row) {
-            $size = $this->size($row->size);
-            if ($row->size === null) {
-                $lineSizes ??= $order->products()->get(['product_id', 'size'])
-                    ->groupBy('product_id')
-                    ->map(fn ($lines) => $lines->map(fn ($l) => $this->size($l->size))->unique()->values());
-                $sizes = $lineSizes[$row->product_id] ?? collect();
-                $size = $sizes->count() === 1 ? $sizes->first() : '';
+            $variantId = $row->variant_id ? (int) $row->variant_id : null;
+            if (!$variantId && trim((string) $row->size) !== '') {
+                $variantId = ProductVariant::where('product_id', $row->product_id)->where('key', ProductVariant::keyFor($row->size))->value('id');
             }
-            $key = $this->key((int) $row->wh, (int) $row->product_id, $size);
+            if (!$variantId && trim((string) $row->size) === '') {
+                $lineVariants ??= $order->products()->get(['product_id', 'variant_id'])
+                    ->groupBy('product_id')
+                    ->map(fn ($lines) => $lines->pluck('variant_id')->unique()->values());
+                $candidates = $lineVariants[$row->product_id] ?? collect();
+                $variantId = $candidates->count() === 1 ? $candidates->first() : null;
+            }
+            $key = $this->key((int) $row->wh, (int) $row->product_id, $variantId);
             $current = $held[$key]['quantity'] ?? 0;
             $held[$key] = [
                 'warehouse_id' => (int) $row->wh,
                 'product_id' => (int) $row->product_id,
-                'size' => $size,
+                'variant_id' => $variantId ? (int) $variantId : null,
                 'quantity' => $current + (int) $row->qty,
             ];
         }
@@ -181,7 +194,7 @@ class OrderStock
         $pinned = $status === OrderStatus::ENTREGADO && $held->isNotEmpty();
 
         $target = collect();
-        foreach ($order->products()->get(['product_id', 'size', 'quantity']) as $line) {
+        foreach ($order->products()->get(['product_id', 'variant_id', 'quantity']) as $line) {
             $qty = (int) $line->quantity;
             $warehouseId = $pinned
                 ? ($held->firstWhere('product_id', $line->product_id)['warehouse_id'] ?? $held->first()['warehouse_id'])
@@ -189,12 +202,12 @@ class OrderStock
             if ($qty <= 0 || !$warehouseId) {
                 continue;
             }
-            $size = $this->size($line->size);
-            $key = $this->key($warehouseId, (int) $line->product_id, $size);
+            $variantId = $line->variant_id ? (int) $line->variant_id : null;
+            $key = $this->key($warehouseId, (int) $line->product_id, $variantId);
             $target[$key] = [
                 'warehouse_id' => (int) $warehouseId,
                 'product_id' => (int) $line->product_id,
-                'size' => $size,
+                'variant_id' => $variantId,
                 'quantity' => ($target[$key]['quantity'] ?? 0) + $qty,
             ];
         }
@@ -202,26 +215,26 @@ class OrderStock
         return $target;
     }
 
-    /** Aplica un movimiento: cambia el total y, si hay talla, su desglose. Puede quedar en negativo para que se vea. */
+    /** Aplica un movimiento: cambia el total y, si hay variante, su fila. Puede quedar en negativo para que se vea. */
     private function move(Order $order, array $op, ?string $status): void
     {
         $inv = $this->lockedInventory($op['warehouse_id'], $op['product_id']);
         $sign = $op['type'] === 'out' ? -1 : 1;
-        $update = ['quantity' => $inv->quantity + $sign * $op['quantity'], 'updated_at' => now()];
-        if ($op['size'] !== '') {
-            $sizes = is_array($inv->sizes_stock) ? $inv->sizes_stock : [];
-            $sizes[$op['size']] = ($sizes[$op['size']] ?? 0) + $sign * $op['quantity'];
-            $update['sizes_stock'] = json_encode($sizes, JSON_UNESCAPED_UNICODE);
+        DB::table('inventories')->where('id', $inv->id)->update([
+            'quantity' => $inv->quantity + $sign * $op['quantity'],
+            'updated_at' => now(),
+        ]);
+        if ($op['variant_id']) {
+            $this->variants->add($op['warehouse_id'], $op['product_id'], $op['variant_id'], $sign * $op['quantity']);
         }
-        // Sin pasar por el modelo: su evento saving recalcularía el total con las tallas
-        DB::table('inventories')->where('id', $inv->id)->update($update);
 
         InventoryMovement::create([
             'product_id' => $op['product_id'],
+            'variant_id' => $op['variant_id'],
             'from_warehouse_id' => $op['type'] === 'out' ? $op['warehouse_id'] : null,
             'to_warehouse_id' => $op['type'] === 'in' ? $op['warehouse_id'] : null,
             'quantity' => $op['quantity'],
-            'size' => $op['size'] ?: null,
+            'size' => $op['variant_id'] ? ProductVariant::whereKey($op['variant_id'])->value('title') : null,
             'movement_type' => $op['type'],
             'status' => 'completed',
             'reference_type' => self::REFERENCE,
@@ -245,10 +258,11 @@ class OrderStock
     private function log(Order $order, array $ops, ?string $status): void
     {
         $products = Product::whereIn('id', array_column($ops, 'product_id'))->pluck('title', 'id');
+        $variants = ProductVariant::whereIn('id', array_filter(array_column($ops, 'variant_id')))->pluck('title', 'id');
         $warehouses = DB::table('warehouses')->whereIn('id', array_column($ops, 'warehouse_id'))->pluck('name', 'id');
-        $parts = array_map(function ($op) use ($products, $warehouses) {
+        $parts = array_map(function ($op) use ($products, $variants, $warehouses) {
             $what = "{$op['quantity']} × " . ($products[$op['product_id']] ?? "producto {$op['product_id']}")
-                . ($op['size'] !== '' ? " (talla {$op['size']})" : '');
+                . ($op['variant_id'] ? ' (' . ($variants[$op['variant_id']] ?? "variante {$op['variant_id']}") . ')' : '');
 
             $where = $warehouses[$op['warehouse_id']] ?? "el almacén {$op['warehouse_id']}";
 
@@ -273,13 +287,8 @@ class OrderStock
         }
     }
 
-    private function size(?string $size): string
+    private function key(int $warehouseId, int $productId, ?int $variantId): string
     {
-        return trim((string) $size);
-    }
-
-    private function key(int $warehouseId, int $productId, string $size): string
-    {
-        return "{$warehouseId}|{$productId}|{$size}";
+        return "{$warehouseId}|{$productId}|" . ($variantId ?: 0);
     }
 }

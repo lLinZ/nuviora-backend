@@ -210,24 +210,37 @@ class WarehouseController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
         }
 
-        $query = $warehouse->inventories()->with('product');
+        $query = $warehouse->inventories()->with('product.variants');
 
         if ($request->has('product_id')) {
             $query->where('product_id', $request->product_id);
         }
 
-        $inventory = $query->get();
-        
+        // Tarea 4: cada fila lleva su stock por variante y lo que quedó sin variante
+        $variantStock = app(\App\Services\Inventory\VariantStock::class);
+        $breakdown = $variantStock->breakdown([$warehouse->id]);
+        $inventory = $query->get()->map(function ($inv) use ($variantStock, $breakdown) {
+            $extra = $variantStock->present((int) $inv->quantity, $inv->product?->variants ?? collect(), $breakdown->get("{$inv->warehouse_id}|{$inv->product_id}"));
+            foreach ($extra as $key => $value) {
+                $inv->setAttribute($key, $value);
+            }
+
+            return $inv;
+        });
+
         $currentStock = 0;
+        $currentVariants = [];
         if ($request->has('product_id')) {
             $currentStock = $inventory->first()?->quantity ?? 0;
+            $currentVariants = $inventory->first()?->variants_stock ?? [];
         }
 
         return response()->json([
             'success' => true,
             'warehouse' => $warehouse,
             'inventory' => $inventory,
-            'current_stock' => $currentStock
+            'current_stock' => $currentStock,
+            'current_variants' => $currentVariants,
         ]);
     }
     /**

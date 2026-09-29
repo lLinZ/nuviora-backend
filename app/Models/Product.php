@@ -31,6 +31,12 @@ class Product extends Model
         return $this->hasMany(Inventory::class);
     }
 
+    /** Tallas, colores o combinaciones del producto (tarea 4). Sin variantes, el stock es solo el total. */
+    public function variants()
+    {
+        return $this->hasMany(ProductVariant::class)->orderBy('id');
+    }
+
     public function gallery()
     {
         return $this->hasMany(ProductImage::class);

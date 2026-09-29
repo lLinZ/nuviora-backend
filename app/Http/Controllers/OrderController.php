@@ -6,6 +6,8 @@ use App\Models\Order;
 use App\Models\Client;
 use App\Models\OrderProduct;
 use App\Models\Product;
+use App\Models\ProductVariant;
+use App\Models\InventoryVariant;
 use App\Models\Status;
 use App\Models\User;
 use App\Models\City;
@@ -161,16 +163,20 @@ class OrderController extends Controller
         return response()->json(['status' => false, 'message' => 'No tienes permiso para ver esta orden.'], 403);
     }
 
-        // 📦 CHECK STOCK AVAILABILITY
+        // 📦 CHECK STOCK AVAILABILITY (por producto y por variante, tarea 4)
         $stockCheck = $order->getStockDetails();
         $hasStockWarning = $stockCheck['has_warning'];
+        $variantOptions = $this->variantOptions($order);
 
         // Si quieres devolver items “planchados” (recomendado para front):
-        $items = $order->products->map(function ($op) use ($stockCheck) {
-            $productStock = $stockCheck['items'][$op->product_id] ?? ['available' => 0, 'has_stock' => false];
+        $items = $order->products->map(function ($op) use ($stockCheck, $variantOptions) {
+            $productStock = $stockCheck['lines'][$op->id] ?? $stockCheck['items'][$op->product_id] ?? ['available' => 0, 'has_stock' => false];
             return [
                 'id'        => $op->id,
                 'product_id' => $op->product_id,
+                'variant_id' => $op->variant_id,
+                'variant_title' => $op->variant_id ? $op->size : null,
+                'variants'  => $variantOptions[$op->product_id] ?? [], // para cambiar la talla, con lo que hay de cada una
                 'showable_name' => $op->showable_name ?? ($op->product->showable_name ?? null),
                 'title'     => $op->title ?? ($op->product->title ?? $op->product->name ?? 'Producto'),
                 'sku'       => $op->product->sku ?? null,
@@ -715,6 +721,45 @@ class OrderController extends Controller
         ], 500);
     }
 }
+    /**
+     * Tarea 4: las variantes de cada producto de la orden (las activas y las que ya usa), con el stock útil de
+     * cada una en el almacén de la orden. La pantalla las ofrece para elegir o cambiar la talla.
+     */
+    private function variantOptions(Order $order): array
+    {
+        $productIds = $order->products->pluck('product_id')->unique()->values();
+        $variants = ProductVariant::whereIn('product_id', $productIds)->orderBy('id')->get();
+        if ($variants->isEmpty()) {
+            return [];
+        }
+        $inUse = $order->products->pluck('variant_id')->filter()->all();
+        $warehouseId = $order->resolveStockWarehouseId();
+        $stock = $warehouseId
+            ? InventoryVariant::where('warehouse_id', $warehouseId)->whereIn('variant_id', $variants->pluck('id'))->get()->keyBy('variant_id')
+            : collect();
+
+        return $variants->filter(fn ($v) => $v->is_active || in_array($v->id, $inUse))
+            ->groupBy('product_id')
+            ->map(fn ($list) => $list->map(fn ($v) => [
+                'id' => $v->id,
+                'title' => $v->title,
+                'is_active' => $v->is_active,
+                'available' => (int) ($stock->get($v->id)?->useful_stock ?? 0),
+            ])->values()->all())
+            ->all();
+    }
+
+    /** "Camisa - M" → "Camisa - L". Si el nombre no traía la talla, se la agrega. */
+    private function nameWithVariant(?string $name, ?string $oldTitle, ?string $newTitle): ?string
+    {
+        $name = (string) $name;
+        if ($oldTitle && str_ends_with($name, " - {$oldTitle}")) {
+            $name = substr($name, 0, -strlen(" - {$oldTitle}"));
+        }
+
+        return $newTitle ? trim($name) . " - {$newTitle}" : $name;
+    }
+
     public function getOrderProducts($orderId)
     {
         $order = Order::with('products.product', 'status')->findOrFail($orderId);
@@ -730,6 +775,8 @@ class OrderController extends Controller
             'products'   => $order->products->map(function ($op) {
                 return [
                     'product_id'   => $op->product_id,
+                    'variant_id'   => $op->variant_id,
+                    'variant_title' => $op->variant_id ? $op->size : null,
                     'shopify_id'   => $op->product_number,
                     'showable_name' => $op->showable_name ?? ($op->product->showable_name ?? null),
                     'title'        => $op->title,
@@ -1519,6 +1566,7 @@ class OrderController extends Controller
         }
         $rules = [
             'product_id' => 'required|exists:products,id',
+            'variant_id' => 'nullable|integer|exists:product_variants,id',
             'quantity' => 'required|integer|min:1',
         ];
         
@@ -1530,7 +1578,18 @@ class OrderController extends Controller
         $request->validate($rules);
 
         $product = Product::findOrFail($request->product_id);
-        
+
+        // Tarea 4: un producto con tallas o variantes se agrega con la suya
+        $variant = null;
+        if ($request->filled('variant_id')) {
+            $variant = ProductVariant::where('product_id', $product->id)->find($request->variant_id);
+            if (!$variant) {
+                return response()->json(['status' => false, 'message' => 'Esa variante no es de este producto.'], 422);
+            }
+        } elseif ($product->variants()->where('is_active', true)->exists()) {
+            return response()->json(['status' => false, 'message' => 'Elige la talla o variante del producto.'], 422);
+        }
+
         // For return/exchange orders, price is always 0 and is_upsell is false
         $isReturnOrExchange = ($order->is_return || $order->is_exchange);
         
@@ -1553,11 +1612,12 @@ class OrderController extends Controller
         OrderProduct::create([
             'order_id' => $order->id,
             'product_id' => $product->id,
+            'variant_id' => $variant?->id,
             'product_number' => $product->product_id,
             'title' => $product->title,
             'name' => $product->name,
             'description' => $product->description,
-            'showable_name' => $product->showable_name,
+            'showable_name' => $variant ? $this->nameWithVariant($product->showable_name ?: $product->title, null, $variant->title) : $product->showable_name,
             'price' => round($productPrice),
             'quantity' => $request->quantity,
             'image' => $product->image,
@@ -1581,7 +1641,7 @@ class OrderController extends Controller
         }
 
         // 📝 LOG: Registrar adición
-        $productName = $product->title ?? $product->name;
+        $productName = ($product->title ?? $product->name) . ($variant ? " ({$variant->title})" : '');
         \App\Models\OrderUpdate::create([
             'order_id' => $order->id,
             'user_id' => auth()->id() ?? 1,
@@ -1671,15 +1731,17 @@ class OrderController extends Controller
         $request->validate([
             'quantity' => 'nullable|integer|min:1',
             'price' => 'nullable|numeric|min:0', // 🆕 Permitir editar precio
+            'variant_id' => 'nullable|integer|exists:product_variants,id', // tarea 4: cambiar la talla
         ]);
 
         $item = OrderProduct::where('order_id', $order->id)->where('id', $itemId)->firstOrFail();
 
-        // 🔥 CLIENT REQUEST: Si se modifica un producto original (no upsell), marcar la orden
-        // Esto bloqueará la posibilidad de agregar upsells
-        if (!$item->is_upsell && $order->has_modified_original_products !== true) {
-            $order->has_modified_original_products = true;
-            $order->save();
+        $newVariant = null;
+        if ($request->filled('variant_id') && (int) $request->variant_id !== (int) $item->variant_id) {
+            $newVariant = ProductVariant::where('product_id', $item->product_id)->find($request->variant_id);
+            if (!$newVariant) {
+                return response()->json(['status' => false, 'message' => 'Esa variante no es de este producto.'], 422);
+            }
         }
 
         // For return/exchange orders, price is 0 so impact is just quantity
@@ -1692,7 +1754,7 @@ class OrderController extends Controller
         $newQuantity = $request->filled('quantity') ? $request->input('quantity') : $oldQuantity;
         $newPrice = $request->filled('price') ? $request->input('price') : $oldPrice;
         
-        if ($oldQuantity == $newQuantity && $oldPrice == $newPrice) {
+        if ($oldQuantity == $newQuantity && $oldPrice == $newPrice && !$newVariant) {
              return response()->json([
                 'status' => true,
                 'message' => 'Producto actualizado correctamente',
@@ -1700,13 +1762,28 @@ class OrderController extends Controller
             ]);
         }
 
+        // 🔥 CLIENT REQUEST: Si se modifica un producto original (no upsell), marcar la orden
+        // Esto bloqueará la posibilidad de agregar upsells. Cambiar solo la talla no cuenta (tarea 4).
+        if (!$item->is_upsell && $order->has_modified_original_products !== true
+            && ($oldQuantity != $newQuantity || $oldPrice != $newPrice)) {
+            $order->has_modified_original_products = true;
+            $order->save();
+        }
+
         $oldSubtotal = $oldQuantity * $oldPrice;
         $newSubtotal = $newQuantity * $newPrice;
         $diff = $newSubtotal - $oldSubtotal;
 
         // Update item
+        $oldVariantTitle = $item->variant_id ? $item->size : null;
         $item->quantity = $newQuantity;
         $item->price = round($newPrice);
+        if ($newVariant) {
+            // La variante cambia el nombre de la talla; si la orden ya tenía el stock fuera, OrderStock
+            // devuelve la talla vieja y saca la nueva (OrderProductObserver)
+            $item->variant_id = $newVariant->id;
+            $item->showable_name = $this->nameWithVariant($item->showable_name ?: $item->title, $oldVariantTitle, $newVariant->title);
+        }
         $item->save();
 
         // Update order total
@@ -1733,6 +1810,9 @@ class OrderController extends Controller
         if ($oldPrice != $newPrice) {
             $changeDetails[] = "precio de $" . number_format($oldPrice, 2) . " a $" . number_format($newPrice, 2);
         }
+        if ($newVariant) {
+            $changeDetails[] = "talla o variante de " . ($oldVariantTitle ?: 'sin variante') . " a {$newVariant->title}";
+        }
         
         $productName = $item->name ?? ($item->product ? $item->product->title : 'Producto #' . $item->id);
         $message = "🛠️ Producto '{$productName}' actualizado: " . implode(', ', $changeDetails) . ".";
@@ -1742,6 +1822,15 @@ class OrderController extends Controller
             'user_id' => auth()->id() ?? 1,
             'message' => $message,
         ]);
+
+        // Tarea 4: si estaba "Sin Stock" y con la talla nueva ya alcanza, sale sola (como cuando entra stock)
+        if ($newVariant) {
+            try {
+                app(\App\Services\InventoryService::class)->recoverFromSinStock($order->fresh());
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
 
         return response()->json([
             'status' => true,
@@ -1827,8 +1916,21 @@ class OrderController extends Controller
             'products.*.id' => 'required|exists:products,id',
             'products.*.quantity' => 'required|integer|min:1',
             'products.*.price' => 'nullable|numeric|min:0',
+            'products.*.variant_id' => 'nullable|integer|exists:product_variants,id',
             'agent_id' => 'nullable|exists:users,id'
         ]);
+
+        // Tarea 4: un producto con tallas o variantes se pide con la suya
+        foreach ($request->products as $p) {
+            $variantId = $p['variant_id'] ?? null;
+            if ($variantId && !ProductVariant::where('product_id', $p['id'])->whereKey($variantId)->exists()) {
+                return response()->json(['status' => false, 'message' => 'Una de las variantes no es de su producto.'], 422);
+            }
+            if (!$variantId && ProductVariant::where('product_id', $p['id'])->where('is_active', true)->exists()) {
+                $title = Product::whereKey($p['id'])->value('title');
+                return response()->json(['status' => false, 'message' => "Elige la talla o variante de {$title}."], 422);
+            }
+        }
 
         \DB::beginTransaction();
         try {
@@ -1926,13 +2028,15 @@ class OrderController extends Controller
                 
                 $price = isset($p['price']) ? $p['price'] : $product->price;
 
+                $variant = !empty($p['variant_id']) ? ProductVariant::find($p['variant_id']) : null;
                 OrderProduct::create([
                     'order_id' => $order->id,
                     'product_id' => $product->id,
+                    'variant_id' => $variant?->id,
                     'product_number' => $product->product_id, // Shopify ID mapping
                     'name' => $product->name,
                 'title' => $product->title,
-                'showable_name' => $product->showable_name,
+                'showable_name' => $variant ? $this->nameWithVariant($product->showable_name ?: $product->title, null, $variant->title) : $product->showable_name,
                 'sku' => $product->sku,
                     'price' => round($price), 
                     'quantity' => $quantity,
@@ -2785,6 +2889,7 @@ class OrderController extends Controller
                 'showable_name' => $product->showable_name,
                 'price' => 0, // No cost for return
                 'quantity' => $product->quantity,
+                'variant_id' => $product->variant_id,
                 'size' => $product->size,
                 'image' => $product->image,
                 'is_upsell' => false,

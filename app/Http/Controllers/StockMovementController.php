@@ -40,7 +40,8 @@ class StockMovementController extends Controller
             'type'         => ['required', 'in:IN,OUT,ASSIGN,RETURN,SALE'],
             'quantity'     => ['required', 'integer', 'min:1'],
             'warehouse_id' => ['nullable', 'exists:warehouses,id'],
-            'sizes'        => ['nullable', 'array'],   // {"S/M": 3, "X/XL": 7}
+            'variants'     => ['nullable', 'array'],   // {variant_id: cantidad} (tarea 4)
+            'sizes'        => ['nullable', 'array'],   // formato viejo: {"S/M": 3, "X/XL": 7}
             'notes'        => ['nullable', 'string', 'max:255'],
         ]);
 
@@ -59,13 +60,11 @@ class StockMovementController extends Controller
             return response()->json(['status' => false, 'message' => 'No hay almacén principal'], 422);
         }
 
-        $sizes = $data['sizes'] ?? null;
-        if ($sizes && array_sum(array_map('intval', $sizes)) !== (int) $data['quantity']) {
-            return response()->json(['status' => false, 'message' => 'La suma de las tallas no coincide con la cantidad.'], 422);
-        }
+        // Lo que no se reparte por variante va (o sale) como "sin variante"; el servicio lo valida
+        $variants = ($data['variants'] ?? null) ?: ($data['sizes'] ?? null);
 
         try {
-            $args = [$data['product_id'], $warehouseId, $data['quantity'], Auth::id(), $data['notes'] ?? 'Movimiento manual', null, null, $sizes];
+            $args = [$data['product_id'], $warehouseId, $data['quantity'], Auth::id(), $data['notes'] ?? 'Movimiento manual', null, null, $variants];
             $movement = $data['type'] === 'IN' ? $inventory->addStock(...$args) : $inventory->removeStock(...$args);
         } catch (\Exception $e) {
             return response()->json(['status' => false, 'message' => $e->getMessage()], 422);

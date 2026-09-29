@@ -274,36 +274,16 @@ class Order extends Model
         $warehouseId = $this->resolveStockWarehouseId();
 
         if (!$warehouseId) {
-            return ['has_warning' => false, 'items' => []]; 
+            return ['has_warning' => false, 'items' => [], 'lines' => []];
         }
 
-        // 2. Get inventory for this warehouse
-        $inventory = \App\Models\Inventory::where('warehouse_id', '=', $warehouseId)
-            ->whereIn('product_id', $this->products->pluck('product_id'))
-            ->get()
-            ->keyBy('product_id');
-
-        $items = [];
-        $hasWarning = false;
-
-        foreach ($this->products as $op) {
-            // Stock útil: sin lo reservado, defectuoso (p. ej. piezas retiradas en cambios) ni bloqueado
-            $available = $inventory->get($op->product_id)?->useful_stock ?? 0;
-            $hasStock = $available >= $op->quantity;
-            
-            if (!$hasStock) {
-                $hasWarning = true;
-            }
-
-            $items[$op->product_id] = [
-                'available' => $available,
-                'has_stock' => $hasStock
-            ];
-        }
+        // 2. Stock útil (sin reservado, defectuoso ni bloqueado) por producto y por variante (tarea 4)
+        $check = app(\App\Services\Inventory\StockCheck::class)->at($this, $warehouseId);
 
         return [
-            'has_warning' => $hasWarning,
-            'items' => $items
+            'has_warning' => !$check['ok'],
+            'items' => array_map(fn ($p) => ['available' => $p['available'], 'has_stock' => $p['has_stock']], $check['products']),
+            'lines' => $check['lines'], // por línea de la orden (id de order_products)
         ];
     }
 
@@ -325,16 +305,9 @@ class Order extends Model
         // Usamos la MISMA resolución que getStockDetails para mantener coherencia.
         $currentWarehouseId = $this->resolveStockWarehouseId();
 
-        // Productos y cantidades requeridas por la orden
-        $required = $this->products->mapWithKeys(function ($op) {
-            return [$op->product_id => (int) $op->quantity];
-        });
-
-        if ($required->isEmpty()) {
+        if ($this->products->isEmpty()) {
             return [];
         }
-
-        $productIds = $required->keys()->all();
 
         // Almacenes activos candidatos (distintos del actual)
         $warehouses = \App\Models\Warehouse::where('is_active', true)
@@ -347,40 +320,19 @@ class Order extends Model
             return [];
         }
 
-        // Inventarios de esos almacenes para los productos requeridos, indexados por almacén
-        $inventories = \App\Models\Inventory::whereIn('warehouse_id', $warehouses->pluck('id'))
-            ->whereIn('product_id', $productIds)
-            ->get()
-            ->groupBy('warehouse_id');
+        // La misma revisión que getStockDetails (por producto y por variante), en todos a la vez
+        $checks = app(\App\Services\Inventory\StockCheck::class)->inWarehouses($this, $warehouses->pluck('id')->all());
 
         $result = [];
 
         foreach ($warehouses as $warehouse) {
-            $whInv = ($inventories->get($warehouse->id) ?? collect())->keyBy('product_id');
-
-            $canFulfill = true;
-            $items = [];
-
-            foreach ($required as $productId => $needed) {
-                /** @var \App\Models\Inventory|null $inv */
-                $inv = $whInv->get($productId);
-                $useful = $inv ? (int) $inv->useful_stock : 0;
-
-                if ($useful < $needed) {
-                    $canFulfill = false;
-                }
-
-                $items[$productId] = [
-                    'needed'    => $needed,
-                    'available' => $useful,
-                    'has_stock' => $useful >= $needed,
-                ];
-            }
+            $check = $checks[$warehouse->id];
 
             // Solo reportamos almacenes que pueden cumplir TODA la orden
-            if (!$canFulfill) {
+            if (!$check['ok']) {
                 continue;
             }
+            $items = $check['products'];
 
             // Agencia (usuario) ligada a este almacén y su ciudad principal
             $agencyUser = $warehouse->user_id ? \App\Models\User::find($warehouse->user_id) : null;

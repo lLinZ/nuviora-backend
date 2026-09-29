@@ -4,12 +4,25 @@ namespace App\Services;
 
 use App\Models\Inventory;
 use App\Models\InventoryMovement;
+use App\Models\ProductVariant;
 use App\Models\Warehouse;
+use App\Services\Inventory\VariantStock;
 use Illuminate\Support\Facades\DB;
 use Exception;
 
+/**
+ * Entradas, salidas, ajustes y traslados de stock. Tarea 4: cada operación puede traer su desglose por
+ * variante ([variant_id => cantidad], o el formato viejo por nombre de talla). Lo que no se reparte se
+ * toma del stock "sin variante" (el total menos lo repartido), y una salida no puede sacar de una talla más
+ * de lo que tiene. Cada variante deja su propio movimiento, para verla en el historial.
+ */
 class InventoryService
 {
+    public function __construct(private ?VariantStock $variants = null)
+    {
+        $this->variants ??= app(VariantStock::class);
+    }
+
     /**
      * Transfer stock between warehouses
      */
@@ -19,43 +32,33 @@ class InventoryService
         int $toWarehouseId,
         int $quantity,
         ?int $userId = null,
-        ?string $notes = null
+        ?string $notes = null,
+        $variants = null
     ) {
-        return DB::transaction(function () use ($productId, $fromWarehouseId, $toWarehouseId, $quantity, $userId, $notes) {
+        return DB::transaction(function () use ($productId, $fromWarehouseId, $toWarehouseId, $quantity, $userId, $notes, $variants) {
             // Validate warehouses exist and are active
-            $fromWarehouse = Warehouse::active()->findOrFail($fromWarehouseId);
-            $toWarehouse = Warehouse::active()->findOrFail($toWarehouseId);
+            Warehouse::active()->findOrFail($fromWarehouseId);
+            Warehouse::active()->findOrFail($toWarehouseId);
 
-            // Get source inventory
-            $fromInventory = Inventory::where('warehouse_id', '=', $fromWarehouseId)
-                ->where('product_id', '=', $productId)
-                ->first();
+            $split = $this->split($productId, $variants, $quantity);
 
+            $fromInventory = $this->lockedInventory($fromWarehouseId, $productId, false);
             if (!$fromInventory || $fromInventory->quantity < $quantity) {
                 throw new Exception('Stock insuficiente en el almacén de origen');
             }
+            $this->takeFromVariants($fromInventory, $split, $quantity);
+            foreach ($split as $variantId => $qty) {
+                $this->variants->add($toWarehouseId, $productId, $variantId, $qty);
+            }
 
-            // Decrease from source
-            $fromInventory->quantity -= $quantity;
-            $fromInventory->save();
+            DB::table('inventories')->where('id', $fromInventory->id)->update(['quantity' => $fromInventory->quantity - $quantity, 'updated_at' => now()]);
+            $toInventory = $this->lockedInventory($toWarehouseId, $productId);
+            DB::table('inventories')->where('id', $toInventory->id)->update(['quantity' => $toInventory->quantity + $quantity, 'updated_at' => now()]);
 
-            // Increase at destination (immediate — no 2-step confirmation needed)
-            $toInventory = Inventory::firstOrCreate(
-                [
-                    'warehouse_id' => $toWarehouseId,
-                    'product_id'   => $productId,
-                ],
-                ['quantity' => 0]
-            );
-            $toInventory->quantity += $quantity;
-            $toInventory->save();
-
-            // Record movement as COMPLETED (immediate transfer)
-            $movement = InventoryMovement::create([
-                'product_id'        => $productId,
+            // Traslado inmediato (sin confirmación en dos pasos)
+            $movement = $this->record($productId, $quantity, $split, [
                 'from_warehouse_id' => $fromWarehouseId,
                 'to_warehouse_id'   => $toWarehouseId,
-                'quantity'          => $quantity,
                 'movement_type'     => 'transfer',
                 'status'            => 'completed',
                 'user_id'           => $userId,
@@ -82,15 +85,11 @@ class InventoryService
                 ->findOrFail($movementId);
 
             // Increase in destination (create if doesn't exist)
-            $toInventory = Inventory::firstOrCreate(
-                [
-                    'warehouse_id' => $movement->to_warehouse_id,
-                    'product_id' => $movement->product_id,
-                ],
-                ['quantity' => 0]
-            );
-            $toInventory->quantity += $movement->quantity;
-            $toInventory->save();
+            $toInventory = $this->lockedInventory($movement->to_warehouse_id, $movement->product_id);
+            DB::table('inventories')->where('id', $toInventory->id)->update(['quantity' => $toInventory->quantity + $movement->quantity, 'updated_at' => now()]);
+            if ($movement->variant_id) {
+                $this->variants->add($movement->to_warehouse_id, $movement->product_id, $movement->variant_id, $movement->quantity);
+            }
 
             // Mark as completed
             $movement->status = 'completed';
@@ -115,13 +114,12 @@ class InventoryService
                 ->findOrFail($movementId);
 
             // Return stock to source
-            $fromInventory = Inventory::where('warehouse_id', $movement->from_warehouse_id)
-                ->where('product_id', $movement->product_id)
-                ->first();
-
+            $fromInventory = $this->lockedInventory($movement->from_warehouse_id, $movement->product_id, false);
             if ($fromInventory) {
-                $fromInventory->quantity += $movement->quantity;
-                $fromInventory->save();
+                DB::table('inventories')->where('id', $fromInventory->id)->update(['quantity' => $fromInventory->quantity + $movement->quantity, 'updated_at' => now()]);
+                if ($movement->variant_id) {
+                    $this->variants->add($movement->from_warehouse_id, $movement->product_id, $movement->variant_id, $movement->quantity);
+                }
             }
 
             // Mark as cancelled
@@ -137,7 +135,7 @@ class InventoryService
     }
 
     /**
-     * Add stock to a warehouse (incoming)
+     * Add stock to a warehouse (incoming). Lo que no se reparte por variante queda "sin variante".
      */
     public function addStock(
         int $productId,
@@ -147,40 +145,23 @@ class InventoryService
         ?string $notes = null,
         ?string $referenceType = null,
         ?int $referenceId = null,
-        ?array $sizes = null
+        $variants = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $sizes) {
+        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $variants) {
             // Validate warehouse exists and is active
-            $warehouse = Warehouse::active()->findOrFail($warehouseId);
+            Warehouse::active()->findOrFail($warehouseId);
 
-            // Increase inventory
-            $inventory = Inventory::firstOrCreate(
-                [
-                    'warehouse_id' => $warehouseId,
-                    'product_id' => $productId,
-                ],
-                ['quantity' => 0]
-            );
-            $inventory->quantity += $quantity;
+            $split = $this->split($productId, $variants, $quantity);
 
-            // 🔥 Actualizar desglose por tallas
-            if (!empty($sizes)) {
-                $sizesStock = $inventory->sizes_stock ?? [];
-                if (!is_array($sizesStock)) $sizesStock = [];
-                foreach ($sizes as $size => $qty) {
-                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) + (int)$qty;
-                }
-                $inventory->sizes_stock = $sizesStock;
+            $inventory = $this->lockedInventory($warehouseId, $productId);
+            DB::table('inventories')->where('id', $inventory->id)->update(['quantity' => $inventory->quantity + $quantity, 'updated_at' => now()]);
+            foreach ($split as $variantId => $qty) {
+                $this->variants->add($warehouseId, $productId, $variantId, $qty);
             }
 
-            $inventory->save();
-
-            // Record movement
-            $movement = InventoryMovement::create([
-                'product_id' => $productId,
+            $movement = $this->record($productId, $quantity, $split, [
                 'from_warehouse_id' => null,
                 'to_warehouse_id' => $warehouseId,
-                'quantity' => $quantity,
                 'movement_type' => 'in',
                 'reference_type' => $referenceType,
                 'reference_id' => $referenceId,
@@ -196,7 +177,7 @@ class InventoryService
     }
 
     /**
-     * Remove stock from a warehouse (outgoing)
+     * Remove stock from a warehouse (outgoing). Sin desglose, sale del stock "sin variante".
      */
     public function removeStock(
         int $productId,
@@ -206,42 +187,24 @@ class InventoryService
         ?string $notes = null,
         ?string $referenceType = null,
         ?int $referenceId = null,
-        ?array $sizes = null
+        $variants = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $sizes) {
+        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $variants) {
             // Validate warehouse exists and is active
-            $warehouse = Warehouse::active()->findOrFail($warehouseId);
+            Warehouse::active()->findOrFail($warehouseId);
 
-            // Get inventory
-            $inventory = Inventory::where('warehouse_id', '=', $warehouseId)
-                ->where('product_id', '=', $productId)
-                ->first();
+            $split = $this->split($productId, $variants, $quantity);
 
+            $inventory = $this->lockedInventory($warehouseId, $productId, false);
             if (!$inventory || $inventory->quantity < $quantity) {
-                throw new Exception('Insufficient stock in warehouse');
+                throw new Exception('Stock insuficiente en el almacén');
             }
+            $this->takeFromVariants($inventory, $split, $quantity);
+            DB::table('inventories')->where('id', $inventory->id)->update(['quantity' => $inventory->quantity - $quantity, 'updated_at' => now()]);
 
-            // Decrease inventory
-            $inventory->quantity -= $quantity;
-
-            // 🔥 Actualizar desglose por tallas
-            if (!empty($sizes)) {
-                $sizesStock = $inventory->sizes_stock ?? [];
-                if (!is_array($sizesStock)) $sizesStock = [];
-                foreach ($sizes as $size => $qty) {
-                    $sizesStock[$size] = ($sizesStock[$size] ?? 0) - (int)$qty;
-                }
-                $inventory->sizes_stock = $sizesStock;
-            }
-
-            $inventory->save();
-
-            // Record movement
-            $movement = InventoryMovement::create([
-                'product_id' => $productId,
+            $movement = $this->record($productId, $quantity, $split, [
                 'from_warehouse_id' => $warehouseId,
                 'to_warehouse_id' => null,
-                'quantity' => $quantity,
                 'movement_type' => 'out',
                 'reference_type' => $referenceType,
                 'reference_id' => $referenceId,
@@ -257,7 +220,8 @@ class InventoryService
     }
 
     /**
-     * Adjust stock in a warehouse
+     * Adjust stock in a warehouse. Fija el total y, si vienen, las cantidades de esas variantes (las demás
+     * no cambian). Lo repartido por variante no puede superar el total.
      */
     public function adjustStock(
         int $productId,
@@ -265,33 +229,41 @@ class InventoryService
         int $newQuantity,
         ?int $userId = null,
         ?string $notes = null,
-        ?array $sizes = null
+        $variants = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $newQuantity, $userId, $notes, $sizes) {
+        return DB::transaction(function () use ($productId, $warehouseId, $newQuantity, $userId, $notes, $variants) {
             // Validate warehouse exists and is active
-            $warehouse = Warehouse::active()->findOrFail($warehouseId);
+            Warehouse::active()->findOrFail($warehouseId);
 
-            // Get or create inventory
-            $inventory = Inventory::firstOrCreate(
-                [
-                    'warehouse_id' => $warehouseId,
-                    'product_id' => $productId,
-                ],
-                ['quantity' => 0]
-            );
+            $split = $this->variants->parse($productId, $variants, true);
 
-            $oldQuantity = $inventory->quantity;
+            $inventory = $this->lockedInventory($warehouseId, $productId);
+            $oldQuantity = (int) $inventory->quantity;
             $difference = $newQuantity - $oldQuantity;
 
-            // Update inventory
-            $inventory->quantity = $newQuantity;
-            
-            // 🔥 Ajuste absoluto de tallas (sobrescribe)
-            if (!empty($sizes)) {
-                $inventory->sizes_stock = $sizes;
+            $changes = [];
+            foreach ($split as $variantId => $qty) {
+                $before = $this->variants->set($warehouseId, $productId, $variantId, $qty);
+                if ($before !== $qty) {
+                    $changes[$variantId] = [$before, $qty];
+                }
+            }
+            $assigned = $this->variants->assigned($warehouseId, $productId);
+            if ($assigned > $newQuantity) {
+                throw new Exception("Lo repartido por variante ({$assigned}) supera el total ({$newQuantity}). Ajusta también las variantes.");
             }
 
-            $inventory->save();
+            DB::table('inventories')->where('id', $inventory->id)->update(['quantity' => $newQuantity, 'updated_at' => now()]);
+
+            $detail = '';
+            if ($changes) {
+                $titles = ProductVariant::whereIn('id', array_keys($changes))->pluck('title', 'id');
+                $detail = ' · Variantes: ' . implode(', ', array_map(
+                    fn ($id, $c) => ($titles[$id] ?? "#{$id}") . " {$c[0]}→{$c[1]}",
+                    array_keys($changes),
+                    $changes
+                ));
+            }
 
             // Record movement
             $movement = InventoryMovement::create([
@@ -301,19 +273,91 @@ class InventoryService
                 'quantity' => abs($difference),
                 'movement_type' => 'adjustment',
                 'user_id' => $userId,
-                'notes' => $notes . " (Old: {$oldQuantity}, New: {$newQuantity})",
+                'notes' => $notes . " (Old: {$oldQuantity}, New: {$newQuantity})" . $detail,
             ]);
 
-            // 📦 Check for orders that now have insufficient stock (only if quantity decreased)
-            if ($difference < 0) {
+            // 📦 Si bajó (el total o una talla), hay órdenes que pueden quedarse sin stock; si subió, recuperarlo
+            $wentDown = $difference < 0 || collect($changes)->contains(fn ($c) => $c[1] < $c[0]);
+            $wentUp = $difference > 0 || collect($changes)->contains(fn ($c) => $c[1] > $c[0]);
+            if ($wentDown) {
                 $this->checkAndHandleStockShortage($productId, $warehouseId);
-            } else if ($difference > 0) {
-                // 📦 Check for orders that now have stock recovered
+            }
+            if ($wentUp) {
                 $this->checkAndHandleStockRecovery($productId, $warehouseId);
             }
 
             return $movement;
         });
+    }
+
+    /** Desglose por variante de una operación de $quantity unidades: no puede sumar más que eso. */
+    private function split(int $productId, $variants, int $quantity): array
+    {
+        $split = $this->variants->parse($productId, $variants);
+        $sum = array_sum($split);
+        if ($sum > $quantity) {
+            throw new Exception("La suma por variante ({$sum}) supera la cantidad ({$quantity}).");
+        }
+
+        return $split;
+    }
+
+    /**
+     * Saca de cada variante lo suyo, y el resto del stock "sin variante". Si una talla no alcanza, o lo que
+     * no se repartió no está sin variante, no sale nada.
+     */
+    private function takeFromVariants(Inventory $inventory, array $split, int $quantity): void
+    {
+        $rows = $this->variants->rows($inventory->warehouse_id, $inventory->product_id);
+        $rest = $quantity - array_sum($split);
+        if ($rest > 0) {
+            $unassigned = (int) $inventory->quantity - (int) $rows->sum('quantity');
+            if ($unassigned < $rest) {
+                throw new Exception('Indica de qué variante sale: sin variante hay ' . max(0, $unassigned) . '.');
+            }
+        }
+        foreach ($split as $variantId => $qty) {
+            $row = $this->variants->locked($inventory->warehouse_id, $inventory->product_id, $variantId);
+            if ($row->quantity < $qty) {
+                $title = ProductVariant::whereKey($variantId)->value('title');
+                throw new Exception("Stock insuficiente de {$title}: hay {$row->quantity}.");
+            }
+            $this->variants->add($inventory->warehouse_id, $inventory->product_id, $variantId, -$qty);
+        }
+    }
+
+    /** Un movimiento por variante y uno por lo que va sin variante. Devuelve el primero. */
+    private function record(int $productId, int $quantity, array $split, array $fields): InventoryMovement
+    {
+        $titles = $split ? ProductVariant::whereIn('id', array_keys($split))->pluck('title', 'id') : collect();
+        $movements = [];
+        foreach ($split as $variantId => $qty) {
+            $movements[] = InventoryMovement::create($fields + [
+                'product_id' => $productId,
+                'variant_id' => $variantId,
+                'size' => $titles[$variantId] ?? null,
+                'quantity' => $qty,
+            ]);
+        }
+        $rest = $quantity - array_sum($split);
+        if ($rest > 0 || !$movements) {
+            $movements[] = InventoryMovement::create($fields + ['product_id' => $productId, 'quantity' => $rest]);
+        }
+
+        return $movements[0];
+    }
+
+    /** La fila del producto en el almacén, bloqueada. La crea en 0 si no existe (salvo $create = false). */
+    private function lockedInventory(int $warehouseId, int $productId, bool $create = true): ?Inventory
+    {
+        $find = fn () => Inventory::where('warehouse_id', $warehouseId)->where('product_id', $productId)->lockForUpdate()->first();
+        $inventory = $find();
+        if (!$inventory && $create) {
+            Inventory::firstOrCreate(['warehouse_id' => $warehouseId, 'product_id' => $productId], ['quantity' => 0]);
+            $inventory = $find();
+        }
+
+        return $inventory;
     }
 
     /**
@@ -456,101 +500,117 @@ class InventoryService
         $orders = $query->get();
         if ($orders->isEmpty()) return;
 
-        $assignService = app(\App\Services\Assignment\AssignOrderService::class);
-
         foreach ($orders as $order) {
-            /** @var \App\Models\Order $order */
-            // 🛑 HARD GUARD: Refresh + verify still Sin Stock, not a terminal status
-            $order->refresh();
-            $currentStatusDesc = $order->status?->description;
-            if ($currentStatusDesc !== 'Sin Stock' || in_array($currentStatusDesc, $terminalStatuses)) {
-                \Log::info("InventoryService: Skipping order #{$order->name} — status is '{$currentStatusDesc}', not Sin Stock.");
-                continue;
-            }
+            $this->recoverFromSinStock($order);
+        }
+    }
 
-            if (!$order->hasStock()) continue; // Still missing stock, skip
+    /**
+     * Si la orden está en "Sin Stock" y ya le alcanza, vuelve a su estado anterior (o se reparte, o pasa a
+     * "Nuevo"). Lo usa la entrada de stock y también el cambio de talla de una línea (tarea 4).
+     */
+    public function recoverFromSinStock(\App\Models\Order $order): bool
+    {
+        $sinStockStatus = \App\Models\Status::where('description', 'Sin Stock')->first();
+        $assignedStatus = \App\Models\Status::where('description', 'Asignado a Vendedor')->first();
+        $nuevoStatus    = \App\Models\Status::where('description', 'Nuevo')->first();
+        if (!$sinStockStatus) return false;
 
-            // ⭐ CASO 1: Tiene status anterior guardado → restaurarlo directamente
-            if ($order->previous_status_id) {
-                $restoredStatus = \App\Models\Status::find($order->previous_status_id);
+        // 🛑 Terminal statuses — NEVER touch these orders automatically
+        $terminalStatuses = ['Entregado', 'Cancelado', 'Rechazado', 'En ruta', 'Asignar a agencia', 'Novedades', 'Novedad Solucionada'];
 
-                // Safety: don't restore to a terminal status (edge case)
-                if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
-                    $order->status_id          = $restoredStatus->id;
-                    $order->previous_status_id = null; // Limpiar después de restaurar
-                    // 🔥 FIX: Solo liberar a la especialista si la orden originalmente venía del pool general (Nuevo)
-                    if ($restoredStatus->description === 'Nuevo') {
-                        $order->agent_id = null;
-                    }
-                    $order->save();
+        /** @var \App\Models\Order $order */
+        // 🛑 HARD GUARD: Refresh + verify still Sin Stock, not a terminal status
+        $order->refresh();
+        $currentStatusDesc = $order->status?->description;
+        if ($currentStatusDesc !== 'Sin Stock' || in_array($currentStatusDesc, $terminalStatuses)) {
+            \Log::info("InventoryService: Skipping order #{$order->name} — status is '{$currentStatusDesc}', not Sin Stock.");
+            return false;
+        }
 
-                    \App\Models\OrderActivityLog::create([
-                        'order_id'    => $order->id,
-                        'user_id'     => auth()->id() ?? 1,
-                        'action'      => 'status_changed',
-                        'description' => "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.",
-                        'properties'  => [
-                            'old_status' => $sinStockStatus->id,
-                            'new_status' => $restoredStatus->id,
-                            'restored'   => true,
-                        ]
-                    ]);
+        if (!$order->hasStock()) return false; // Still missing stock, skip
 
-                    \App\Models\OrderUpdate::create([
-                        'order_id' => $order->id,
-                        'user_id'  => auth()->id() ?? 1,
-                        'message'  => "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
-                    ]);
+        // ⭐ CASO 1: Tiene status anterior guardado → restaurarlo directamente
+        if ($order->previous_status_id) {
+            $restoredStatus = \App\Models\Status::find($order->previous_status_id);
 
-                    $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
-                    event(new \App\Events\OrderUpdated($order));
-                    continue;
+            // Safety: don't restore to a terminal status (edge case)
+            if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
+                $order->status_id          = $restoredStatus->id;
+                $order->previous_status_id = null; // Limpiar después de restaurar
+                // 🔥 FIX: Solo liberar a la especialista si la orden originalmente venía del pool general (Nuevo)
+                if ($restoredStatus->description === 'Nuevo') {
+                    $order->agent_id = null;
                 }
-            }
+                $order->save();
 
-            // ⭐ CASO 2: No hay status anterior guardado → intentar auto-asignar
-            $order->agent_id = null; // 🔥 FIX: Liberar a la especialista antes de auto-asignar
+                \App\Models\OrderActivityLog::create([
+                    'order_id'    => $order->id,
+                    'user_id'     => auth()->id() ?? 1,
+                    'action'      => 'status_changed',
+                    'description' => "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.",
+                    'properties'  => [
+                        'old_status' => $sinStockStatus->id,
+                        'new_status' => $restoredStatus->id,
+                        'restored'   => true,
+                    ]
+                ]);
+
+                \App\Models\OrderUpdate::create([
+                    'order_id' => $order->id,
+                    'user_id'  => auth()->id() ?? 1,
+                    'message'  => "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
+                ]);
+
+                $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+                event(new \App\Events\OrderUpdated($order));
+                return true;
+            }
+        }
+
+        // ⭐ CASO 2: No hay status anterior guardado → intentar auto-asignar
+        $order->agent_id = null; // 🔥 FIX: Liberar a la especialista antes de auto-asignar
+        $order->save();
+
+        $agent = app(\App\Services\Assignment\AssignOrderService::class)->assignOne($order);
+
+        if ($agent && $assignedStatus) {
+            $order->status_id          = $assignedStatus->id;
+            $order->previous_status_id = null;
             $order->save();
 
-            $agent = $assignService->assignOne($order);
+            \App\Models\OrderActivityLog::create([
+                'order_id'    => $order->id,
+                'user_id'     => auth()->id() ?? 1,
+                'action'      => 'status_changed',
+                'description' => "Stock recuperado. Orden asignada automáticamente a {$agent->names}.",
+                'properties'  => [
+                    'old_status' => $sinStockStatus->id,
+                    'new_status' => $assignedStatus->id,
+                    'agent_id'   => $agent->id,
+                ]
+            ]);
+        } elseif ($nuevoStatus) {
+            // ⭐ CASO 3: Sin agente disponible → Nuevo
+            $order->status_id          = $nuevoStatus->id;
+            $order->previous_status_id = null;
+            $order->agent_id           = null; // 🔥 FIX: Liberar a la especialista
+            $order->save();
 
-            if ($agent && $assignedStatus) {
-                $order->status_id          = $assignedStatus->id;
-                $order->previous_status_id = null;
-                $order->save();
-
-                \App\Models\OrderActivityLog::create([
-                    'order_id'    => $order->id,
-                    'user_id'     => auth()->id() ?? 1,
-                    'action'      => 'status_changed',
-                    'description' => "Stock recuperado. Orden asignada automáticamente a {$agent->names}.",
-                    'properties'  => [
-                        'old_status' => $sinStockStatus->id,
-                        'new_status' => $assignedStatus->id,
-                        'agent_id'   => $agent->id,
-                    ]
-                ]);
-            } elseif ($nuevoStatus) {
-                // ⭐ CASO 3: Sin agente disponible → Nuevo
-                $order->status_id          = $nuevoStatus->id;
-                $order->previous_status_id = null;
-                $order->agent_id           = null; // 🔥 FIX: Liberar a la especialista
-                $order->save();
-
-                \App\Models\OrderActivityLog::create([
-                    'order_id'    => $order->id,
-                    'user_id'     => auth()->id() ?? 1,
-                    'action'      => 'status_changed',
-                    'description' => "Stock recuperado. Orden movida a 'Nuevo' (sin agente disponible).",
-                    'properties'  => [
-                        'old_status' => $sinStockStatus->id,
-                        'new_status' => $nuevoStatus->id,
-                    ]
-                ]);
-            }
-
-            $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
-            event(new \App\Events\OrderUpdated($order));
+            \App\Models\OrderActivityLog::create([
+                'order_id'    => $order->id,
+                'user_id'     => auth()->id() ?? 1,
+                'action'      => 'status_changed',
+                'description' => "Stock recuperado. Orden movida a 'Nuevo' (sin agente disponible).",
+                'properties'  => [
+                    'old_status' => $sinStockStatus->id,
+                    'new_status' => $nuevoStatus->id,
+                ]
+            ]);
         }
+
+        $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
+        event(new \App\Events\OrderUpdated($order));
+        return true;
     }
 }
