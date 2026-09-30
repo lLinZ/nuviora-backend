@@ -281,6 +281,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::put('/roster',            [MyGroupController::class, 'roster']);
         Route::get('/reassign/preview',  [MyGroupController::class, 'reassignPreview']);
         Route::post('/reassign',         [MyGroupController::class, 'reassign']);
+        Route::put('/orders/{order}/agent', [MyGroupController::class, 'moveOrder']); // un pedido suelto (H4)
     });
     Route::put('/settings/strategy',             [SettingsController::class, 'updateStrategy']);
     Route::get('/business/today', [BusinessController::class, 'status']); // estado actual

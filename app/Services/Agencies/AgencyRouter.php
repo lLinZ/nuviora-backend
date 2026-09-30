@@ -245,7 +245,7 @@ class AgencyRouter
                 ? "La orden esperaba agencia: ya no se espera y pasó a {$agency->names}, por su % (todas las de {$info['city']} siguen en su máximo)."
                 : "Una agencia de {$info['city']} liberó cupo: la orden pasó a {$agency->names}.");
             try {
-                $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+                $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: {$order->number_label}"));
             } catch (\Throwable $e) {
                 report($e);
             }

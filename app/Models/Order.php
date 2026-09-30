@@ -110,6 +110,12 @@ class Order extends Model
 
 
 
+    /** El número para textos, con un solo "#": Shopify ya manda el nombre con "#" (#7849) y los manuales no (MAN-26729). */
+    public function getNumberLabelAttribute(): string
+    {
+        return '#' . ltrim((string) $this->name, '#');
+    }
+
     public function getVesPriceAttribute()
     {
         $rate = (float) Setting::get('rate_binance_usd', 0);

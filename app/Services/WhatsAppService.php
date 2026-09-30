@@ -197,6 +197,36 @@ class WhatsAppService
     }
 
     /**
+     * El motivo de un rechazo de Meta en español (hallazgo H11). Meta lo manda en inglés; se traducen
+     * los códigos más comunes y, si no se conoce, se deja el original. El log guarda siempre la respuesta entera.
+     */
+    public static function explainError(?array $error, ?string $fallback = null): string
+    {
+        $code = (int) ($error['code'] ?? 0);
+        $text = (string) ($error['message'] ?? '');
+        $detail = strtolower($text . ' ' . ($error['error_data']['details'] ?? ''));
+
+        $reason = match (true) {
+            $code === 190 => 'el acceso de la empresa a WhatsApp venció o no es válido. Avisa al administrador.',
+            $code === 131053 => 'no pudo procesar el archivo (formato o tamaño no válido).',
+            $code === 131052 => 'no pudo descargar el archivo.',
+            $code === 131047 => 'pasaron más de 24 horas desde el último mensaje del cliente; solo se le puede escribir con una plantilla.',
+            $code === 131026 => 'no se pudo entregar: el número no tiene WhatsApp o no puede recibir este mensaje.',
+            $code === 131051 => 'no admite este tipo de mensaje.',
+            $code === 131056 => 'demasiados mensajes seguidos a este número. Espera un momento y reintenta.',
+            in_array($code, [4, 80007, 130429, 131048], true) => 'está limitando los envíos. Intenta de nuevo en unos minutos.',
+            in_array($code, [368, 131031], true) => 'la cuenta de WhatsApp de la empresa está bloqueada. Avisa al administrador.',
+            in_array($code, [1, 2, 131000, 131016], true) => 'tuvo un error temporal. Intenta de nuevo.',
+            $code === 100 && (str_contains($detail, 'size') || str_contains($detail, 'too large')) => 'el archivo pesa más de lo que WhatsApp permite.',
+            $code === 100 && (str_contains($detail, 'type') || str_contains($detail, 'mime') || str_contains($detail, 'file')) => 'no acepta ese tipo de archivo.',
+            in_array($code, [100, 131008, 131009], true) => 'falta un dato del envío o no es válido.',
+            default => null,
+        };
+
+        return $reason ?? ($text !== '' ? $text : (string) $fallback);
+    }
+
+    /**
      * Upload media to Meta WhatsApp servers.
      */
     /**
@@ -222,7 +252,7 @@ class WhatsAppService
                 return $response->json();
             }
 
-            $this->lastError = $response->json('error.message') ?? $response->body();
+            $this->lastError = self::explainError($response->json('error'), $response->body());
             Log::error('WhatsApp Media Upload Error', [
                 'status' => $response->status(),
                 'body' => $response->body()
@@ -268,7 +298,7 @@ class WhatsAppService
                 return $response->json();
             }
 
-            $this->lastError = $response->json('error.message') ?? $response->body();
+            $this->lastError = self::explainError($response->json('error'), $response->body());
             Log::error('WhatsApp Media Send Error', [
                 'type' => $type,
                 'status' => $response->status(),

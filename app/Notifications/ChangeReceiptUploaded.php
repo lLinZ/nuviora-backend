@@ -41,7 +41,7 @@ class ChangeReceiptUploaded extends Notification
         return [
             'order_id' => $this->order->id,
             'order_name' => $this->order->name,
-            'message' => "El comprobante del vuelto de la orden #{$this->order->name} ya está disponible.",
+            'message' => "El comprobante del vuelto de la orden {$this->order->number_label} ya está disponible.",
             'action' => 'change_receipt_uploaded',
         ];
     }
@@ -51,7 +51,7 @@ class ChangeReceiptUploaded extends Notification
         return new \Illuminate\Notifications\Messages\BroadcastMessage([
             'order_id' => $this->order->id,
             'order_name' => $this->order->name,
-            'message' => "El comprobante del vuelto de la orden #{$this->order->name} ya está disponible.",
+            'message' => "El comprobante del vuelto de la orden {$this->order->number_label} ya está disponible.",
             'type' => 'success',
         ]);
     }

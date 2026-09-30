@@ -20,7 +20,7 @@ class OrderNovedadTimeoutNotification extends Notification
     public function __construct($order)
     {
         $this->order = $order;
-        $this->message = "Orden #{$order->name} lleva 10 min en Novedad sin solución.";
+        $this->message = "Orden {$order->number_label} lleva 10 min en Novedad sin solución.";
     }
 
     /**

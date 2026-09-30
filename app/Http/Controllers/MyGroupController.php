@@ -447,6 +447,57 @@ class MyGroupController extends Controller
         ]);
     }
 
+    /**
+     * La Líder pasa un pedido suelto de una vendedora de su grupo a otra (hallazgo H4, spec §5.1).
+     * Mismas reglas que en bloque: solo dentro del grupo, nunca a sí misma y solo en los estados en
+     * que el pedido sigue en manos de la vendedora. El estado no cambia.
+     */
+    public function moveOrder(Request $request, Order $order): JsonResponse
+    {
+        $group = $this->group();
+        $data = $request->validate(['to_agent_id' => 'required|integer']);
+        $members = $this->members($group);
+        $fromId = (int) $order->agent_id;
+        $toId = (int) $data['to_agent_id'];
+
+        if (!$fromId || !$members->has($fromId)) {
+            return response()->json(['status' => false, 'message' => 'Ese pedido no es de una vendedora de tu grupo.'], 403);
+        }
+        $status = $order->status?->description;
+        if (!in_array($status, BulkReassignService::REASSIGNABLE_STATUSES, true)) {
+            return response()->json(['status' => false, 'message' => "En \"{$status}\" el pedido ya no está en manos de la vendedora: no se puede pasar."], 422);
+        }
+        if ($toId === Auth::id()) {
+            return response()->json(['status' => false, 'message' => 'No puedes pasarte pedidos a ti misma.'], 422);
+        }
+        if ($toId === $fromId) {
+            return response()->json(['status' => false, 'message' => 'El pedido ya es de esa vendedora.'], 422);
+        }
+        if (!$this->targets($members)->has($toId)) {
+            return response()->json(['status' => false, 'message' => 'Elige una vendedora de tu grupo.'], 422);
+        }
+
+        $moved = $this->bulk->moveOne($order->id, $fromId, $toId, Auth::id());
+        if (!$moved) {
+            return response()->json(['status' => false, 'message' => 'Alguien movió este pedido mientras tanto. Vuelve a abrirlo.'], 409);
+        }
+
+        $from = $this->name($members->get($fromId)->user);
+        $to = $members->get($toId)->user;
+        $this->log("La Líder {$this->name(Auth::user())} pasó el pedido {$moved->number_label} de {$from} a {$this->name($to)} ({$group->name}).");
+        try {
+            $to->notify(new \App\Notifications\OrderAssignedNotification($moved, "Nueva orden asignada: {$moved->number_label}"));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Aviso de pedido pasado por la Líder: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => "Pedido pasado a {$this->name($to)}",
+            'order' => $moved->load('agent', 'status', 'client'),
+        ]);
+    }
+
     /* ─────────────────────────── helpers ─────────────────────────── */
 
     /**

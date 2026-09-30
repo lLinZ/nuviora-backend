@@ -50,7 +50,7 @@ class CheckDelayedOrders extends Command
             $order->delayed_notification_sent_at = now();
             $order->save();
 
-            $this->info("Orden #{$order->name} notificada como retrasada.");
+            $this->info("Orden {$order->number_label} notificada como retrasada.");
         }
     }
 }

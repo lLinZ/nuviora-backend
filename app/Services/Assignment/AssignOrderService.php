@@ -120,7 +120,7 @@ class AssignOrderService
                     $order->status_id = $sinStockStatus->id;
                     $order->save();
                     event(new \App\Events\OrderUpdated($order));
-                    \Illuminate\Support\Facades\Log::warning("AssignOrderService: Orden #{$order->name} sin stock. No se asigna a ninguna vendedora.");
+                    \Illuminate\Support\Facades\Log::warning("AssignOrderService: Orden {$order->number_label} sin stock. No se asigna a ninguna vendedora.");
                 }
                 return null; // ⛔ No asignar
             }
@@ -156,7 +156,7 @@ class AssignOrderService
             // 🔔 Notificar al agente asignado
             try {
                 // Importar o usar namespace completo
-                $ord->agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Nueva orden asignada: #{$ord->name}"));
+                $ord->agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Nueva orden asignada: {$ord->number_label}"));
             } catch (\Exception $e) {
                 // Ignorar error de notificación
             }
@@ -340,7 +340,7 @@ class AssignOrderService
                 // 🤫 SILENCED: No individual notification during mass backlog processing to avoid spam.
                 // $agent = \App\Models\User::find($agentId);
                 // if ($agent) {
-                //     $agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Se te ha asignado la orden #{$ord->name}"));
+                //     $agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Se te ha asignado la orden {$ord->number_label}"));
                 // }
 
                 $count++;

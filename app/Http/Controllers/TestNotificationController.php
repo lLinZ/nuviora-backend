@@ -25,19 +25,19 @@ class TestNotificationController extends Controller
 
         switch ($type) {
             case 'assigned':
-                $user->notify(new OrderAssignedNotification($order, "[TEST] Se te ha asignado la orden #{$order->name}"));
+                $user->notify(new OrderAssignedNotification($order, "[TEST] Se te ha asignado la orden {$order->number_label}"));
                 break;
             case 'novelty':
-                $user->notify(new OrderNoveltyNotification($order, "[TEST] Nueva novedad reportada en orden #{$order->name}"));
+                $user->notify(new OrderNoveltyNotification($order, "[TEST] Nueva novedad reportada en orden {$order->number_label}"));
                 break;
             case 'resolved':
-                $user->notify(new OrderNoveltyResolvedNotification($order, "[TEST] Novedad solucionada en orden #{$order->name}"));
+                $user->notify(new OrderNoveltyResolvedNotification($order, "[TEST] Novedad solucionada en orden {$order->number_label}"));
                 break;
             case 'scheduled':
-                $user->notify(new OrderScheduledNotification($order, "[TEST] Orden #{$order->name} programada para más tarde"));
+                $user->notify(new OrderScheduledNotification($order, "[TEST] Orden {$order->number_label} programada para más tarde"));
                 break;
             case 'waiting':
-                $user->notify(new OrderWaitingLocationNotification($order, "[TEST] La orden #{$order->name} lleva más de 30 min esperando ubicación."));
+                $user->notify(new OrderWaitingLocationNotification($order, "[TEST] La orden {$order->number_label} lleva más de 30 min esperando ubicación."));
                 break;
             default:
                 return response()->json(['message' => 'Tipo inválido'], 400);

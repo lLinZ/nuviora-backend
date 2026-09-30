@@ -552,27 +552,27 @@ class OrderController extends Controller
             // $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
             // foreach ($admins as $admin) {
             //     /** @var \App\Models\User $admin */
-            //     $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden #{$order->name}"));
+            //     $admin->notify(new OrderNoveltyNotification($order, "Nueva novedad reportada en orden {$order->number_label}"));
             // }
             
             // 🔔 NEW: Notificar también a la vendedora asignada
             if ($order->agent) {
-                $order->agent->notify(new OrderNoveltyNotification($order, "Atención: Se ha reportado una novedad en tu orden #{$order->name}"));
+                $order->agent->notify(new OrderNoveltyNotification($order, "Atención: Se ha reportado una novedad en tu orden {$order->number_label}"));
             }
         }
 
         // Si cambia a Novedad Solucionada
         if ($statusNovedadSoluciodada && (int)$statusNovedadSoluciodada->id === (int)$request->status_id && (int)$oldStatusId !== (int)$statusNovedadSoluciodada->id) {
             if ($order->agent) {
-                $order->agent->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+                $order->agent->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden {$order->number_label}"));
             }
             // Notify Agency as well (Prevent double notification if logged user is the agency)
             if ($order->agency && $order->agency_id !== Auth::id()) {
-                $order->agency->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+                $order->agency->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden {$order->number_label}"));
             } elseif ($order->agency_id) {
                 $agencyUser = User::find($order->agency_id);
                 if ($agencyUser) {
-                    $agencyUser->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden #{$order->name}"));
+                    $agencyUser->notify(new OrderNoveltyResolvedNotification($order, "Novedad solucionada en orden {$order->number_label}"));
                 }
             }
         }
@@ -583,7 +583,7 @@ class OrderController extends Controller
             // $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
             // foreach ($admins as $admin) {
             //     /** @var \App\Models\User $admin */
-            //     $admin->notify(new OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
+            //     $admin->notify(new OrderScheduledNotification($order, "Orden {$order->number_label} programada para más tarde"));
             // }
         }
 
@@ -652,7 +652,7 @@ class OrderController extends Controller
                      try {
                          // Evitar auto-notificación si la misma agencia está haciendo la acción (ej. mover a En ruta)
                          if (\Illuminate\Support\Facades\Auth::id() !== $agency->id) {
-                             $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+                             $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: {$order->number_label}"));
                          }
                      } catch (\Exception $e) {
                          \Log::error('Error sending agency notification: ' . $e->getMessage());
@@ -695,7 +695,7 @@ class OrderController extends Controller
                 // 🔔 NOTIFICAR A ADMINS/GERENTES DE ORDEN ENTREGADA
                 $admins = User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
                 foreach ($admins as $admin) {
-                    $admin->notify(new \App\Notifications\OrderDeliveredNotification($order, "Orden entregada: #{$order->name}"));
+                    $admin->notify(new \App\Notifications\OrderDeliveredNotification($order, "Orden entregada: {$order->number_label}"));
                 }
             }
         }
@@ -1434,7 +1434,7 @@ class OrderController extends Controller
 
         // 🔔 Notify Agent
         try {
-            $agent->notify(new OrderAssignedNotification($order, "Nueva orden asignada: #{$order->name}"));
+            $agent->notify(new OrderAssignedNotification($order, "Nueva orden asignada: {$order->number_label}"));
         } catch (\Exception $e) {
             // Log error but don't fail the request
             \Log::error('Error sending notification: ' . $e->getMessage());
@@ -1988,7 +1988,7 @@ class OrderController extends Controller
             $webhooks->triggerOrderStatus($order);
             $assigner->assignOne($order);
         } catch (\Throwable $e) {
-            \Log::error("Cierre de alta manual falló para #{$order->name}: " . $e->getMessage());
+            \Log::error("Cierre de alta manual falló para {$order->number_label}: " . $e->getMessage());
         }
     }
 
@@ -2153,7 +2153,7 @@ class OrderController extends Controller
                  $agent = User::find($agentId);
                  if ($agent) {
                      try {
-                         $agent->notify(new OrderAssignedNotification($order, "Nueva orden manual asignada: #{$order->name}"));
+                         $agent->notify(new OrderAssignedNotification($order, "Nueva orden manual asignada: {$order->number_label}"));
                      } catch (\Exception $e) {}
                  }
             }
@@ -2168,7 +2168,7 @@ class OrderController extends Controller
                 //     /** @var \App\Models\User $admin */
                 //      // Don't notify if the admin created it themselves (optional preference, but usually good to notify other admins)
                 //      if ($admin->id !== $currentUser->id) { 
-                //         $admin->notify(new OrderAssignedNotification($order, "Nueva orden manual creada: #{$order->name} por {$currentUser->names}"));
+                //         $admin->notify(new OrderAssignedNotification($order, "Nueva orden manual creada: {$order->number_label} por {$currentUser->names}"));
                 //      }
                 // }
             } catch (\Exception $e) {}
@@ -3031,7 +3031,7 @@ class OrderController extends Controller
             'order_id' => $returnOrder->id,
             'user_id' => $user->id,
             'action' => 'order_created',
-            'description' => "Orden de {$labelLabel} creada desde orden #{$order->name}",
+            'description' => "Orden de {$labelLabel} creada desde orden {$order->number_label}",
             'properties' => [
                 'parent_order_id' => $order->id,
                 'created_by' => $user->names ?? $user->email,

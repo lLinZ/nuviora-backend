@@ -156,7 +156,7 @@ class AgencyRoutingController extends Controller
                 'description' => "Reasignada en bloque de {$agency->names} a {$to->names}" . ($force ? ' (sin respetar el máximo)' : '') . '.',
             ]);
             try {
-                $to->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
+                $to->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: {$order->number_label}"));
             } catch (\Throwable $e) {
                 report($e);
             }

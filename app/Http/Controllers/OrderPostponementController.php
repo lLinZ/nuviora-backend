@@ -67,7 +67,7 @@ class OrderPostponementController extends Controller
              // Notificar a Admins/Gerentes
              // $admins = \App\Models\User::whereHas('role', function($q){ $q->whereIn('description', ['Admin', 'Gerente']); })->get();
              // foreach ($admins as $admin) {
-             //     $admin->notify(new \App\Notifications\OrderScheduledNotification($order, "Orden #{$order->name} programada para más tarde"));
+             //     $admin->notify(new \App\Notifications\OrderScheduledNotification($order, "Orden {$order->number_label} programada para más tarde"));
              // }
         }
 

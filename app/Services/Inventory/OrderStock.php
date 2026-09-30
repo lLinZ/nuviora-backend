@@ -128,7 +128,7 @@ class OrderStock
                     'reference_type' => self::DEFECTIVE_REFERENCE,
                     'reference_id' => $order->id,
                     'user_id' => Auth::id(),
-                    'notes' => "Pieza retirada en el cambio #{$order->name}: defectuosa, pendiente de revisión",
+                    'notes' => "Pieza retirada en el cambio {$order->number_label}: defectuosa, pendiente de revisión",
                 ]);
                 $count += $qty;
             }
@@ -240,7 +240,7 @@ class OrderStock
             'reference_type' => self::REFERENCE,
             'reference_id' => $order->id,
             'user_id' => Auth::id(),
-            'notes' => ($op['type'] === 'out' ? 'Salida' : 'Reingreso') . " por la orden #{$order->name} ({$status})",
+            'notes' => ($op['type'] === 'out' ? 'Salida' : 'Reingreso') . " por la orden {$order->number_label} ({$status})",
         ]);
     }
 

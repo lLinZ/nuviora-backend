@@ -94,6 +94,23 @@ class User extends Authenticatable
     }
 
     /**
+     * Apellido, teléfono y dirección son opcionales en los formularios, pero las columnas no aceptan
+     * NULL: crear un usuario sin apellido daba error 500. Se guardan vacíos.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (User $user) {
+            foreach (['surnames', 'phone', 'address'] as $field) {
+                // En un usuario ya guardado solo si se puso a NULL: uno leído con pocas columnas no se toca
+                $present = !$user->exists || array_key_exists($field, $user->getAttributes());
+                if ($present && $user->getAttribute($field) === null) {
+                    $user->setAttribute($field, '');
+                }
+            }
+        });
+    }
+
+    /**
      * The attributes that are mass assignable.
      *
      * @var list<string>

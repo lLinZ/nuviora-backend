@@ -45,15 +45,15 @@ class CheckWaitingLocationOrders extends Command
         // })->get();
 
         foreach ($orders as $order) {
-            $this->info("Notificando orden #{$order->name}");
+            $this->info("Notificando orden {$order->number_label}");
             
             // Notificar al vendedor asignado
             if ($order->agent) {
-                $order->agent->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "La orden #{$order->name} lleva más de 30 min esperando ubicación. Por favor, contacta al cliente."));
+                $order->agent->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "La orden {$order->number_label} lleva más de 30 min esperando ubicación. Por favor, contacta al cliente."));
             } else {
                 // Si no tiene vendedor (caso raro), notificar a admins
                 // foreach ($admins as $admin) {
-                //     $admin->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "Orden #{$order->name} (sin vendedor) lleva más de 30 min esperando ubicación."));
+                //     $admin->notify(new \App\Notifications\OrderWaitingLocationNotification($order, "Orden {$order->number_label} (sin vendedor) lleva más de 30 min esperando ubicación."));
                 // }
             }
         }

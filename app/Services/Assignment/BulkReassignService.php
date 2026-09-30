@@ -21,6 +21,9 @@ class BulkReassignService
 {
     public const STRATEGY = 'BulkReassign';
 
+    /** La Líder pasa un pedido suelto (hallazgo H4, spec §5.1). */
+    public const STRATEGY_SINGLE = 'LeaderMove';
+
     /** Estados en los que la orden todavía está en manos de la vendedora. */
     public const REASSIGNABLE_STATUSES = [
         OrderStatus::NUEVO,
@@ -127,5 +130,37 @@ class BulkReassignService
         }
 
         return $result;
+    }
+
+    /**
+     * Pasa una sola orden de $fromId a $toId sin cambiarle el estado. Devuelve null si mientras tanto
+     * alguien ya la movió.
+     */
+    public function moveOne(int $orderId, int $fromId, int $toId, ?int $byUserId): ?Order
+    {
+        $moved = DB::transaction(function () use ($orderId, $fromId, $toId, $byUserId) {
+            $order = Order::where('id', $orderId)->lockForUpdate()->first();
+            if (!$order || (int) $order->agent_id !== $fromId) {
+                return null;
+            }
+            $order->agent_id = $toId; // el observer registra el cambio y sincroniza el CRM
+            $order->save();
+
+            OrderAssignmentLog::create([
+                'order_id' => $order->id,
+                'agent_id' => $toId,
+                'strategy' => self::STRATEGY_SINGLE,
+                'assigned_by' => $byUserId,
+                'meta' => ['reason' => 'leader_move', 'from_agent_id' => $fromId],
+            ]);
+
+            return $order;
+        });
+
+        if ($moved) {
+            event(new \App\Events\OrderUpdated($moved));
+        }
+
+        return $moved;
     }
 }

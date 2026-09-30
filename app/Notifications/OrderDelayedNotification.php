@@ -20,7 +20,7 @@ class OrderDelayedNotification extends Notification
     public function __construct($order, $message = null)
     {
         $this->order = $order;
-        $this->message = $message ?? "Orden #{$order->name} retrasada (Excedió 45 min)";
+        $this->message = $message ?? "Orden {$order->number_label} retrasada (Excedió 45 min)";
     }
 
     /**

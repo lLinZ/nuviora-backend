@@ -371,9 +371,9 @@ class ShopifyWebhookController extends Controller
                 ->map(fn ($op) => $op->title . ($op->size ? " ({$op->size})" : ''))
                 ->join(', ');
 
-            $alertMessage = "🚨 Orden #{$order->name} recibida SIN STOCK. Productos sin existencias: {$productNames}. La orden está en espera de suministro.";
+            $alertMessage = "🚨 Orden {$order->number_label} recibida SIN STOCK. Productos sin existencias: {$productNames}. La orden está en espera de suministro.";
 
-            \Log::warning("Shopify webhook: Orden #{$order->name} sin stock. Productos: {$productNames}");
+            \Log::warning("Shopify webhook: Orden {$order->number_label} sin stock. Productos: {$productNames}");
 
             // Notificar a todos los Admins y Gerentes
             try {
@@ -385,7 +385,7 @@ class ShopifyWebhookController extends Controller
                 //     $admin->notify(new OrderNoStockNotification($order, $alertMessage));
                 // }
             } catch (\Exception $e) {
-                \Log::error("Error enviando notificación de Sin Stock para orden #{$order->name}: " . $e->getMessage());
+                \Log::error("Error enviando notificación de Sin Stock para orden {$order->number_label}: " . $e->getMessage());
             }
 
             // 📡 Broadcast para actualizar el Kanban en tiempo real
@@ -399,7 +399,7 @@ class ShopifyWebhookController extends Controller
             try {
                 $assignService->assignOne($order);
             } catch (\Throwable $e) {
-                \Log::error("Error en auto-asignación Sin Stock para #{$order->name}: " . $e->getMessage());
+                \Log::error("Error en auto-asignación Sin Stock para {$order->number_label}: " . $e->getMessage());
             }
 
             return response()->json(['success' => true, 'warning' => 'no_stock'], 200);
@@ -411,7 +411,7 @@ class ShopifyWebhookController extends Controller
             try {
                 app(\App\Services\WebhookService::class)->triggerOrderStatus($order);
             } catch (\Throwable $e) {
-                \Log::error("Webhook 'Nuevo' falló para #{$order->name}: " . $e->getMessage());
+                \Log::error("Webhook 'Nuevo' falló para {$order->number_label}: " . $e->getMessage());
             }
         }
 

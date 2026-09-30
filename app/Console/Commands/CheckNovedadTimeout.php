@@ -57,7 +57,7 @@ class CheckNovedadTimeout extends Command
                 $order->timestamps = false; // Prevent updated_at from changing to not reset the timer
                 $order->save();
 
-                $this->info("Notificación enviada para orden #{$order->name} al vendedor {$order->agent->names}");
+                $this->info("Notificación enviada para orden {$order->number_label} al vendedor {$order->agent->names}");
             }
         }
 

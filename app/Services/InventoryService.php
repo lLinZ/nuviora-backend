@@ -524,7 +524,7 @@ class InventoryService
         $order->refresh();
         $currentStatusDesc = $order->status?->description;
         if ($currentStatusDesc !== 'Sin Stock' || in_array($currentStatusDesc, $terminalStatuses)) {
-            \Log::info("InventoryService: Skipping order #{$order->name} — status is '{$currentStatusDesc}', not Sin Stock.");
+            \Log::info("InventoryService: Skipping order {$order->number_label} — status is '{$currentStatusDesc}', not Sin Stock.");
             return false;
         }
 
