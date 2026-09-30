@@ -312,7 +312,7 @@ class OrderController extends Controller
 
             // 🚚 Reparto entre las agencias de la ciudad (tareas 3c y 6): al pasar a "Asignar a agencia",
             // si nadie eligió la agencia a mano, se elige por % y cupo entre las que tienen stock.
-            // Si todas las que tienen stock están llenas, la orden espera en "Pendiente de asignación a agencia".
+            // Si todas las que tienen stock están llenas, no espera: se elige igual por % (Fran, 2026-09-30).
             // Sin ciudad, sin agencias configuradas o sin stock en ninguna, sigue como antes.
             if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
                 && (int) $order->status_id !== (int) $statusAsignarAgencia->id && !$order->agency_locked) {
@@ -320,15 +320,9 @@ class OrderController extends Controller
                 [$agency, $reason, $info] = $router->pick($order);
                 if ($agency) {
                     $router->place($order, $agency);
-                } elseif ($reason === 'todas_llenas') {
-                    $router->queue($order, $info['city']);
-                    event(new \App\Events\OrderUpdated($order));
-
-                    return response()->json([
-                        'status' => true,
-                        'message' => "Todas las agencias de {$info['city']} están llenas: la orden queda en \"" . OrderStatus::PENDIENTE_AGENCIA . '" y se asigna sola cuando alguna libere cupo.',
-                        'order' => $order->fresh(['status', 'client', 'agent', 'agency', 'deliverer']),
-                    ]);
+                    if (!empty($info['todas_llenas'])) {
+                        $router->noteOverflow($order, $agency, $info['city']);
+                    }
                 }
             }
 
@@ -733,10 +727,7 @@ class OrderController extends Controller
             return [];
         }
         $inUse = $order->products->pluck('variant_id')->filter()->all();
-        $warehouseId = $order->resolveStockWarehouseId();
-        $stock = $warehouseId
-            ? InventoryVariant::where('warehouse_id', $warehouseId)->whereIn('variant_id', $variants->pluck('id'))->get()->keyBy('variant_id')
-            : collect();
+        $available = $this->variantAvailability($order, $variants->pluck('id')->all());
 
         return $variants->filter(fn ($v) => $v->is_active || in_array($v->id, $inUse))
             ->groupBy('product_id')
@@ -744,9 +735,75 @@ class OrderController extends Controller
                 'id' => $v->id,
                 'title' => $v->title,
                 'is_active' => $v->is_active,
-                'available' => (int) ($stock->get($v->id)?->useful_stock ?? 0),
+                'available' => $available[$v->id] ?? 0,
             ])->values()->all())
             ->all();
+    }
+
+    /**
+     * Lo que hay de cada variante para esta orden: lo del almacén de su agencia y, si la orden todavía puede
+     * cambiar de agencia (nadie la eligió a mano y no sacó stock), lo de la agencia de su ciudad que más tiene,
+     * porque la orden se pasa sola a esa (AgencyRouter::provisional). Una orden la entrega una sola agencia.
+     *
+     * @return array<int, int>  variant_id => piezas útiles
+     */
+    private function variantAvailability(Order $order, array $variantIds): array
+    {
+        $warehouseIds = array_filter([$order->resolveStockWarehouseId()]);
+        if (!$order->agency_locked && !$order->isStockDeducted()) {
+            $city = app(\App\Services\Agencies\AgencyRouter::class)->cityFor($order);
+            if ($city) {
+                $cityWarehouses = app(\App\Services\Inventory\CityStock::class)->warehousesByCity($city->id)[$city->id] ?? [];
+                $warehouseIds = array_values(array_unique(array_merge($warehouseIds, $cityWarehouses)));
+            }
+        }
+        if ($warehouseIds === [] || $variantIds === []) {
+            return [];
+        }
+
+        return InventoryVariant::whereIn('warehouse_id', $warehouseIds)->whereIn('variant_id', $variantIds)->get()
+            ->groupBy('variant_id')
+            ->map(fn ($rows) => (int) $rows->max('useful_stock'))
+            ->all();
+    }
+
+    /**
+     * Alta manual (Fran, 2026-09-30): no se puede pedir una talla que no hay en la ciudad del cliente. Una sola
+     * agencia entrega la orden, así que alguna de la ciudad tiene que tener, ella sola, esas piezas. Una ciudad
+     * sin agencias configuradas no se revisa aquí (la orden queda en "Sin Stock" si hace falta).
+     */
+    private function unavailableVariantMessage(?string $province, array $products): ?string
+    {
+        $city = $province ? City::whereRaw('UPPER(name) = ?', [mb_strtoupper(trim($province))])->first() : null;
+        if (!$city) {
+            return null;
+        }
+        $cityStock = app(\App\Services\Inventory\CityStock::class);
+        $warehouseIds = $cityStock->warehousesByCity($city->id)[$city->id] ?? [];
+        if ($warehouseIds === []) {
+            return null;
+        }
+
+        $needed = [];
+        foreach ($products as $p) {
+            if (!empty($p['variant_id'])) {
+                $needed[(int) $p['variant_id']] = ($needed[(int) $p['variant_id']] ?? 0) + (int) $p['quantity'];
+            }
+        }
+        foreach ($needed as $variantId => $quantity) {
+            $have = $cityStock->bestVariantStock($warehouseIds, $variantId);
+            if ($have >= $quantity) {
+                continue;
+            }
+            $variant = ProductVariant::with('product:id,title')->find($variantId);
+            $what = "la talla {$variant->title} de {$variant->product?->title}";
+
+            return $have > 0
+                ? "De {$what} solo hay {$have} en {$city->name}."
+                : "No hay {$what} en {$city->name}: elige otra talla.";
+        }
+
+        return null;
     }
 
     /** "Camisa - M" → "Camisa - L". Si el nombre no traía la talla, se la agrega. */
@@ -1753,6 +1810,19 @@ class OrderController extends Controller
         
         $newQuantity = $request->filled('quantity') ? $request->input('quantity') : $oldQuantity;
         $newPrice = $request->filled('price') ? $request->input('price') : $oldPrice;
+
+        // Fran (2026-09-30): la vendedora no puede marcar una talla que no hay. El Admin sí, para corregir.
+        if ($newVariant && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+            $have = $this->variantAvailability($order, [$newVariant->id])[$newVariant->id] ?? 0;
+            if ($have < (int) $newQuantity) {
+                return response()->json([
+                    'status' => false,
+                    'message' => $have > 0
+                        ? "De la talla {$newVariant->title} solo hay {$have}: no alcanza para este pedido."
+                        : "No hay talla {$newVariant->title} disponible: elige otra.",
+                ], 422);
+            }
+        }
         
         if ($oldQuantity == $newQuantity && $oldPrice == $newPrice && !$newVariant) {
              return response()->json([
@@ -1829,9 +1899,11 @@ class OrderController extends Controller
             'message' => $message,
         ]);
 
-        // Tarea 4: si estaba "Sin Stock" y con la talla nueva ya alcanza, sale sola (como cuando entra stock)
+        // Tarea 4: si estaba "Sin Stock" y con la talla nueva ya alcanza, sale sola (como cuando entra stock).
+        // Si la talla la tiene otra agencia de su ciudad, la orden pasa antes a esa.
         if ($newVariant) {
             try {
+                app(\App\Services\Agencies\AgencyRouter::class)->provisional($order->fresh('products'));
                 app(\App\Services\InventoryService::class)->recoverFromSinStock($order->fresh());
             } catch (\Throwable $e) {
                 report($e);
@@ -1886,13 +1958,23 @@ class OrderController extends Controller
             $webhooks = app(\App\Services\WebhookService::class);
             $assigner = app(\App\Services\Assignment\AssignOrderService::class);
 
+            $order->load('products');
+            app(\App\Services\Agencies\AgencyRouter::class)->provisional($order); // otra agencia de la ciudad con stock (tarea 3c)
+
+            // Fran (2026-09-30): aunque ya traiga vendedora, sin stock queda en "Sin Stock", como uno de Shopify
             if ($order->agent_id) {
+                if ($order->getStockDetails()['has_warning']) {
+                    $sinStock = Status::where('description', \App\Constants\OrderStatus::SIN_STOCK)->first();
+                    if ($sinStock && $order->status_id !== $sinStock->id) {
+                        $order->status_id = $sinStock->id;
+                        $order->save();
+                    }
+                    return;
+                }
                 $webhooks->triggerOrderStatus($order);
                 return;
             }
 
-            $order->load('products');
-            app(\App\Services\Agencies\AgencyRouter::class)->provisional($order); // otra agencia de la ciudad con stock (tarea 3c)
             if ($order->getStockDetails()['has_warning']) {
                 $sinStock = Status::where('description', \App\Constants\OrderStatus::SIN_STOCK)->first();
                 if ($sinStock && $order->status_id !== $sinStock->id) {
@@ -1936,6 +2018,9 @@ class OrderController extends Controller
                 $title = Product::whereKey($p['id'])->value('title');
                 return response()->json(['status' => false, 'message' => "Elige la talla o variante de {$title}."], 422);
             }
+        }
+        if ($message = $this->unavailableVariantMessage($request->client_province, $request->products)) {
+            return response()->json(['status' => false, 'message' => $message], 422);
         }
 
         \DB::beginTransaction();
@@ -2379,9 +2464,13 @@ class OrderController extends Controller
     {
         // 🔒 LOCK: No editar si está Entregado (excepto supervisión).
         // 🔥 Tarea 9: los vueltos se pagan DESPUÉS de entregar, así que el Gerente también debe poder
-        // subir el comprobante (antes solo el Admin podía cerrar un vuelto).
+        // subir el comprobante (antes solo el Admin podía cerrar un vuelto). Fran (2026-09-30): y la líder,
+        // que paga los vueltos de su grupo.
         $order->load(['status']);
-        if ($order->status && $order->status->description === 'Entregado' && !in_array(\Illuminate\Support\Facades\Auth::user()->role?->description, ['Admin', 'Gerente', 'Master'], true)) {
+        $me = \Illuminate\Support\Facades\Auth::user();
+        $ledGroup = $order->agent_id ? $me->ledGroup() : null;
+        $leadsSeller = $ledGroup && $ledGroup->openMembers()->where('user_id', $order->agent_id)->exists();
+        if ($order->status && $order->status->description === 'Entregado' && !$leadsSeller && !in_array($me->role?->description, ['Admin', 'Gerente', 'Master'], true)) {
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
 
@@ -2583,11 +2672,18 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * Vueltos por pagar. Fran (2026-09-30): cada líder paga los vueltos de los clientes de su grupo y
+     * administración le transfiere el total. La Líder ve solo los de su grupo; Admin y Gerente ven todos,
+     * con el grupo y la líder de cada uno para saber cuánto transferirle a cada una.
+     */
     public function getPendingVueltos(Request $request)
     {
         $user = Auth::user();
-        if (!$user->role || !in_array($user->role->description, ['Admin', 'Gerente'])) {
-            return response()->json(['status' => false, 'message' => 'No autorizado'], 403);
+        $isSupervisor = in_array($user->role?->description, ['Admin', 'Gerente', 'Master'], true);
+        $group = $isSupervisor ? null : $user->ledGroup();
+        if (!$isSupervisor && !$group) {
+            return response()->json(['status' => false, 'message' => 'Solo administración o la líder de un grupo ven los vueltos.'], 403);
         }
 
         $orders = Order::whereHas('status', function($q) {
@@ -2603,13 +2699,40 @@ class OrderController extends Controller
                          ->orWhere('change_receipt', '');
                   });
             })
+            ->when($group, fn ($q) => $q->whereIn('agent_id', $group->openMembers()->pluck('user_id')))
             ->with(['client', 'agent', 'agency', 'changeExtra'])
             ->orderBy('updated_at', 'desc')
             ->get();
 
+        // Grupo y líder de la vendedora de cada orden (su grupo de hoy)
+        $memberships = \App\Models\SalesGroupMember::open()
+            ->whereIn('user_id', $orders->pluck('agent_id')->filter()->unique())
+            ->whereHas('group', fn ($q) => $q->where('is_active', true))
+            ->with('group:id,name')
+            ->get()
+            ->keyBy('user_id');
+        $leaders = \App\Models\SalesGroupMember::open()
+            ->where('role', \App\Models\SalesGroupMember::ROLE_LEADER)
+            ->whereIn('sales_group_id', $memberships->pluck('sales_group_id')->unique())
+            ->with('user:id,names,surnames')
+            ->get()
+            ->keyBy('sales_group_id');
+        foreach ($orders as $order) {
+            $m = $memberships->get($order->agent_id);
+            $leader = $m ? $leaders->get($m->sales_group_id)?->user : null;
+            $order->setAttribute('vuelto_group', $m ? [
+                'id' => $m->group->id,
+                'name' => $m->group->name,
+                'leader_id' => $leader?->id,
+                'leader' => $leader ? trim($leader->names . ' ' . $leader->surnames) : null,
+            ] : null);
+        }
+
         return response()->json([
             'status' => true,
-            'orders' => $orders
+            'scope' => $group ? 'group' : 'all',
+            'group' => $group ? ['id' => $group->id, 'name' => $group->name] : null,
+            'orders' => $orders,
         ]);
     }
     public function updateLogistics(Request $request, Order $order)

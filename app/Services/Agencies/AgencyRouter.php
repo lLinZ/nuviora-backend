@@ -7,7 +7,6 @@ use App\Models\AssignmentPool;
 use App\Models\City;
 use App\Models\Order;
 use App\Models\OrderActivityLog;
-use App\Models\OrderUpdate;
 use App\Models\Status;
 use App\Models\User;
 use App\Models\Warehouse;
@@ -26,8 +25,11 @@ use Illuminate\Support\Facades\DB;
  *  - Entre las candidatas se elige con el mismo Smooth Weighted Round Robin que para las vendedoras,
  *    con el % de cada agencia en esa ciudad (todas sin % = parejo). El saldo se guarda por ciudad y
  *    con bloqueo; quien sale por cupo vuelve sin compensación.
- *  - Si todas las que tienen stock están llenas, la orden espera en "Pendiente de asignación a agencia"
- *    y processWaiting() la reparte en cuanto alguna libera cupo.
+ *  - Si todas las que tienen stock están llenas, la orden no espera: se reparte entre ellas con los
+ *    mismos % (Fran, 2026-09-30). En cuanto una libera cupo, vuelve a recibir solo la que tiene cupo.
+ *    La reasignación en bloque sí respeta el máximo (salvo que el Admin lo fuerce).
+ *  - "Pendiente de asignación a agencia" queda para las órdenes que ya esperaban: processWaiting()
+ *    las reparte en la siguiente pasada.
  * Una agencia elegida a mano (orders.agency_locked) no se cambia.
  */
 class AgencyRouter
@@ -67,10 +69,12 @@ class AgencyRouter
      * Elige agencia para la orden. No cambia la orden; sí avanza el saldo del reparto de la ciudad.
      *
      * @param  array<int>|null  $onlyIds  limitar a estas agencias (reasignación en bloque).
+     * @param  bool  $overflow  si todas las que tienen stock están llenas, elegir igual entre ellas
+     *         (detalle 'todas_llenas' => true). Sin esto, el motivo es todas_llenas.
      * @return array{0: ?User, 1: string, 2: array}  agencia, motivo (ok, sin_ciudad, sin_agencias,
      *         sin_stock, todas_llenas) y detalle.
      */
-    public function pick(Order $order, ?array $onlyIds = null, bool $ignoreCapacity = false): array
+    public function pick(Order $order, ?array $onlyIds = null, bool $ignoreCapacity = false, bool $overflow = true): array
     {
         $city = $this->cityFor($order);
         if (!$city) {
@@ -90,8 +94,12 @@ class AgencyRouter
         }
 
         $available = $ignoreCapacity ? $withStock : $withStock->filter(fn (User $a) => $this->hasRoom($a, $order))->values();
-        if ($available->isEmpty()) {
+        $saturated = $available->isEmpty();
+        if ($saturated && !$overflow) {
             return [null, 'todas_llenas', ['city' => $city->name]];
+        }
+        if ($saturated) {
+            $available = $withStock;
         }
 
         $weights = $this->weights($available);
@@ -110,7 +118,13 @@ class AgencyRouter
             return $picked;
         });
 
-        return [$available->firstWhere('id', $picked), 'ok', ['city' => $city->name, 'city_id' => $city->id]];
+        return [$available->firstWhere('id', $picked), 'ok', ['city' => $city->name, 'city_id' => $city->id, 'todas_llenas' => $saturated]];
+    }
+
+    /** Deja en el historial que la orden se asignó con todas las agencias de la ciudad en su máximo. */
+    public function noteOverflow(Order $order, User $agency, string $cityName): void
+    {
+        $this->activity($order, "Todas las agencias de {$cityName} con el producto estaban en su máximo: la orden no espera y se asignó a {$agency->names}, por su %.");
     }
 
     /** Pone la agencia en la orden (sin guardar): su almacén, su ciudad y el costo de envío de la ciudad. */
@@ -197,19 +211,6 @@ class AgencyRouter
     }
 
     /**
-     * Pasa la orden a "Pendiente de asignación a agencia" porque todas las agencias de su ciudad
-     * están llenas. Se guarda enseguida.
-     */
-    public function queue(Order $order, string $cityName): void
-    {
-        $order->status_id = Status::where('description', OrderStatus::PENDIENTE_AGENCIA)->value('id');
-        $order->save();
-        $text = "Todas las agencias de {$cityName} están en su máximo de órdenes: la orden espera y se asigna sola cuando alguna libere cupo.";
-        $this->activity($order, $text);
-        OrderUpdate::create(['order_id' => $order->id, 'user_id' => Auth::id() ?? $this->systemUserId(), 'message' => "⏳ {$text}"]);
-    }
-
-    /**
      * Reparte las órdenes que esperan agencia (la más vieja primero). Una ciudad que sigue llena no
      * se vuelve a revisar en la misma pasada. Devuelve cuántas se asignaron.
      */
@@ -240,7 +241,9 @@ class AgencyRouter
             $order->status_id = $targetId;
             $order->received_at ??= now();
             $order->save();
-            $this->activity($order, "Una agencia de {$info['city']} liberó cupo: la orden pasó a {$agency->names}.");
+            $this->activity($order, !empty($info['todas_llenas'])
+                ? "La orden esperaba agencia: ya no se espera y pasó a {$agency->names}, por su % (todas las de {$info['city']} siguen en su máximo)."
+                : "Una agencia de {$info['city']} liberó cupo: la orden pasó a {$agency->names}.");
             try {
                 $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: #{$order->name}"));
             } catch (\Throwable $e) {
@@ -282,10 +285,5 @@ class AgencyRouter
         } catch (\Throwable $e) {
             report($e);
         }
-    }
-
-    private function systemUserId(): ?int
-    {
-        return User::whereHas('role', fn ($q) => $q->where('description', 'Admin'))->value('id');
     }
 }

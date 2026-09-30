@@ -288,6 +288,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::post('/business/open',   [BusinessController::class, 'open']);   // abrir jornada (ahora)
     Route::post('/business/close',  [BusinessController::class, 'close']);  // cerrar jornada (ahora)
     Route::get('/inventory', [InventoryController::class, 'index']);
+    Route::get('/inventory/by-city', [\App\Http\Controllers\CityStockController::class, 'index']); // por ciudad, sin agencias (Fran 30-sep)
     Route::put('/inventory/{product}/adjust', [InventoryController::class, 'adjust']); // IN/OUT
 
     Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']); // para repartidor

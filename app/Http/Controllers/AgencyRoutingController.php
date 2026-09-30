@@ -139,7 +139,7 @@ class AgencyRoutingController extends Controller
         $byAgency = [];
         $skipped = [];
         foreach (Order::where('agency_id', $agency->id)->whereIn('status_id', $data['status_ids'])->orderBy('id')->get() as $order) {
-            [$to, $reason] = $this->router->pick($order, $targets, $force);
+            [$to, $reason] = $this->router->pick($order, $targets, $force, false);
             if (!$to) {
                 $skipped[$reason] = ($skipped[$reason] ?? 0) + 1;
                 continue;

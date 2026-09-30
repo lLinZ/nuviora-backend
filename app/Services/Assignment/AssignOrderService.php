@@ -94,7 +94,7 @@ class AssignOrderService
                     [$agentId, $strategy, $meta] = $this->pickAgent($noStockAgents, $ord);
 
                     if (!$agentId) {
-                        // Todas llegaron a su máximo: queda en Sin Stock sin vendedora hasta que alguna libere cupo.
+                        // Nadie con peso en el roster: queda en Sin Stock sin vendedora.
                         if ($ord->status_id !== $statusId) {
                             $ord->update(['status_id' => $statusId]);
                             event(new \App\Events\OrderUpdated($ord));
@@ -134,7 +134,7 @@ class AssignOrderService
             if ($ord->agent_id) return $ord->agent;
 
             [$agentId, $strategy, $meta] = $this->pickAgent($agents, $ord);
-            if (!$agentId) return null; // todas llenas: se queda en "Nuevo" y la toma orders:assign-waiting
+            if (!$agentId) return null; // nadie con peso en el roster (si todas están llenas, igual se reparte)
 
             // Buscar status "Asignado a Vendedor"
             $statusAsignado = Status::where('description', OrderStatus::ASIGNADO_VENDEDOR)->first();

@@ -17,6 +17,8 @@ use Illuminate\Support\Facades\DB;
  * Reparto ponderado por grupos (fase 4). Une el roster del día con la base de datos:
  * saca a quien llegó a su máximo, arma los pesos del "modelo de porciones" y elige con el
  * Smooth Weighted Round Robin, guardando el saldo de cada tienda con bloqueo.
+ * Si todas llegaron a su máximo, la orden no espera: se reparte entre todas con los mismos %
+ * (Fran, 2026-09-30); en cuanto una tiene cupo, vuelve a recibir solo quien tiene cupo.
  *
  * Sin grupos, % ni máximos configurados, reparte parejo por turnos, igual que antes.
  */
@@ -52,8 +54,9 @@ class WeightedAssigner
         }
 
         $available = $this->withCapacity($ids);
-        if ($available === []) {
-            return [null, ['reason' => 'todas_llenas']];
+        $saturated = $available === [];
+        if ($saturated) {
+            $available = $ids;
         }
 
         $weights = EffectiveWeights::compute($this->groupInfo($available));
@@ -61,13 +64,13 @@ class WeightedAssigner
             return [null, ['reason' => 'sin_peso']];
         }
 
-        return DB::transaction(function () use ($pool, $weights) {
+        return DB::transaction(function () use ($pool, $weights, $saturated) {
             $row = $this->lockPool($pool);
             [$picked, $current] = SmoothWeightedRoundRobin::pick($weights, $row->state ?? []);
             $row->state = $current;
             $row->save();
 
-            return [$picked, ['pool' => $pool, 'weights' => $this->shares($weights)]];
+            return [$picked, ['pool' => $pool, 'weights' => $this->shares($weights)] + ($saturated ? ['todas_llenas' => true] : [])];
         });
     }
 
@@ -126,10 +129,10 @@ class WeightedAssigner
         return $candidates;
     }
 
-    /** Pesos efectivos normalizados (lo que debería recibir cada una, de 0 a 1). */
+    /** Pesos efectivos normalizados (lo que debería recibir cada una, de 0 a 1). Todas llenas = todas. */
     public function targetShares(array $ids): array
     {
-        return $this->shares(EffectiveWeights::compute($this->groupInfo($this->withCapacity($ids))));
+        return $this->shares(EffectiveWeights::compute($this->groupInfo($this->withCapacity($ids) ?: $ids)));
     }
 
     /** Borra el saldo de una tienda, o de todas: el reparto vuelve a empezar desde cero. */
