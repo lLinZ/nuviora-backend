@@ -24,6 +24,7 @@ use App\Notifications\OrderNoveltyNotification;
 use App\Notifications\OrderNoveltyResolvedNotification;
 use App\Notifications\OrderScheduledNotification;
 use App\Constants\OrderStatus;
+use App\Services\Orders\ChangeRules;
 
 class OrderController extends Controller
 {
@@ -76,6 +77,8 @@ class OrderController extends Controller
         // 4. Sincronizar automáticamente el resumen de vuelto en la tabla órdenes
         $order->cash_received = $totalPaid;
         $order->change_amount = max(0, $totalPaid - $order->current_total_price);
+        // Con los pagos nuevos, quién da el vuelto y cuánto (si ya no hay vuelto, la agencia no pone nada)
+        ChangeRules::normalize($order);
         $order->save();
 
         return response()->json(['status' => true, 'order' => $order->fresh('payments')]);
@@ -243,6 +246,7 @@ class OrderController extends Controller
                 'change_payment_details' => $order->change_payment_details,
                 'change_receipt'        => $order->change_receipt,
                 'change_receipt_url'    => $order->change_receipt_url,
+                'change_approval'       => ChangeRules::approvalState($order),
                 'postponements'         => $order->postponements,
                 'is_return'             => $order->is_return,
                 'is_exchange'           => $order->is_exchange,
@@ -387,6 +391,12 @@ class OrderController extends Controller
                     $order->change_amount_agency = $request->change_amount_agency;
                 }
             }
+            ChangeRules::normalize($order);
+        }
+
+        // Fran (2026-10-03): con pago mixto, el vuelto de la agencia se valida antes de que la orden siga
+        if (in_array($newStatusRaw, ChangeRules::BLOCKED_STATUSES, true) && ($pending = ChangeRules::pendingMessage($order))) {
+            return response()->json(['status' => false, 'message' => $pending, 'change_approval_pending' => true], 422);
         }
 
         // 1.5. 🛑 VALIDACIÓN PARA NOVEDAD SOLUCIONADA 🛑
@@ -1510,6 +1520,9 @@ class OrderController extends Controller
         if ($missing = $this->missingSizeMessage($order)) {
             return response()->json(['status' => false, 'message' => $missing], 422);
         }
+        if ($pending = ChangeRules::pendingMessage($order)) {
+            return response()->json(['status' => false, 'message' => $pending, 'change_approval_pending' => true], 422);
+        }
 
         // 🧩 Resolver agencia. Aceptamos un USUARIO con rol Agencia (caso normal del
         // diálogo y de stock_elsewhere.agency_user_id). Por compatibilidad, si el id
@@ -2352,6 +2365,7 @@ class OrderController extends Controller
         $hasChangeInfo = (abs($changeAmount) < 0.01) || ($changeAmount > 0 && !empty($order->change_covered_by));
         $hasLocation = !empty($order->location) && trim($order->location) !== '';
         $missingSize = $this->missingSizeMessage($order) !== null;
+        $changePending = ChangeRules::needsApproval($order);
         
         // Public statuses for sellers (don't require payment validation)
         $sellerPublicStatuses = array_map('strtolower', array_map('trim', [
@@ -2362,7 +2376,7 @@ class OrderController extends Controller
         
         // Filter statuses based on all validations
         $availableStatuses = $allStatuses->filter(function($status) use (
-            $order, $userRole, $currentStatus, $allowedByFlow, $hasPayments, $hasChangeInfo, $hasLocation, $sellerPublicStatuses, $missingSize
+            $order, $userRole, $currentStatus, $allowedByFlow, $hasPayments, $hasChangeInfo, $hasLocation, $sellerPublicStatuses, $missingSize, $changePending
         ) {
             $statusName = $status->description;
             
@@ -2373,6 +2387,11 @@ class OrderController extends Controller
 
             // Sin talla no se ofrece "Asignar a agencia" (Fran, 2026-10-03)
             if ($statusName === 'Asignar a agencia' && $missingSize) {
+                return false;
+            }
+
+            // Pago mixto con vuelto de la agencia sin validar (Fran, 2026-10-03)
+            if ($changePending && in_array($statusName, ChangeRules::BLOCKED_STATUSES, true)) {
                 return false;
             }
             
@@ -2429,6 +2448,7 @@ class OrderController extends Controller
                 'has_payments' => $hasPayments,
                 'has_change_info' => $hasChangeInfo,
                 'has_location' => $hasLocation,
+                'change_approval_pending' => $changePending,
             ]
         ]);
     }
@@ -2749,16 +2769,19 @@ class OrderController extends Controller
                 }
             }
 
+            // Fran (2026-10-03): con pago solo digital la agencia no da vuelto; si el cliente pagó de más, lo devuelve la empresa
+            if (in_array($request->change_covered_by, ['agency', 'partial'], true)
+                && ChangeRules::paymentKind($order->payments()->get(['method', 'amount'])) === 'digital') {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'El cliente pagó todo digital (pago móvil, transferencia…): la agencia no da vuelto. Si pagó de más, lo devuelve la empresa.',
+                ], 422);
+            }
+
             $order->fill($validated);
 
-            // Sincronización explicita de montos por si acaso
-            if ($order->change_covered_by === 'company') {
-                $order->change_amount_company = $order->change_amount;
-                $order->change_amount_agency = 0;
-            } elseif ($order->change_covered_by === 'agency') {
-                $order->change_amount_agency = $order->change_amount;
-                $order->change_amount_company = 0;
-            }
+            // Montos de la agencia y la empresa de acuerdo con el vuelto y los pagos
+            ChangeRules::normalize($order);
 
             $order->save();
 
@@ -2783,10 +2806,15 @@ class OrderController extends Controller
                 'changeExtra_relation' => $refreshedOrder->changeExtra
             ]);
 
+            $approval = ChangeRules::approvalState($refreshedOrder);
+
             return response()->json([
                 'status' => true,
-                'message' => 'Vuelto actualizado correctamente',
-                'order' => $refreshedOrder
+                'message' => $approval['pending']
+                    ? 'Vuelto guardado. Como el cliente pagó en efectivo y digital, administración tiene que validar el vuelto de la agencia antes de que la orden siga.'
+                    : 'Vuelto actualizado correctamente',
+                'order' => $refreshedOrder,
+                'change_approval' => $approval,
             ]);
         } catch (\Exception $e) {
             \Log::error("UpdateChange Error: " . $e->getMessage());

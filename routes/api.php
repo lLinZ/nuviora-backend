@@ -184,6 +184,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     // Auto-asignación masiva de logística
     Route::post('/orders/auto-assign-logistics', [OrderController::class, 'autoAssignAllLogistics']);
     Route::get('/orders/pending-vueltos', [OrderController::class, 'getPendingVueltos']);
+    // Vueltos de la agencia con pago mixto: administración los valida (Fran, 2026-10-03)
+    Route::get('/orders/change-approvals', [\App\Http\Controllers\OrderChangeApprovalController::class, 'index'])->middleware('role:Admin,Gerente,Master');
+    Route::post('/orders/{order}/change-approval', [\App\Http\Controllers\OrderChangeApprovalController::class, 'decide'])->middleware('role:Admin,Gerente,Master');
     Route::get('/orders/lite/counts', [OrderController::class, 'liteCounts']); // Lite Dashboard Counts
     // Ver detalles de la orden
     Route::get('/orders/{order}', [OrderController::class, 'show']);

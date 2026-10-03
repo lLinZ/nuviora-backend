@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Services\Orders\ChangeRules;
 use App\Models\Order;
 use App\Models\Role;
 use App\Models\Setting;
@@ -102,20 +103,18 @@ class EarningsService
                 'leaders_usd'    => round($leaders->sum('amount_usd'), 2),
                 'all_usd'        => $allEarnings->sum('amount_usd') + $leaders->sum('amount_usd'),
             ],
-            'orders_with_change' => Order::with('agency')
+            'orders_with_change' => Order::with(['agency', 'payments'])
                 ->whereBetween('updated_at', [$from->startOfDay(), $to->endOfDay()])
                 ->where('change_amount', '>', 0)
                 ->when($agencyId, fn($q) => $q->where('agency_id', $agencyId)) // cada agencia, solo sus vueltos
                 ->get()
                 ->map(function($o) {
                     $amtCompany = (float) $o->change_amount_company;
-                    $amtAgency  = (float) $o->change_amount_agency;
+                    $amtAgency  = ChangeRules::agencyChange($o, $o->payments);
 
                     // Fallback para órdenes viejas o mal guardadas
                     if ($o->change_covered_by === 'company' && $amtCompany <= 0) {
                         $amtCompany = (float) $o->change_amount;
-                    } elseif ($o->change_covered_by === 'agency' && $amtAgency <= 0) {
-                        $amtAgency = (float) $o->change_amount;
                     }
 
                     return [
@@ -224,14 +223,11 @@ class EarningsService
                         ->sum();
                     
                     // 2. VUELTOS (Change in VES) -> Siempre Tasa Euro
-                    $changeUSD = ($o->change_method_agency === 'DOLARES_EFECTIVO') ? (float) $o->change_amount_agency : 0;
-                    $changeVES_usd_equivalent = ($o->change_method_agency === 'BOLIVARES_EFECTIVO') ? (float) $o->change_amount_agency : 0;
-
-                    // Fallback para montos no especificados
-                    if ($o->change_covered_by === 'agency' && $o->change_amount_agency <= 0) {
-                        if ($o->change_method_agency === 'DOLARES_EFECTIVO') $changeUSD = (float) $o->change_amount;
-                        if ($o->change_method_agency === 'BOLIVARES_EFECTIVO') $changeVES_usd_equivalent = (float) $o->change_amount;
-                    }
+                    // Solo lo que la agencia pudo dar del efectivo que cobró: si el vuelto ya es 0 o el pago fue
+                    // digital, no se descuenta aunque haya quedado un monto viejo guardado (Fran, 2026-10-03)
+                    $agencyChange = ChangeRules::agencyChange($o, $o->payments);
+                    $changeUSD = ($o->change_method_agency === 'DOLARES_EFECTIVO') ? $agencyChange : 0;
+                    $changeVES_usd_equivalent = ($o->change_method_agency === 'BOLIVARES_EFECTIVO') ? $agencyChange : 0;
 
                     // Tasa Euro para el vuelto
                     $rateEuroForChange = $o->payments->firstWhere('eur_rate', '>', 0)?->eur_rate 
