@@ -53,23 +53,8 @@ class CommissionService
                 ]);
             }
 
-            // 3. GERENTE (0.50 USD)
-            $manager = User::whereHas('role', function ($q) {
-                $q->where('description', '=', 'Gerente');
-            })->first();
-
-            if ($manager) {
-                Earning::firstOrCreate([
-                    'order_id'  => $order->id,
-                    'user_id'   => $manager->id,
-                    'role_type' => 'gerente',
-                ], [
-                    'amount_usd'   => 0.50,
-                    'currency'     => $currency,
-                    'rate'         => $rate,
-                    'earning_date' => $earningDate,
-                ]);
-            }
+            // 3. GERENTE: ya no hay (Fran, 2026-10-02, se quitó el rol y su comisión de 0,50 USD por orden).
+            //    Lo que ya cobró queda en el historial de ganancias.
 
             // 4. UPSELLS ($1.00 por cada PRODUCTO adicional)
             // Borramos los previos para sincronizar si se agregaron/quitaron items

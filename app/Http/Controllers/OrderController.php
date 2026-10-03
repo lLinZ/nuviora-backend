@@ -204,6 +204,9 @@ class OrderController extends Controller
                 'current_total_price'  => $order->current_total_price ?? $computedTotal,
                 'refunded_usd'         => (float) $order->refunded_usd, // devoluciones = reembolsos (tarea 3b)
                 'client'               => $order->client,
+                // La ficha los necesita para mostrar el chat interno (Fran, 2026-10-02: no se veía en la orden)
+                'agent_id'             => $order->agent_id,
+                'agency_id'            => $order->agency_id,
                 'agent'                => (\Illuminate\Support\Facades\Auth::user()->role?->description === 'Agencia') ? null : $order->agent,
                 'status'               => $order->status,
                 'products'             => $items,
@@ -312,7 +315,7 @@ class OrderController extends Controller
 
             // 🚚 Reparto entre las agencias de la ciudad (tareas 3c y 6): al pasar a "Asignar a agencia",
             // si nadie eligió la agencia a mano, se elige por % y cupo entre las que tienen stock.
-            // Si todas las que tienen stock están llenas, no espera: se elige igual por % (Fran, 2026-09-30).
+            // Si todas las que tienen stock están llenas, no espera: se elige en partes iguales (Fran, 2026-09-30 y 2026-10-02).
             // Sin ciudad, sin agencias configuradas o sin stock en ninguna, sigue como antes.
             if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
                 && (int) $order->status_id !== (int) $statusAsignarAgencia->id && !$order->agency_locked) {
@@ -749,14 +752,7 @@ class OrderController extends Controller
      */
     private function variantAvailability(Order $order, array $variantIds): array
     {
-        $warehouseIds = array_filter([$order->resolveStockWarehouseId()]);
-        if (!$order->agency_locked && !$order->isStockDeducted()) {
-            $city = app(\App\Services\Agencies\AgencyRouter::class)->cityFor($order);
-            if ($city) {
-                $cityWarehouses = app(\App\Services\Inventory\CityStock::class)->warehousesByCity($city->id)[$city->id] ?? [];
-                $warehouseIds = array_values(array_unique(array_merge($warehouseIds, $cityWarehouses)));
-            }
-        }
+        $warehouseIds = $this->availabilityWarehouses($order);
         if ($warehouseIds === [] || $variantIds === []) {
             return [];
         }
@@ -765,6 +761,54 @@ class OrderController extends Controller
             ->groupBy('variant_id')
             ->map(fn ($rows) => (int) $rows->max('useful_stock'))
             ->all();
+    }
+
+    /** Almacenes donde se mira el stock de una orden: el de su agencia y, si todavía puede cambiar, los de su ciudad. */
+    private function availabilityWarehouses(Order $order): array
+    {
+        $warehouseIds = array_filter([$order->resolveStockWarehouseId()]);
+        if (!$order->agency_locked && !$order->isStockDeducted()) {
+            $city = app(\App\Services\Agencies\AgencyRouter::class)->cityFor($order);
+            if ($city) {
+                $cityWarehouses = app(\App\Services\Inventory\CityStock::class)->warehousesByCity($city->id)[$city->id] ?? [];
+                $warehouseIds = array_values(array_unique(array_merge($warehouseIds, $cityWarehouses)));
+            }
+        }
+
+        return $warehouseIds;
+    }
+
+    /**
+     * Upsell (Fran, 2026-10-02): no se puede agregar un producto, ni una talla, que no hay para esta orden.
+     * Lo que la orden ya lleva de eso y todavía no salió del almacén también tiene que alcanzar.
+     */
+    private function upsellStockProblem(Order $order, Product $product, ?ProductVariant $variant, int $quantity): ?string
+    {
+        $warehouseIds = $this->availabilityWarehouses($order);
+        if ($warehouseIds === []) {
+            return null; // orden sin agencia ni ciudad con agencias: no hay dónde mirar (queda en "Sin Stock" si falta)
+        }
+        $already = $order->isStockDeducted() ? 0 : (int) $order->products()
+            ->where('product_id', $product->id)
+            ->when($variant, fn ($q) => $q->where('variant_id', $variant->id))
+            ->sum('quantity');
+        $name = $product->showable_name ?: $product->title;
+
+        if ($variant) {
+            $have = $this->variantAvailability($order, [$variant->id])[$variant->id] ?? 0;
+            $what = "la talla {$variant->title} de {$name}";
+        } else {
+            $have = (int) \App\Models\Inventory::whereIn('warehouse_id', $warehouseIds)->where('product_id', $product->id)->get()->max('useful_stock');
+            $what = $name;
+        }
+        if ($have >= $quantity + $already) {
+            return null;
+        }
+        $free = max(0, $have - $already);
+
+        return $free > 0
+            ? "De {$what} solo queda" . ($free === 1 ? '' : 'n') . " {$free} para este pedido: no alcanza para {$quantity}."
+            : "No hay {$what} disponible para este pedido: no se puede agregar.";
     }
 
     /**
@@ -1602,6 +1646,40 @@ class OrderController extends Controller
             'order' => $orderArray,
         ]);
     }
+    /**
+     * GET ?product_id=: lo que hay de ese producto, y de cada talla, para agregarlo a esta orden como upsell
+     * (Fran, 2026-10-02). La pantalla marca "no hay" y no deja elegir esas tallas. null = no se puede saber
+     * (orden sin agencia, o devolución/cambio): no se limita.
+     */
+    public function upsellOptions(Request $request, Order $order)
+    {
+        $request->validate(['product_id' => 'required|exists:products,id']);
+        $product = Product::findOrFail($request->product_id);
+        $variants = $product->variants()->where('is_active', true)->orderBy('id')->get();
+        $warehouseIds = $this->availabilityWarehouses($order);
+        $checked = $warehouseIds !== [] && !($order->is_return || $order->is_exchange);
+
+        $already = fn (?int $variantId) => $order->isStockDeducted() ? 0 : (int) $order->products()
+            ->where('product_id', $product->id)
+            ->when($variantId, fn ($q) => $q->where('variant_id', $variantId))
+            ->sum('quantity');
+        $byVariant = $checked ? $this->variantAvailability($order, $variants->pluck('id')->all()) : [];
+        $productStock = $checked && $variants->isEmpty()
+            ? (int) \App\Models\Inventory::whereIn('warehouse_id', $warehouseIds)->where('product_id', $product->id)->get()->max('useful_stock')
+            : 0;
+
+        return response()->json([
+            'status'    => true,
+            'checked'   => $checked,
+            'available' => $checked && $variants->isEmpty() ? max(0, $productStock - $already(null)) : null,
+            'variants'  => $variants->map(fn ($v) => [
+                'id'        => $v->id,
+                'title'     => $v->title,
+                'available' => $checked ? max(0, ($byVariant[$v->id] ?? 0) - $already($v->id)) : null,
+            ])->values(),
+        ]);
+    }
+
     public function addUpsell(Request $request, Order $order)
     {
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
@@ -1665,6 +1743,12 @@ class OrderController extends Controller
         }
 
         $productPrice = $isReturnOrExchange ? 0 : $request->price;
+
+        // Fran (2026-10-02): no se agrega un upsell, ni una talla, que no hay. En una devolución o un cambio
+        // la pieza vuelve (o la revisa el cambio al salir), así que ahí no se mira.
+        if (!$isReturnOrExchange && ($problem = $this->upsellStockProblem($order, $product, $variant, (int) $request->quantity))) {
+            return response()->json(['status' => false, 'message' => $problem], 422);
+        }
 
         OrderProduct::create([
             'order_id' => $order->id,

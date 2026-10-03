@@ -40,6 +40,10 @@ class AuthController extends Controller
 
         // 🔒 Un Gerente no puede crear cuentas de Admin o Master
         $newRole = Role::find($request->role_id);
+        // El rol Gerente se quitó (Fran, 2026-10-02): no se crean cuentas nuevas con él
+        if ($newRole?->description === 'Gerente') {
+            return response()->json(['status' => false, 'message' => 'El rol Gerente ya no se usa. Elige otro rol.'], 422);
+        }
         if (in_array($newRole?->description, self::PROTECTED_ROLES, true) && !$this->isSuperAdmin(Auth::user())) {
             return response()->json(['status' => false, 'message' => 'No tienes permisos para crear usuarios con ese rol'], 403);
         }

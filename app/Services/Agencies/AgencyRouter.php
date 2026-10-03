@@ -25,8 +25,9 @@ use Illuminate\Support\Facades\DB;
  *  - Entre las candidatas se elige con el mismo Smooth Weighted Round Robin que para las vendedoras,
  *    con el % de cada agencia en esa ciudad (todas sin % = parejo). El saldo se guarda por ciudad y
  *    con bloqueo; quien sale por cupo vuelve sin compensación.
- *  - Si todas las que tienen stock están llenas, la orden no espera: se reparte entre ellas con los
- *    mismos % (Fran, 2026-09-30). En cuanto una libera cupo, vuelve a recibir solo la que tiene cupo.
+ *  - Si todas las que tienen stock están llenas, la orden no espera: se reparte entre ellas en partes
+ *    iguales, sin mirar el % (Fran, 2026-09-30 y 2026-10-02). En cuanto una libera cupo, vuelve a
+ *    recibir solo la que tiene cupo, con su %.
  *    La reasignación en bloque sí respeta el máximo (salvo que el Admin lo fuerce).
  *  - "Pendiente de asignación a agencia" queda para las órdenes que ya esperaban: processWaiting()
  *    las reparte en la siguiente pasada.
@@ -106,9 +107,14 @@ class AgencyRouter
         if ($weights === []) {
             return [null, 'sin_agencias', ['city' => $city->name]];
         }
+        if ($saturated) {
+            // Todas llenas: partes iguales entre las que reciben con su % (una en 0 % sigue fuera)
+            $weights = \App\Services\Assignment\WeightedAssigner::evenly($weights);
+        }
 
-        $picked = DB::transaction(function () use ($city, $weights) {
-            $pool = "city:{$city->id}";
+        $picked = DB::transaction(function () use ($city, $weights, $saturated) {
+            // Con todas llenas el turno se lleva aparte, para no descompensar el reparto por % de siempre
+            $pool = "city:{$city->id}" . ($saturated ? ':llenas' : '');
             AssignmentPool::query()->insertOrIgnore(['key' => $pool, 'created_at' => now(), 'updated_at' => now()]);
             $row = AssignmentPool::where('key', $pool)->lockForUpdate()->firstOrFail();
             [$picked, $current] = SmoothWeightedRoundRobin::pick($weights, $row->state ?? []);
@@ -124,7 +130,7 @@ class AgencyRouter
     /** Deja en el historial que la orden se asignó con todas las agencias de la ciudad en su máximo. */
     public function noteOverflow(Order $order, User $agency, string $cityName): void
     {
-        $this->activity($order, "Todas las agencias de {$cityName} con el producto estaban en su máximo: la orden no espera y se asignó a {$agency->names}, por su %.");
+        $this->activity($order, "Todas las agencias de {$cityName} con el producto estaban en su máximo: la orden no espera y se asignó a {$agency->names} (con todas llenas se reparten en partes iguales).");
     }
 
     /** Pone la agencia en la orden (sin guardar): su almacén, su ciudad y el costo de envío de la ciudad. */
@@ -242,7 +248,7 @@ class AgencyRouter
             $order->received_at ??= now();
             $order->save();
             $this->activity($order, !empty($info['todas_llenas'])
-                ? "La orden esperaba agencia: ya no se espera y pasó a {$agency->names}, por su % (todas las de {$info['city']} siguen en su máximo)."
+                ? "La orden esperaba agencia: ya no se espera y pasó a {$agency->names} (todas las de {$info['city']} siguen en su máximo; se reparten en partes iguales)."
                 : "Una agencia de {$info['city']} liberó cupo: la orden pasó a {$agency->names}.");
             try {
                 $agency->notify(new OrderAssignedNotification($order, "Nueva orden asignada a tu agencia: {$order->number_label}"));

@@ -181,27 +181,30 @@ class BusinessService
                 // Obtenemos órdenes para separar las que se cancelan de las que se resetean
                 $ordersToProcess = Order::where('shop_id', $shopId)
                     ->whereIn('status_id', $resetStatusIds)
-                    ->get(['id', 'reset_count']);
+                    ->get(['id', 'reset_count', 'status_id', 'agent_id']);
 
-                $toCancel = $ordersToProcess->where('reset_count', '>', 0)->pluck('id');
-                $toReset  = $ordersToProcess->where('reset_count', 0)->pluck('id');
+                $toCancel = $ordersToProcess->where('reset_count', '>', 0);
+                $toReset  = $ordersToProcess->where('reset_count', 0);
 
+                // La cancelada conserva su vendedora: es suya y así cuenta en sus estadísticas
+                // (antes quedaba "Sin Asignar" y sin rastro en el historial).
                 if ($toCancel->isNotEmpty()) {
-                    Order::whereIn('id', $toCancel)->update([
-                        'agent_id'     => null,
+                    Order::whereIn('id', $toCancel->pluck('id'))->update([
                         'status_id'    => $canceladoId,
                         'cancelled_at' => now(),
                         'reset_count'  => 0,
                     ]);
+                    $this->logClose($toCancel, fn ($o) => "Cancelada automáticamente al cierre de la jornada: era la segunda vez que llegaba al cierre sin resolverse (estaba en '{$this->statusName($o->status_id)}'" . $this->withSeller($o) . ').', 'closing_cancelled', $canceladoId);
                     Log::info("Shop $shopId: Canceladas {$toCancel->count()} órdenes por reincidencia.");
                 }
 
                 if ($toReset->isNotEmpty()) {
-                    Order::whereIn('id', $toReset)->update([
+                    Order::whereIn('id', $toReset->pluck('id'))->update([
                         'agent_id'    => null,
                         'status_id'   => $nuevoId,
                         'reset_count' => 1,
                     ]);
+                    $this->logClose($toReset, fn ($o) => "Volvió a 'Nuevo' sin vendedora al cierre de la jornada: no se resolvió hoy (estaba en '{$this->statusName($o->status_id)}'" . $this->withSeller($o) . '). Mañana se reparte de nuevo; si vuelve a llegar al cierre sin resolverse, se cancela.', 'closing_reset', $nuevoId);
                     Log::info("Shop $shopId: Reseteadas {$toReset->count()} órdenes a 'Nuevo' (primera vez).");
                 }
             }
@@ -210,15 +213,17 @@ class BusinessService
             // 3. "Reprogramado para hoy" → mover a "Programado para otro dia" para mañana
             // ─────────────────────────────────────────────────────────
             if ($reprogramadoHoyId && $programmadoOtroDiaId) {
-                // Para este caso específico usamos un pequeño bucle o bulk si es posible.
-                // Dado que scheduled_for debe ser relativo, lo haremos eficiente.
-                Order::where('shop_id', $shopId)
+                $moved = Order::where('shop_id', $shopId)
                     ->where('status_id', $reprogramadoHoyId)
-                    ->update([
+                    ->get(['id', 'status_id', 'agent_id']);
+                if ($moved->isNotEmpty()) {
+                    Order::whereIn('id', $moved->pluck('id'))->update([
                         'agent_id'      => null,
                         'status_id'     => $programmadoOtroDiaId,
                         'scheduled_for' => now()->addDay()->startOfDay()->addHours(9), // Fallback a las 9 AM
                     ]);
+                    $this->logClose($moved, fn ($o) => "Pasó a mañana al cierre de la jornada: estaba en 'Reprogramado para hoy'" . $this->withSeller($o) . '. Mañana se reparte de nuevo.', 'closing_rescheduled', $programmadoOtroDiaId);
+                }
                 Log::info("Shop $shopId: Movidas órdenes 'Reprogramado para hoy' a mañana.");
             }
 
@@ -229,7 +234,13 @@ class BusinessService
             $keepIds = Status::whereIn('description', $keepStatusNames)->pluck('id');
 
             if ($keepIds->isNotEmpty()) {
-                Order::where('shop_id', $shopId)->whereIn('status_id', $keepIds)->update(['agent_id' => null]);
+                // Solo las que todavía tenían vendedora: así el historial lo dice una vez, no cada noche
+                $released = Order::where('shop_id', $shopId)->whereIn('status_id', $keepIds)->whereNotNull('agent_id')
+                    ->get(['id', 'status_id', 'agent_id', 'scheduled_for']);
+                if ($released->isNotEmpty()) {
+                    Order::whereIn('id', $released->pluck('id'))->update(['agent_id' => null]);
+                    $this->logClose($released, fn ($o) => 'Quedó sin vendedora al cierre de la jornada' . $this->withSeller($o, 'antes la tenía') . ' hasta el día programado' . ($o->scheduled_for ? ' (' . $o->scheduled_for->format('d/m') . ')' : '') . ': ese día se reparte de nuevo.', 'closing_released', null);
+                }
                 Log::info("Shop $shopId closed. Cleared agent from 'Programado para otro dia' / 'Reprogramado' orders.");
             }
 
@@ -259,11 +270,16 @@ class BusinessService
                     
                 $updatedCount = 0;
                 foreach ($ordersToUpdate as $order) {
-                    $order->update([
-                        'status_id' => $reprogrammedTodayStatus->id,
-                        'agent_id'  => null // Asegurar que no tienen agente para que el backlog los tome
-                    ]);
-                    $updatedCount++;
+                    // Un choque con otra escritura se reintenta; si igual falla, se sigue con las demás
+                    try {
+                        \App\Support\DbRetry::onConflict(fn () => $order->update([
+                            'status_id' => $reprogrammedTodayStatus->id,
+                            'agent_id'  => null // Asegurar que no tienen agente para que el backlog los tome
+                        ]));
+                        $updatedCount++;
+                    } catch (\Throwable $e) {
+                        Log::error("BusinessService: la orden #{$order->id} no pasó a 'Reprogramado para hoy': " . $e->getMessage());
+                    }
                 }
                     
                 if ($updatedCount > 0) {
@@ -272,6 +288,60 @@ class BusinessService
             }
         } catch (\Exception $e) {
             Log::error("BusinessService: Error processing scheduled orders: " . $e->getMessage());
+        }
+    }
+
+    /** @var array<int, string>|null */
+    private ?array $statusNames = null;
+
+    /** @var array<int, string> */
+    private array $sellerNames = [];
+
+    private function statusName(?int $statusId): string
+    {
+        $this->statusNames ??= Status::pluck('description', 'id')->all();
+
+        return $this->statusNames[$statusId] ?? 'sin estado';
+    }
+
+    /** " con Gigi", o " (antes la tenía Gigi)", si la orden tenía vendedora. */
+    private function withSeller(Order $order, string $prefix = 'con'): string
+    {
+        if (!$order->agent_id) {
+            return '';
+        }
+        $name = $this->sellerNames[$order->agent_id] ??= \App\Models\User::whereKey($order->agent_id)->value('names') ?? "la vendedora #{$order->agent_id}";
+
+        return $prefix === 'con' ? " con {$name}" : " ({$prefix} {$name})";
+    }
+
+    /**
+     * Deja en el historial de cada orden lo que le hizo el cierre. Las actualizaciones del cierre son
+     * masivas (no pasan por los observers), por eso antes no quedaba ningún rastro.
+     */
+    private function logClose(\Illuminate\Support\Collection $orders, callable $describe, string $action, ?int $newStatusId): void
+    {
+        try {
+            $now = now();
+            $rows = $orders->map(fn (Order $o) => [
+                'order_id'    => $o->id,
+                'user_id'     => null,
+                'actor_role'  => 'Sistema',
+                'action'      => $action,
+                'description' => $describe($o),
+                'properties'  => json_encode(array_filter([
+                    'old_status' => $o->status_id,
+                    'new_status' => $newStatusId,
+                    'agent_id'   => $o->agent_id,
+                ], fn ($v) => $v !== null)),
+                'created_at'  => $now,
+                'updated_at'  => $now,
+            ])->values()->all();
+            foreach (array_chunk($rows, 500) as $chunk) {
+                \App\Models\OrderActivityLog::insert($chunk);
+            }
+        } catch (\Throwable $e) {
+            Log::error("Cierre: no se pudo escribir el historial ({$action}): " . $e->getMessage());
         }
     }
 }

@@ -13,8 +13,8 @@ class RoleController extends Controller
      */
     public function index()
     {
-        //
-        $roles = Role::all();
+        // El rol Gerente ya no se usa (Fran, 2026-10-02): no se ofrece al crear usuarios
+        $roles = Role::where('description', '!=', 'Gerente')->get();
         return response()->json(['data' => $roles, 'message' => 'Roles encontrados']);
     }
 

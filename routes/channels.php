@@ -53,5 +53,11 @@ Broadcast::channel('internal-chat.{conversationId}', function ($user, $conversat
     $conversation = \App\Models\InternalConversation::find($conversationId);
     if (!$conversation) return false;
 
-    return $conversation->hasParticipant($user->id);
+    if ($conversation->hasParticipant($user->id)) return true;
+
+    // La Líder sigue en vivo los hilos de las órdenes de su grupo (Fran, 2026-10-02)
+    $agentId = $conversation->order?->agent_id;
+    $group = $agentId ? $user->ledGroup() : null;
+
+    return $group !== null && $group->openMembers()->where('user_id', $agentId)->exists();
 });

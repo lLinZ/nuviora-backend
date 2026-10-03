@@ -21,6 +21,8 @@ use Illuminate\Support\Facades\DB;
  *  - Si el cliente NO tiene ninguna orden asignada (lead puro o pedido aún sin vendedora)
  *    y clients.agent_id = user.id, también lo ve.
  *  - Admin/Gerente ven TODO.
+ *  - La Líder ve, además, los chats de las vendedoras de su grupo (Fran, 2026-10-02): con
+ *    ?scope=group todos, o con ?seller_id= los de una, igual que en el Kanban.
  *
  * clients.agent_id se desincroniza (round-robin de leads + mass-updates de cierre de
  * tienda), por eso NO se usa para decidir propiedad de clientes que ya tienen órdenes.
@@ -44,13 +46,46 @@ class WhatsappCrmController extends Controller
         return in_array($roleName, self::SUPER_ROLES);
     }
 
+    /** Vendedoras del grupo que lidera (ella incluida), o null si no es Líder. */
+    private function teamIds($user): ?array
+    {
+        $role = $user->role ? strtolower(trim($user->role->description)) : '';
+        if (!str_contains($role, 'vende') || !($group = $user->ledGroup())) {
+            return null;
+        }
+
+        return $group->openMembers()->pluck('user_id')->map(fn ($id) => (int) $id)->all();
+    }
+
+    /**
+     * De quién pide ver chats una vendedora: los suyos, o si es Líder y pide ?scope=group, los de su
+     * grupo (o con ?seller_id= los de una de ellas). Un seller_id de fuera del grupo no devuelve nada.
+     *
+     * @return int[]
+     */
+    private function requestedOwners(Request $request, $user): array
+    {
+        if ($request->query('scope') !== 'group' || ($team = $this->teamIds($user)) === null) {
+            return [(int) $user->id];
+        }
+        if ($request->filled('seller_id')) {
+            $seller = (int) $request->query('seller_id');
+
+            return in_array($seller, $team, true) ? [$seller] : [];
+        }
+
+        return $team;
+    }
+
     /**
      * Aplica el filtro de visibilidad al query de Client.
      * Centralizado para ser reutilizado en todos los métodos.
+     *
+     * @param  mixed  $userOrId  una usuaria, un id o una lista de ids (la Líder con su grupo)
      */
     private function applyVisibilityScope($query, $userOrId): void
     {
-        $userId = is_object($userOrId) ? $userOrId->id : $userOrId;
+        $userId = is_object($userOrId) ? [(int) $userOrId->id] : array_map('intval', (array) $userOrId);
         
         // ── LA ORDEN ES LA ÚNICA FUENTE DE VERDAD ───────────────────────────
         // El "dueño" de un cliente se decide SIEMPRE por la propiedad de la orden,
@@ -65,7 +100,7 @@ class WhatsappCrmController extends Controller
             //    que haya quedado con agent_id = NULL (fuera de horario, sin stock,
             //    reset por cierre de tienda): la dueña real sigue siendo la anterior.
             $q->whereHas('orders', function ($oq) use ($userId) {
-                $oq->where('agent_id', $userId)
+                $oq->whereIn('agent_id', $userId)
                    ->whereRaw('orders.id = (
                         SELECT MAX(o2.id) FROM orders o2
                         WHERE o2.client_id = orders.client_id
@@ -77,7 +112,7 @@ class WhatsappCrmController extends Controller
             //    del CRM. En cuanto CUALQUIER orden reciba una dueña real, la rama A
             //    toma el control y esta deja de aplicar para todos.
             ->orWhere(function ($sub) use ($userId) {
-                $sub->where('agent_id', $userId)
+                $sub->whereIn('agent_id', $userId)
                     ->whereDoesntHave('orders', function ($oq) {
                         $oq->whereNotNull('agent_id');
                     });
@@ -148,7 +183,8 @@ class WhatsappCrmController extends Controller
         }
 
         $query = Client::where('id', $clientId);
-        $this->applyVisibilityScope($query, $user);
+        // La Líder también abre y contesta los chats de su grupo
+        $this->applyVisibilityScope($query, $this->teamIds($user) ?? $user);
         
         return $query->exists();
     }
@@ -177,8 +213,9 @@ class WhatsappCrmController extends Controller
         $query->whereHas('whatsappMessages');
 
         // 2. Visibilidad — el núcleo del nuevo sistema
+        $owners = $isAdmin ? null : $this->requestedOwners($request, $user);
         if (!$isAdmin) {
-            $this->applyVisibilityScope($query, $user);
+            $this->applyVisibilityScope($query, $owners);
         } else {
             // Admin puede filtrar por agente específico
             if ($agentId) {
@@ -323,9 +360,9 @@ class WhatsappCrmController extends Controller
         // Se cuentan a nivel de base de datos (1 query por bucket) en lugar de cargar
         // TODOS los clientes en memoria, lo que agotaba la RAM de PHP a medida que crecía
         // el volumen de conversaciones.
-        $buildStatsQuery = function () use ($isAdmin, $user, $agentId) {
+        $buildStatsQuery = function () use ($isAdmin, $owners, $agentId) {
             $q = Client::whereHas('whatsappMessages');
-            if (!$isAdmin) { $this->applyVisibilityScope($q, $user); }
+            if (!$isAdmin) { $this->applyVisibilityScope($q, $owners); }
             elseif ($agentId) { $this->applyVisibilityScope($q, $agentId); }
             return $q;
         };
@@ -537,6 +574,15 @@ class WhatsappCrmController extends Controller
         }
 
         $client = Client::findOrFail($clientId);
+
+        // La Líder mirando el chat de una de sus vendedoras no se lo marca como leído a ella
+        if (!$this->isAdmin() && $this->teamIds($user) !== null) {
+            $own = Client::where('id', $clientId);
+            $this->applyVisibilityScope($own, $user);
+            if (!$own->exists()) {
+                return response()->json(['status' => true, 'message' => 'Chat de tu grupo: queda sin leer para su vendedora']);
+            }
+        }
 
         WhatsappMessage::where('client_id', $clientId)
             ->where('is_from_client', true)

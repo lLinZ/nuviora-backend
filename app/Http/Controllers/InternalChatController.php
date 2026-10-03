@@ -38,6 +38,67 @@ class InternalChatController extends Controller
         return $this->roleName($user) === 'agencia';
     }
 
+    /** Vendedoras del grupo que lidera (ella incluida), o null si no es Líder. */
+    private function teamIds(?User $user): ?array
+    {
+        if (!$user || !$this->isAgent($user) || !($group = $user->ledGroup())) {
+            return null;
+        }
+
+        return $group->openMembers()->pluck('user_id')->map(fn ($id) => (int) $id)->all();
+    }
+
+    /** La Líder ve los hilos de las órdenes de su grupo (Fran, 2026-10-02), como en el Kanban. */
+    private function leadsAgentOf(?User $user, ?Order $order): bool
+    {
+        if (!$order || !$order->agent_id) {
+            return false;
+        }
+        $team = $this->teamIds($user);
+
+        return $team !== null && in_array((int) $order->agent_id, $team, true);
+    }
+
+    /**
+     * De qué vendedoras pide ver hilos: con ?scope=group, la Líder ve todo su grupo, o con ?seller_id= una
+     * de ellas. El grupo lo decide el servidor; un seller_id de fuera del grupo no devuelve nada.
+     *
+     * @return int[]|null  null = solo los suyos (como siempre)
+     */
+    private function requestedTeam(Request $request, User $user): ?array
+    {
+        if ($request->query('scope') !== 'group' || ($team = $this->teamIds($user)) === null) {
+            return null;
+        }
+        if ($request->filled('seller_id')) {
+            $seller = (int) $request->query('seller_id');
+
+            return in_array($seller, $team, true) ? [$seller] : [];
+        }
+
+        return $team;
+    }
+
+    /** La Líder ve a sus vendedoras por su nombre; la agencia y la vendedora siguen viéndose enmascaradas. */
+    private function sellerRef(?User $seller, bool $realName): ?array
+    {
+        if (!$seller) {
+            return null;
+        }
+
+        return ['id' => $seller->id, 'name' => $realName ? trim($seller->names . ' ' . $seller->surnames) : $seller->chatDisplayName()];
+    }
+
+    /** Quién escribió: la Líder mirando el hilo de una de sus vendedoras la ve por su nombre. */
+    private function senderRef(?User $sender, bool $realNames): ?array
+    {
+        if (!$sender) {
+            return null;
+        }
+
+        return $this->sellerRef($sender, $realNames && $this->isAgent($sender));
+    }
+
     /** Datos del cliente de una orden (para el encabezado del hilo). */
     private function clientName(?Order $order): ?string
     {
@@ -85,10 +146,13 @@ class InternalChatController extends Controller
     {
         $user = $request->user();
         $isAdmin = $this->isAdmin($user);
+        $team = $isAdmin ? null : $this->requestedTeam($request, $user);
 
         $query = InternalConversation::with(self::INBOX_WITH);
 
-        if (!$isAdmin) {
+        if ($team !== null) {
+            $query->whereHas('order', fn ($q) => $q->whereIn('agent_id', $team));
+        } elseif (!$isAdmin) {
             $query->whereHas('order', function ($q) use ($user) {
                 $q->where('agent_id', $user->id)->orWhere('agency_id', $user->id);
             });
@@ -96,11 +160,13 @@ class InternalChatController extends Controller
 
         $conversations = $query->orderByDesc('last_message_at')->get();
 
-        $data = $conversations->map(function (InternalConversation $c) use ($user, $isAdmin) {
+        $data = $conversations->map(function (InternalConversation $c) use ($user, $isAdmin, $team) {
             $order = $c->order;
-            $counterpart = (!$isAdmin && $order) ? $this->counterpartOf($order, $user) : null;
+            $isParticipant = $order && ((int) $order->agent_id === (int) $user->id || (int) $order->agency_id === (int) $user->id);
+            $counterpart = (!$isAdmin && $isParticipant) ? $this->counterpartOf($order, $user) : null;
 
-            $unread = $isAdmin ? 0 : $c->messages()
+            // Los no leídos son de quien participa: la Líder mirando el hilo de otra no los cuenta
+            $unread = !$isParticipant ? 0 : $c->messages()
                 ->where('sender_id', '!=', $user->id)
                 ->whereNull('read_at')
                 ->count();
@@ -109,9 +175,10 @@ class InternalChatController extends Controller
                 'id'              => $c->id,
                 'order'           => $order ? ['id' => $order->id, 'name' => $order->name] : null,
                 'client'          => $this->clientName($order),
-                'vendedor'        => $order && $order->agent ? ['id' => $order->agent->id, 'name' => $order->agent->chatDisplayName()] : null,
+                'vendedor'        => $this->sellerRef($order?->agent, $team !== null),
                 'agency'          => $order && $order->agency ? ['id' => $order->agency->id, 'name' => $order->agency->chatDisplayName()] : null,
                 'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
+                'is_participant'  => $isParticipant,
                 'last_message'    => $c->lastMessage ? [
                     'body'       => $c->lastMessage->body,
                     'sender_id'  => $c->lastMessage->sender_id,
@@ -144,8 +211,13 @@ class InternalChatController extends Controller
             'agency.cities:id,name,agency_id',
         ]);
 
+        $team = $this->isAdmin($user) ? null : $this->requestedTeam($request, $user);
+
         if ($this->isAdmin($user)) {
             // Admin/Gerente ven todas.
+        } elseif ($team !== null) {
+            // La Líder, con ?scope=group: las de su grupo (o las de una de sus vendedoras)
+            $query->whereIn('agent_id', $team);
         } elseif ($this->isAgent($user)) {
             $query->where('agent_id', $user->id);
         } elseif ($this->isAgencyRole($user)) {
@@ -208,7 +280,7 @@ class InternalChatController extends Controller
         $isParticipant = (int) $order->agent_id === (int) $user->id
             || (int) $order->agency_id === (int) $user->id;
 
-        if (!$isParticipant && !$this->isAdmin($user)) {
+        if (!$isParticipant && !$this->isAdmin($user) && !$this->leadsAgentOf($user, $order)) {
             return response()->json(['message' => 'No tienes acceso al chat de esta orden.'], 403);
         }
 
@@ -226,6 +298,55 @@ class InternalChatController extends Controller
     }
 
     /**
+     * El hilo de una orden, para verlo dentro de la ficha (Fran, 2026-10-02). No crea el hilo: si
+     * todavía no hay mensajes, devuelve la lista vacía y el primer mensaje lo abre.
+     */
+    public function byOrder(Request $request, Order $order)
+    {
+        $user = $request->user();
+        $isParticipant = (int) $order->agent_id === (int) $user->id
+            || (int) $order->agency_id === (int) $user->id;
+
+        if (!$isParticipant && !$this->isAdmin($user) && !$this->leadsAgentOf($user, $order)) {
+            return response()->json(['message' => 'No tienes acceso al chat de esta orden.'], 403);
+        }
+
+        $order->loadMissing(['client:id,first_name,last_name', 'agent.role', 'agency.role', 'agency.cities:id,name,agency_id']);
+        $conversation = InternalConversation::where('order_id', $order->id)->first();
+        $counterpart = $this->displayCounterpart($order, $user);
+
+        $messages = collect();
+        $realNames = !$isParticipant && $this->leadsAgentOf($user, $order);
+        if ($conversation) {
+            $messages = $conversation->messages()
+                ->with(['sender.role', 'sender.cities:id,name,agency_id'])
+                ->orderBy('created_at')
+                ->get()
+                ->map(fn (InternalMessage $m) => [
+                    'id'         => $m->id,
+                    'sender_id'  => $m->sender_id,
+                    'sender'     => $this->senderRef($m->sender, $realNames),
+                    'body'       => $m->body,
+                    'read_at'    => $m->read_at,
+                    'created_at' => $m->created_at,
+                    'mine'       => (int) $m->sender_id === (int) $user->id,
+                ]);
+            if ($isParticipant) {
+                $conversation->messages()->where('sender_id', '!=', $user->id)->whereNull('read_at')->update(['read_at' => now()]);
+            }
+        }
+
+        return response()->json([
+            'conversation_id' => $conversation?->id,
+            'order'           => ['id' => $order->id, 'name' => $order->name],
+            'client'          => $this->clientName($order),
+            'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
+            'has_agency'      => (bool) $order->agency_id,
+            'messages'        => $messages->values(),
+        ]);
+    }
+
+    /**
      * Mensajes de un hilo. Marca como leídos los recibidos (si es participante).
      */
     public function messages(Request $request, InternalConversation $conversation)
@@ -237,6 +358,7 @@ class InternalChatController extends Controller
             return response()->json(['message' => 'No tienes acceso a esta conversación.'], 403);
         }
 
+        $realNames = !$conversation->hasParticipant($user->id) && $this->leadsAgentOf($user, $conversation->order);
         $messages = $conversation->messages()
             ->with(['sender.role', 'sender.cities:id,name,agency_id'])
             ->orderBy('created_at')
@@ -244,7 +366,7 @@ class InternalChatController extends Controller
             ->map(fn (InternalMessage $m) => [
                 'id'         => $m->id,
                 'sender_id'  => $m->sender_id,
-                'sender'     => $m->sender ? ['id' => $m->sender->id, 'name' => $m->sender->chatDisplayName()] : null,
+                'sender'     => $this->senderRef($m->sender, $realNames),
                 'body'       => $m->body,
                 'read_at'    => $m->read_at,
                 'created_at' => $m->created_at,
@@ -393,6 +515,8 @@ class InternalChatController extends Controller
     private function canAccess(?User $user, InternalConversation $conversation): bool
     {
         if ($this->isAdmin($user)) return true;
-        return $conversation->hasParticipant($user->id);
+        if ($conversation->hasParticipant($user->id)) return true;
+
+        return $this->leadsAgentOf($user, $conversation->order);
     }
 }

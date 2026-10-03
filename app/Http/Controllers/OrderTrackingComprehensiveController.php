@@ -169,8 +169,13 @@ class OrderTrackingComprehensiveController extends Controller
             ->whereIn('id', $rescheduledOrderIds)
             ->get();
 
+        // Una orden sin vendedora hoy cuenta para la última que la tuvo: el cierre de la jornada les quita la
+        // vendedora a las que pasan a otro día o vuelven a "Nuevo" (y antes también a las que cancelaba), y
+        // así caían en "Sin Asignar". "Sin Asignar" queda para las que nunca tuvieron vendedora.
+        $lastSeller = $this->lastSellers($newOrders->concat($rescheduledOrders)->whereNull('agent_id')->pluck('id')->unique()->values()->all());
+
         // Helpers to process metrics
-        $processCohort = function ($orders) use ($statusEntregadoId, $statusCanceladoId) {
+        $processCohort = function ($orders) use ($statusEntregadoId, $statusCanceladoId, $lastSeller) {
             $total = $orders->count();
             $delivered = $orders->where('status_id', $statusEntregadoId)->count();
             $canceled = $orders->where('status_id', $statusCanceladoId)->count();
@@ -185,7 +190,7 @@ class OrderTrackingComprehensiveController extends Controller
                 $isCanceled = $order->status_id === $statusCanceladoId;
 
                 // Agent
-                $agentName = $order->agent ? $order->agent->names : 'Sin Asignar';
+                $agentName = $order->agent ? $order->agent->names : ($lastSeller[$order->id] ?? 'Sin Asignar');
                 if (!isset($byAgent[$agentName])) $byAgent[$agentName] = ['total' => 0, 'delivered' => 0, 'canceled' => 0];
                 $byAgent[$agentName]['total']++;
                 if ($isDelivered) $byAgent[$agentName]['delivered']++;
@@ -258,5 +263,31 @@ class OrderTrackingComprehensiveController extends Controller
                 'rescheduled' => $processCohort($rescheduledOrders),
             ]
         ]);
+    }
+
+    /**
+     * Nombre de la última vendedora que tuvo cada orden, según el historial de estados y de asignaciones.
+     *
+     * @param  int[]  $orderIds
+     * @return array<int, string>  order_id => nombre
+     */
+    private function lastSellers(array $orderIds): array
+    {
+        $sellerOf = [];
+        foreach (array_chunk($orderIds, 1000) as $chunk) {
+            // Primero las asignaciones y encima el historial de estados, que es más reciente
+            foreach (\App\Models\OrderAssignmentLog::whereIn('order_id', $chunk)->whereNotNull('agent_id')->orderBy('id')->get(['order_id', 'agent_id']) as $row) {
+                $sellerOf[$row->order_id] = (int) $row->agent_id;
+            }
+            foreach (OrderTrackingComprehensiveLog::whereIn('order_id', $chunk)->whereNotNull('seller_id')->orderBy('id')->get(['order_id', 'seller_id']) as $row) {
+                $sellerOf[$row->order_id] = (int) $row->seller_id;
+            }
+        }
+        if ($sellerOf === []) {
+            return [];
+        }
+        $names = User::whereIn('id', array_unique($sellerOf))->pluck('names', 'id');
+
+        return array_filter(array_map(fn ($id) => $names[$id] ?? null, $sellerOf));
     }
 }

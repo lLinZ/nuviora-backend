@@ -218,136 +218,157 @@ class AssignOrderService
         $count = 0;
         foreach ($ids as $ordModel) {
             /** @var Order $ordModel */
-            // 🛑 CHECK STOCK: Only assign if order HAS stock, OR if it has NO stock but there are authorized agents
-            $hasStock = $ordModel->hasStock();
-
-            // 🛡️ Ensure we look for agents in the SPECIFIC shop of the order, or forced shopId
-            $targetShopId = $shopId ?: $ordModel->shop_id;
-            
-            if (!$targetShopId) {
-                // If order has no shop and no shopId passed, we can't safely assign from a specific roster.
-                // Depending on business logic, skipping is safer than assigning random agents.
-                continue; 
+            // Un choque con otra escritura (un mensaje de WhatsApp o un pedido de Shopify en el mismo
+            // segundo) se reintenta; si igual falla, esa orden queda para la próxima pasada y el reparto
+            // sigue con las demás, en vez de detenerse a mitad y dejarlas sin vendedora.
+            try {
+                if (\App\Support\DbRetry::onConflict(fn () => $this->backlogOne($ordModel, $shopId, $date, $assignmentStatusId, $novedadStatusId))) {
+                    $count++;
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::error("AssignBacklog: la orden #{$ordModel->id} no se pudo repartir y sigue sin vendedora: " . $e->getMessage());
             }
-
-            // 🛑 CHECK BUSINESS HOURS: Solo asignar si la tienda está abierta en este momento.
-            if (!$this->isBusinessOpen($targetShopId)) {
-                continue;
-            }
-
-            $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
-
-            if (!$hasStock) {
-                // 🔥 FIX Fran: Al menos UN producto con stock global → asignar a especialista.
-                $hasStockAnywhere = false;
-                if (!$ordModel->relationLoaded('products')) {
-                    $ordModel->load('products');
-                }
-                foreach ($ordModel->products as $op) {
-                    $totalStock = \App\Models\Inventory::where('product_id', $op->product_id)->sum('quantity');
-                    if ($totalStock > 0) {
-                        $hasStockAnywhere = true;
-                        break;
-                    }
-                }
-
-                // 🔧 Sin Stock ahora usa el roster completo (round robin normal),
-                // no solo las especialistas (can_handle_no_stock).
-                if (!$hasStockAnywhere) {
-                    // Si no hay stock en ningún almacén en el país, NO ASIGNAR A NADIE.
-                    $agentsForShop = collect(); // Vaciamos para que salte
-                }
-
-                // 🔥 FIX: Asegurar que si la orden no se pudo asignar (por falta de stock
-                // global o por falta de especialistas activas), se envíe a estado Sin Stock 
-                // para que no se quede atrapada en Nuevo y aparezca en el panel correcto.
-                if ($agentsForShop->isEmpty()) {
-                    $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
-                    if ($sinStockStatus && $ordModel->status_id !== $sinStockStatus->id) {
-                        $ordModel->previous_status_id = $ordModel->status_id;
-                        $ordModel->status_id = $sinStockStatus->id;
-                        $ordModel->save();
-                    }
-                }
-            }
-
-            if ($agentsForShop->isEmpty()) continue;
-
-            DB::transaction(function () use ($ordModel, $agentsForShop, &$count, $assignmentStatusId, $novedadStatusId, $hasStock) {
-                $ord = Order::where('id', '=', $ordModel->id)->lockForUpdate()->first(['*']);
-                
-                // Safety check: skip if already assigned by someone else
-                if ($ord->agent_id && $ord->status_id !== $ordModel->status_id) return;
-                // If it was "Sin Stock" but now has an agent, skip
-                if ($ord->agent_id && $ordModel->status_id === $assignmentStatusId) return;
-
-                [$agentId, $strategy, $meta] = $this->pickAgent($agentsForShop, $ord);
-
-                // 🛡️ Si no hay a quién darle (todas en su máximo), no cambiamos el status a "Asignado..."
-                if (!$agentId) {
-                    \Illuminate\Support\Facades\Log::info("AssignBacklog: sin vendedora con cupo para la orden #{$ord->id}.");
-                    return;
-                }
-
-                // Lógica de Status Inteligente:
-                // Si ya era Novedad, mantenemos Novedad.
-                // Si venía de "Programado para otro dia", ahora es "Reprogramado para hoy".
-                // De lo contrario, "Asignado a Vendedor".
-                
-                // 🔥 CLIENT FIX: Preservar status "Programado para otro dia"
-                // Para que aparezcan en la columna "Reprogramado para hoy" (que filtra por ese status + fecha hoy),
-                // NO debemos cambiarles el status a "Asignado a Vendedor" ni a "Reprogramado para hoy".
-
-                $currentStatusDesc = $ordModel->status ? $ordModel->status->description : '';
-
-                if ($currentStatusDesc === OrderStatus::PROGRAMADO_OTRO_DIA || $currentStatusDesc === OrderStatus::REPROGRAMADO_HOY) {
-                    // 🛡️ Filtro estricto: Solo asignar si es para hoy o pasado. 
-                    $scheduledDate = $ordModel->scheduled_for ? $ordModel->scheduled_for->toDateString() : null;
-                    $today = now()->toDateString();
-                    
-                    if ($scheduledDate && $scheduledDate > $today) {
-                        return; // Futuro: Permitir que permanezca en el backlog sin agente
-                    }
-
-                    if ($currentStatusDesc === OrderStatus::PROGRAMADO_OTRO_DIA) {
-                        $reproToday = Status::where('description', OrderStatus::REPROGRAMADO_HOY)->first();
-                        $newStatusId = $reproToday ? $reproToday->id : $ordModel->status_id;
-                    } else {
-                        $newStatusId = $ordModel->status_id;
-                    }
-                } elseif ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
-                    $newStatusId = $novedadStatusId;
-                } elseif (!$hasStock) {
-                    $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
-                    $newStatusId = $sinStockStatus ? $sinStockStatus->id : $ordModel->status_id;
-                } else {
-                    $newStatusId = $assignmentStatusId;
-                }
-                
-                $ord->update(['agent_id' => $agentId, 'status_id' => $newStatusId]);
-
-                // 📡 Broadcast for real-time updates
-                event(new \App\Events\OrderUpdated($ord));
-
-                OrderAssignmentLog::create([
-                    'order_id'    => $ord->id,
-                    'agent_id'    => $agentId,
-                    'strategy'    => $strategy,
-                    'assigned_by' => Auth::id(), // lo dispara la gerente desde la UI
-                    'meta'        => ['reason' => 'backlog'] + $meta,
-                ]);
-
-                // 🤫 SILENCED: No individual notification during mass backlog processing to avoid spam.
-                // $agent = \App\Models\User::find($agentId);
-                // if ($agent) {
-                //     $agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Se te ha asignado la orden {$ord->number_label}"));
-                // }
-
-                $count++;
-            });
         }
 
         return $count;
+    }
+
+    /**
+     * Reparte una orden del backlog. Devuelve true si quedó con vendedora. Se puede repetir: lee la orden
+     * de nuevo con bloqueo antes de escribir.
+     */
+    protected function backlogOne(Order $ordModel, ?int $shopId, string $date, int $assignmentStatusId, ?int $novedadStatusId): bool
+    {
+        $assigned = false;
+        // 🛑 CHECK STOCK: Only assign if order HAS stock, OR if it has NO stock but there are authorized agents
+        $hasStock = $ordModel->hasStock();
+
+        // 🛡️ Ensure we look for agents in the SPECIFIC shop of the order, or forced shopId
+        $targetShopId = $shopId ?: $ordModel->shop_id;
+
+        if (!$targetShopId) {
+            // If order has no shop and no shopId passed, we can't safely assign from a specific roster.
+            // Depending on business logic, skipping is safer than assigning random agents.
+            return false;
+        }
+
+        // 🛑 CHECK BUSINESS HOURS: Solo asignar si la tienda está abierta en este momento.
+        if (!$this->isBusinessOpen($targetShopId)) {
+            return false;
+        }
+
+        $agentsForShop = $this->activeAgentsForDate($date, $targetShopId);
+
+        if (!$hasStock) {
+            // 🔥 FIX Fran: Al menos UN producto con stock global → asignar a especialista.
+            $hasStockAnywhere = false;
+            if (!$ordModel->relationLoaded('products')) {
+                $ordModel->load('products');
+            }
+            foreach ($ordModel->products as $op) {
+                $totalStock = \App\Models\Inventory::where('product_id', $op->product_id)->sum('quantity');
+                if ($totalStock > 0) {
+                    $hasStockAnywhere = true;
+                    break;
+                }
+            }
+
+            // 🔧 Sin Stock ahora usa el roster completo (round robin normal),
+            // no solo las especialistas (can_handle_no_stock).
+            if (!$hasStockAnywhere) {
+                // Si no hay stock en ningún almacén en el país, NO ASIGNAR A NADIE.
+                $agentsForShop = collect(); // Vaciamos para que salte
+            }
+
+            // 🔥 FIX: Asegurar que si la orden no se pudo asignar (por falta de stock
+            // global o por falta de especialistas activas), se envíe a estado Sin Stock 
+            // para que no se quede atrapada en Nuevo y aparezca en el panel correcto.
+            if ($agentsForShop->isEmpty()) {
+                $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
+                if ($sinStockStatus && $ordModel->status_id !== $sinStockStatus->id) {
+                    $ordModel->previous_status_id = $ordModel->status_id;
+                    $ordModel->status_id = $sinStockStatus->id;
+                    $ordModel->save();
+                }
+            }
+        }
+
+        if ($agentsForShop->isEmpty()) return false;
+
+        DB::transaction(function () use ($ordModel, $agentsForShop, &$assigned, $assignmentStatusId, $novedadStatusId, $hasStock) {
+            $ord = Order::where('id', '=', $ordModel->id)->lockForUpdate()->first(['*']);
+        
+            // Safety check: skip if already assigned by someone else
+            if ($ord->agent_id && $ord->status_id !== $ordModel->status_id) return;
+            // If it was "Sin Stock" but now has an agent, skip
+            if ($ord->agent_id && $ordModel->status_id === $assignmentStatusId) return;
+
+            [$agentId, $strategy, $meta] = $this->pickAgent($agentsForShop, $ord);
+
+            // 🛡️ Si no hay a quién darle (todas en su máximo), no cambiamos el status a "Asignado..."
+            if (!$agentId) {
+                \Illuminate\Support\Facades\Log::info("AssignBacklog: sin vendedora con cupo para la orden #{$ord->id}.");
+                return;
+            }
+
+            // Lógica de Status Inteligente:
+            // Si ya era Novedad, mantenemos Novedad.
+            // Si venía de "Programado para otro dia", ahora es "Reprogramado para hoy".
+            // De lo contrario, "Asignado a Vendedor".
+        
+            // 🔥 CLIENT FIX: Preservar status "Programado para otro dia"
+            // Para que aparezcan en la columna "Reprogramado para hoy" (que filtra por ese status + fecha hoy),
+            // NO debemos cambiarles el status a "Asignado a Vendedor" ni a "Reprogramado para hoy".
+
+            $currentStatusDesc = $ordModel->status ? $ordModel->status->description : '';
+
+            if ($currentStatusDesc === OrderStatus::PROGRAMADO_OTRO_DIA || $currentStatusDesc === OrderStatus::REPROGRAMADO_HOY) {
+                // 🛡️ Filtro estricto: Solo asignar si es para hoy o pasado. 
+                $scheduledDate = $ordModel->scheduled_for ? $ordModel->scheduled_for->toDateString() : null;
+                $today = now()->toDateString();
+            
+                if ($scheduledDate && $scheduledDate > $today) {
+                    return; // Futuro: Permitir que permanezca en el backlog sin agente
+                }
+
+                if ($currentStatusDesc === OrderStatus::PROGRAMADO_OTRO_DIA) {
+                    $reproToday = Status::where('description', OrderStatus::REPROGRAMADO_HOY)->first();
+                    $newStatusId = $reproToday ? $reproToday->id : $ordModel->status_id;
+                } else {
+                    $newStatusId = $ordModel->status_id;
+                }
+            } elseif ($novedadStatusId && $ordModel->status_id === $novedadStatusId) {
+                $newStatusId = $novedadStatusId;
+            } elseif (!$hasStock) {
+                $sinStockStatus = Status::where('description', OrderStatus::SIN_STOCK)->first();
+                $newStatusId = $sinStockStatus ? $sinStockStatus->id : $ordModel->status_id;
+            } else {
+                $newStatusId = $assignmentStatusId;
+            }
+        
+            $ord->update(['agent_id' => $agentId, 'status_id' => $newStatusId]);
+
+            // 📡 Broadcast for real-time updates
+            event(new \App\Events\OrderUpdated($ord));
+
+            OrderAssignmentLog::create([
+                'order_id'    => $ord->id,
+                'agent_id'    => $agentId,
+                'strategy'    => $strategy,
+                'assigned_by' => Auth::id(), // lo dispara la gerente desde la UI
+                'meta'        => ['reason' => 'backlog'] + $meta,
+            ]);
+
+            // 🤫 SILENCED: No individual notification during mass backlog processing to avoid spam.
+            // $agent = \App\Models\User::find($agentId);
+            // if ($agent) {
+            //     $agent->notify(new \App\Notifications\OrderAssignedNotification($ord, "Se te ha asignado la orden {$ord->number_label}"));
+            // }
+
+            $assigned = true;
+        });
+
+        return $assigned;
     }
 
     /** Helpers */
