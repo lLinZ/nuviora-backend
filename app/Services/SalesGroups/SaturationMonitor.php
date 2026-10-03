@@ -138,7 +138,7 @@ final class SaturationMonitor
         $name = trim(($seller?->names ?? '') . ' ' . ($seller?->surnames ?? ''));
         $average = rtrim(rtrim(number_format($alert->group_average, 1, ',', '.'), '0'), ',');
         $message = "{$name} está saturada: tiene {$alert->load} pedidos en carga, "
-            . number_format($alert->over_pct, 0) . " % más que el promedio de {$group->name} ({$average}).";
+            . number_format($alert->over_pct, 0) . " % más que el promedio de su grupo ({$average}).";
 
         $leaderId = $group->openMembers()->where('role', SalesGroupMember::ROLE_LEADER)->value('user_id');
         $recipients = $this->admins();
