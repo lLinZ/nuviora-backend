@@ -313,6 +313,12 @@ class OrderController extends Controller
             $statusRechazado = Status::where('description', '=', OrderStatus::RECHAZADO)->first();
             $statusNuevo = Status::where('description', '=', OrderStatus::NUEVO)->first();
 
+            // Fran (2026-10-03): no pasa a "Asignar a agencia" si a un producto con tallas le falta la talla
+            if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
+                && ($missing = $this->missingSizeMessage($order))) {
+                return response()->json(['status' => false, 'message' => $missing], 422);
+            }
+
             // 🚚 Reparto entre las agencias de la ciudad (tareas 3c y 6): al pasar a "Asignar a agencia",
             // si nadie eligió la agencia a mano, se elige por % y cupo entre las que tienen stock.
             // Si todas las que tienen stock están llenas, no espera: se elige en partes iguales (Fran, 2026-09-30 y 2026-10-02).
@@ -1500,6 +1506,11 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
         }
 
+        // Fran (2026-10-03): sin talla no se manda a la agencia
+        if ($missing = $this->missingSizeMessage($order)) {
+            return response()->json(['status' => false, 'message' => $missing], 422);
+        }
+
         // 🧩 Resolver agencia. Aceptamos un USUARIO con rol Agencia (caso normal del
         // diálogo y de stock_elsewhere.agency_user_id). Por compatibilidad, si el id
         // corresponde a un warehouse, lo resolvemos hacia su usuario asociado.
@@ -1862,6 +1873,27 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * Mensaje si a algún producto con tallas le falta elegir la talla (Fran, 2026-10-03: a las vendedoras se
+     * les olvida y la agencia no sabe cuál llevar). Null si está todo.
+     */
+    private function missingSizeMessage(Order $order): ?string
+    {
+        $lines = OrderProduct::where('order_id', $order->id)->whereNull('variant_id')->get(['product_id', 'title', 'showable_name']);
+        if ($lines->isEmpty()) {
+            return null;
+        }
+        $withSizes = ProductVariant::whereIn('product_id', $lines->pluck('product_id')->unique())->where('is_active', true)
+            ->distinct()->pluck('product_id')->all();
+        $names = $lines->filter(fn ($l) => in_array($l->product_id, $withSizes))
+            ->map(fn ($l) => $l->showable_name ?: $l->title)->unique()->values();
+        if ($names->isEmpty()) {
+            return null;
+        }
+
+        return 'Falta elegir la talla de ' . $names->implode(', ') . '. Elígela en la orden antes de mandarla a la agencia.';
+    }
+
     public function updateProductQuantity(Request $request, Order $order, $itemId)
     {
         // 🔒 LOCK: No editar si está Entregado (excepto Admin)
@@ -1895,8 +1927,8 @@ class OrderController extends Controller
         $newQuantity = $request->filled('quantity') ? $request->input('quantity') : $oldQuantity;
         $newPrice = $request->filled('price') ? $request->input('price') : $oldPrice;
 
-        // Fran (2026-09-30): la vendedora no puede marcar una talla que no hay. El Admin sí, para corregir.
-        if ($newVariant && \Illuminate\Support\Facades\Auth::user()->role?->description !== 'Admin') {
+        // Fran (2026-09-30 y 2026-10-03): no se puede marcar una talla que no hay, tampoco el Admin.
+        if ($newVariant) {
             $have = $this->variantAvailability($order, [$newVariant->id])[$newVariant->id] ?? 0;
             if ($have < (int) $newQuantity) {
                 return response()->json([
@@ -2319,6 +2351,7 @@ class OrderController extends Controller
         $hasPayments = $totalPaid > 0;
         $hasChangeInfo = (abs($changeAmount) < 0.01) || ($changeAmount > 0 && !empty($order->change_covered_by));
         $hasLocation = !empty($order->location) && trim($order->location) !== '';
+        $missingSize = $this->missingSizeMessage($order) !== null;
         
         // Public statuses for sellers (don't require payment validation)
         $sellerPublicStatuses = array_map('strtolower', array_map('trim', [
@@ -2329,13 +2362,18 @@ class OrderController extends Controller
         
         // Filter statuses based on all validations
         $availableStatuses = $allStatuses->filter(function($status) use (
-            $order, $userRole, $currentStatus, $allowedByFlow, $hasPayments, $hasChangeInfo, $hasLocation, $sellerPublicStatuses
+            $order, $userRole, $currentStatus, $allowedByFlow, $hasPayments, $hasChangeInfo, $hasLocation, $sellerPublicStatuses, $missingSize
         ) {
             $statusName = $status->description;
             
             // Always include current status (for UI check mark)
             if ($statusName === $currentStatus) {
                 return true;
+            }
+
+            // Sin talla no se ofrece "Asignar a agencia" (Fran, 2026-10-03)
+            if ($statusName === 'Asignar a agencia' && $missingSize) {
+                return false;
             }
             
             // Check flow rules first
