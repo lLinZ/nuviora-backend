@@ -192,13 +192,13 @@ class AssignmentController extends Controller
             throw ValidationException::withMessages(['to_agent_ids' => 'Elige al menos una vendedora de destino distinta de la de origen.']);
         }
 
-        $result = $service->reassign((int) $data['from_agent_id'], $targets, $data['status_ids'], Auth::id());
+        ['moved' => $result, 'kept' => $kept] = $service->reassign((int) $data['from_agent_id'], $targets, $data['status_ids'], Auth::id());
         $total = array_sum($result);
 
         return response()->json([
             'status' => true,
             'message' => $total === 1 ? 'Se reasignó 1 orden' : "Se reasignaron {$total} órdenes",
-            'data' => ['moved' => $result, 'total' => $total],
+            'data' => ['moved' => $result, 'total' => $total, 'kept' => $kept, 'kept_message' => BulkReassignService::keptMessage($kept)],
         ]);
     }
 }

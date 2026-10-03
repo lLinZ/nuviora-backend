@@ -436,14 +436,14 @@ class MyGroupController extends Controller
             throw ValidationException::withMessages(['to_agent_ids' => 'Elige vendedoras de tu grupo, distintas de la de origen.']);
         }
 
-        $result = $this->bulk->reassign($fromId, $targets, $data['status_ids'], Auth::id());
+        ['moved' => $result, 'kept' => $kept] = $this->bulk->reassign($fromId, $targets, $data['status_ids'], Auth::id());
         $total = array_sum($result);
         $this->log("La Líder {$this->name(Auth::user())} pasó {$total} órdenes de {$this->name($members->get($fromId)->user)} a otras vendedoras de {$group->name}.");
 
         return response()->json([
             'status' => true,
             'message' => $total === 1 ? 'Se reasignó 1 orden' : "Se reasignaron {$total} órdenes",
-            'data' => ['moved' => $result, 'total' => $total],
+            'data' => ['moved' => $result, 'total' => $total, 'kept' => $kept, 'kept_message' => BulkReassignService::keptMessage($kept)],
         ]);
     }
 
@@ -475,6 +475,10 @@ class MyGroupController extends Controller
         }
         if (!$this->targets($members)->has($toId)) {
             return response()->json(['status' => false, 'message' => 'Elige una vendedora de tu grupo.'], 422);
+        }
+        if (!$this->bulk->worksIn($toId, $order->shop_id ? (int) $order->shop_id : null)) {
+            $shop = $order->shop?->name ?? 'la tienda del pedido';
+            return response()->json(['status' => false, 'message' => "{$this->name($members->get($toId)->user)} no está en {$shop}: no puede recibir este pedido."], 422);
         }
 
         $moved = $this->bulk->moveOne($order->id, $fromId, $toId, Auth::id());
