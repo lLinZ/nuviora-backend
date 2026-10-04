@@ -32,6 +32,16 @@ return [
         'verify_token'    => env('WHATSAPP_VERIFY_TOKEN'),
     ],
 
+    // Revisión de comprobantes de pago con IA (Fran, 2026-10-03). Modo: off (no revisa), observe (revisa y
+    // muestra el resultado sin bloquear) o enforce (además no deja entregar si el comprobante no cuadra).
+    'openai' => [
+        'key'           => env('OPENAI_API_KEY'),
+        'receipt_model' => env('OPENAI_RECEIPT_MODEL', 'gpt-6-luna'),
+    ],
+    'receipt_checks' => [
+        'mode' => env('RECEIPT_CHECKS_MODE', 'off'),
+    ],
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),

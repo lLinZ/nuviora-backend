@@ -22,4 +22,10 @@ class PaymentReceipt extends Model
     {
         return $this->belongsTo(Order::class);
     }
+
+    /** Lo que dijo la revisión con IA de este comprobante. */
+    public function check()
+    {
+        return $this->hasOne(ReceiptCheck::class);
+    }
 }

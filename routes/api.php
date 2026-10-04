@@ -377,6 +377,11 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
 
     Route::post('/orders/{order}/payment-receipt', [OrderController::class, 'uploadPaymentReceipt'])->middleware('order.access');
     Route::delete('/orders/{order}/payment-receipt/{receiptId}', [OrderController::class, 'deletePaymentReceipt'])->middleware('order.access');
+    // Revisión de comprobantes con IA (Fran, 2026-10-03)
+    Route::get('/orders/{order}/receipt-checks', [\App\Http\Controllers\ReceiptCheckController::class, 'forOrder'])->middleware('order.access');
+    Route::post('/orders/{order}/receipt-checks/{check}/retry', [\App\Http\Controllers\ReceiptCheckController::class, 'retry'])->middleware('order.access');
+    Route::post('/orders/{order}/receipt-checks/{check}/approve', [\App\Http\Controllers\ReceiptCheckController::class, 'approve'])->middleware('role:Admin,Gerente,Master');
+    Route::get('/receipt-checks', [\App\Http\Controllers\ReceiptCheckController::class, 'index'])->middleware('role:Admin,Gerente,Master');
     Route::post('/orders/{order}/change-receipt', [OrderController::class, 'uploadChangeReceipt'])->middleware('order.access');
     Route::put('/orders/{order}/reminder', [OrderController::class, 'setReminder'])->middleware('order.access');
     Route::put('/orders/{order}/toggle-notification', [OrderController::class, 'toggleChangeNotification'])->middleware('order.access');

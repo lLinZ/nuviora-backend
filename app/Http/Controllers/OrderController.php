@@ -80,6 +80,8 @@ class OrderController extends Controller
         // Con los pagos nuevos, quién da el vuelto y cuánto (si ya no hay vuelto, la agencia no pone nada)
         ChangeRules::normalize($order);
         $order->save();
+        // Los comprobantes ya leídos se comparan otra vez con los pagos nuevos (sin volver a llamar a la IA)
+        app(\App\Services\Payments\ReceiptChecker::class)->evaluateOrder($order);
 
         return response()->json(['status' => true, 'order' => $order->fresh('payments')]);
     }
@@ -151,7 +153,7 @@ class OrderController extends Controller
             'locationReviews', // 👈 enviamos al front
             'rejectionReviews', // 👈 enviamos al front
             'payments', // 👈 incluimos pagos
-            'paymentReceipts', // 👈 Payment Receipts Gallery
+            'paymentReceipts.check', // 👈 Payment Receipts Gallery, con la revisión de la IA
             'agency', // 👈 incluimos agencia (viejo)
             'warehouse', // 👈 incluimos agencia regional (nuevo SCM)
             'postponements.user', // 👈 incluimos historial de reprogramación
@@ -247,6 +249,7 @@ class OrderController extends Controller
                 'change_receipt'        => $order->change_receipt,
                 'change_receipt_url'    => $order->change_receipt_url,
                 'change_approval'       => ChangeRules::approvalState($order),
+                'receipt_checks_mode'   => \App\Services\Payments\ReceiptChecker::mode(),
                 'postponements'         => $order->postponements,
                 'is_return'             => $order->is_return,
                 'is_exchange'           => $order->is_exchange,
@@ -363,6 +366,11 @@ class OrderController extends Controller
                     'status' => false,
                     'message' => 'No se puede marcar como entregado sin un comprobante de pago',
                 ], 422);
+            }
+
+            // Fran (2026-10-03): el comprobante tiene que cuadrar con el pago (revisión con IA, modo "enforce")
+            if ($blocked = app(\App\Services\Payments\ReceiptChecker::class)->deliveryBlockMessage($order)) {
+                return response()->json(['status' => false, 'message' => $blocked, 'receipt_check_block' => true], 422);
             }
 
             $cashMethods = ['DOLARES_EFECTIVO', 'BOLIVARES_EFECTIVO', 'EUROS_EFECTIVO'];
@@ -2486,10 +2494,12 @@ class OrderController extends Controller
             $path = $file->store('payment_receipts', 'public');
             $originalName = $file->getClientOriginalName();
             
-            $order->paymentReceipts()->create([
+            $receipt = $order->paymentReceipts()->create([
                 'path' => $path,
                 'original_name' => $originalName
             ]);
+            // Fran (2026-10-03): la IA lee el comprobante y lo compara con el pago, en segundo plano
+            \App\Jobs\AnalyzePaymentReceipt::forReceipt($receipt);
             
             // Backward compatibility (store the latest one)
             $order->payment_receipt = $path;
@@ -2499,7 +2509,7 @@ class OrderController extends Controller
         // URL para el preview inmediato en frontend (de la última)
     $url = url("api/orders/{$order->id}/payment-receipt");
 
-    $freshOrder = $order->fresh(['paymentReceipts', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
+    $freshOrder = $order->fresh(['paymentReceipts.check', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
     $orderArray = $freshOrder->toArray();
     $orderArray['receipts_gallery'] = $freshOrder->paymentReceipts->toArray();
 
@@ -2541,7 +2551,7 @@ class OrderController extends Controller
         }
         $order->save();
 
-        $freshOrder = $order->fresh(['paymentReceipts', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
+        $freshOrder = $order->fresh(['paymentReceipts.check', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
         $orderArray = $freshOrder->toArray();
         $orderArray['receipts_gallery'] = $freshOrder->paymentReceipts->toArray();
 
