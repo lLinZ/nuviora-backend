@@ -80,13 +80,30 @@ class ReceiptChecker
         $this->evaluateOrder($check->order);
     }
 
+    /** Órdenes ya revisadas en esta pasada (para no dar vueltas al revisar las que comparten un comprobante). */
+    private array $visiting = [];
+
     /** Revisa otra vez todos los comprobantes leídos de la orden, sin llamar a la IA (p. ej. si cambiaron los pagos). */
     public function evaluateOrder(Order $order): void
+    {
+        $top = $this->visiting === [];
+        $this->visiting[$order->id] = true;
+        try {
+            $this->evaluate($order);
+        } finally {
+            if ($top) {
+                $this->visiting = [];
+            }
+        }
+    }
+
+    private function evaluate(Order $order): void
     {
         $checks = ReceiptCheck::where('order_id', $order->id)->whereNotNull('kind')->with('receipt:id,created_at')->orderBy('id')->get();
         if ($checks->isEmpty()) {
             return;
         }
+        $others = []; // órdenes con el mismo comprobante: también se marcan
         $payments = $order->payments()->get(['method', 'amount', 'rate']);
         $accounts = $this->accounts();
         $methodsText = $payments->isEmpty() ? 'nada (no hay pagos registrados)'
@@ -101,22 +118,23 @@ class ReceiptChecker
             $list = [];
 
             if ($kind === 'ilegible') {
-                $list[] = $this->warn('No se lee bien el comprobante' . (!empty($d['motivo_ilegible']) ? " ({$d['motivo_ilegible']})" : '') . '. Pide al cliente una foto o un capture más claro.');
+                $list[] = $this->warn('No se lee bien el comprobante' . (!empty($d['motivo_ilegible']) ? " ({$d['motivo_ilegible']})" : '') . '. Pide al cliente una foto o un capture más claro.', 'unreadable');
             } elseif ($kind === 'otro') {
-                $list[] = $this->fail('La imagen no parece un comprobante de pago ni una foto de billetes.');
+                $list[] = $this->fail('La imagen no parece un comprobante de pago ni una foto de billetes.', 'kind');
             } elseif ($kind === 'efectivo') {
                 $list = array_merge($list, $this->checkCash($d, $payments, $methodsText));
             } else {
-                $kindPayments = $payments->filter(fn ($p) => (self::METHOD_KIND[$p->method] ?? null) === $kind);
+                // Pago móvil y transferencia son lo mismo para la empresa: bolívares que llegan a su banco
+                $kindPayments = $this->familyPayments($payments, $kind);
                 if ($kindPayments->isEmpty()) {
-                    $list[] = $this->fail('El comprobante es de ' . self::KIND_LABEL[$kind] . ", pero el pago está registrado como {$methodsText}.");
+                    $list[] = $this->fail('El comprobante es de ' . self::KIND_LABEL[$kind] . ", pero el pago está registrado como {$methodsText}.", 'kind');
                 } else {
                     $list = array_merge($list, $this->checkDestination($kind, $d, $accounts->get($kind)));
                 }
                 if (($d['estado'] ?? null) === 'rechazada') {
-                    $list[] = $this->fail('El comprobante dice que el pago fue rechazado.');
+                    $list[] = $this->fail('El comprobante dice que el pago fue rechazado.', 'state');
                 } elseif (($d['estado'] ?? null) === 'pendiente') {
-                    $list[] = $this->warn('El comprobante dice que el pago está pendiente.');
+                    $list[] = $this->warn('El comprobante dice que el pago está pendiente.', 'state');
                 }
                 // Contra la fecha en que se subió el comprobante (no la de la revisión, que puede ser posterior)
                 if ($dateIssue = $this->checkDate($d, $check->receipt?->created_at ?? $check->created_at)) {
@@ -127,33 +145,44 @@ class ReceiptChecker
                 if ($check->reference) {
                     if (isset($seenRefs[$check->reference])) {
                         $duplicate = true;
-                        $list[] = $this->warn('Este comprobante está repetido en la orden (misma referencia); cuenta una sola vez.');
+                        $list[] = $this->warn('Este comprobante está repetido en la orden (misma referencia); cuenta una sola vez.', 'duplicate');
                     } else {
                         $seenRefs[$check->reference] = true;
-                        $other = ReceiptCheck::where('reference', $check->reference)->where('order_id', '!=', $order->id)
-                            ->where('kind', $kind)->with('order:id,name')->first();
-                        if ($other) {
-                            $list[] = $this->fail("Esta referencia ({$check->reference}) ya está en un comprobante de la orden " . ($other->order->name ?? "#{$other->order_id}") . '.');
+                        $sameRef = ReceiptCheck::where('reference', $check->reference)->where('order_id', '!=', $order->id)
+                            ->whereIn('kind', $this->familyKinds($kind))->with('order:id,name')->get();
+                        if ($sameRef->isNotEmpty()) {
+                            $names = $sameRef->map(fn ($o) => $o->order->name ?? "#{$o->order_id}")->unique()->implode(', ');
+                            $list[] = $this->fail("Este mismo comprobante (referencia {$check->reference}) está también en la orden {$names}: un pago no puede servir para dos órdenes.", 'duplicate');
+                            foreach ($sameRef as $o) {
+                                $others[$o->order_id] = true;
+                            }
                         }
                     }
                 }
                 // Para el monto solo cuenta lo que llegó de verdad: ni repetidos ni lo que no cuadra
                 if (!$duplicate && !in_array('fail', array_column($list, 'level'), true)) {
-                    $counted[$kind][] = $check;
+                    $counted[self::family($kind)][] = $check;
                 }
             }
             $issues[$check->id] = $list;
         }
 
         // Monto: lo que suman los comprobantes de cada método contra lo registrado
-        foreach ($counted as $kind => $kindChecks) {
-            foreach ($this->checkAmount($kind, $kindChecks, $payments) as $checkId => $issue) {
+        foreach ($counted as $kindChecks) {
+            foreach ($this->checkAmount($kindChecks[0]->kind, $kindChecks, $payments) as $checkId => $issue) {
                 $issues[$checkId][] = $issue;
             }
         }
 
         foreach ($checks as $check) {
             $list = $issues[$check->id] ?? [];
+            // Si la IA dice que no ve bien la imagen, lo del monto y el destino queda para revisar, sin bloquear
+            // (2026-10-03: en una foto chiquita y de lado leyó "2.214" donde decía 22.149,00)
+            if (($check->extracted['confianza'] ?? 'alta') !== 'alta') {
+                $list = array_map(fn ($i) => $i['level'] === 'fail' && in_array($i['code'] ?? null, ['destination', 'amount'], true)
+                    ? ['level' => 'warning', 'text' => 'Lectura dudosa (la imagen no se ve del todo bien): ' . lcfirst($i['text']), 'code' => $i['code']]
+                    : $i, $list);
+            }
             $levels = array_column($list, 'level');
             $status = $check->kind === 'ilegible' ? ReceiptCheck::UNREADABLE
                 : (in_array('fail', $levels, true) ? ReceiptCheck::FAIL
@@ -162,6 +191,32 @@ class ReceiptChecker
                 $check->forceFill(['status' => $status, 'issues' => $list])->save();
             }
         }
+
+        // La otra orden con el mismo comprobante también queda marcada
+        foreach (array_keys($others) as $otherId) {
+            if (empty($this->visiting[$otherId]) && ($other = Order::find($otherId))) {
+                $this->visiting[$otherId] = true;
+                $this->evaluate($other);
+            }
+        }
+    }
+
+    /** Pago móvil y transferencia son la misma familia: bolívares que llegan al banco de la empresa. */
+    private static function family(?string $kind): ?string
+    {
+        return in_array($kind, ['pago_movil', 'transferencia'], true) ? 'bs' : $kind;
+    }
+
+    private function familyPayments(Collection $payments, string $kind): Collection
+    {
+        $family = self::family($kind);
+
+        return $payments->filter(fn ($p) => self::family(self::METHOD_KIND[$p->method] ?? null) === $family);
+    }
+
+    private function familyKinds(string $kind): array
+    {
+        return array_values(array_filter(ReceiptReader::KINDS, fn ($k) => self::family($k) === self::family($kind)));
     }
 
     /**
@@ -194,9 +249,9 @@ class ReceiptChecker
             return null;
         }
         $kinds = $order->payments()->pluck('method')->map(fn ($m) => self::METHOD_KIND[$m] ?? null)
-            ->filter(fn ($k) => $k && $k !== 'efectivo')->unique();
+            ->filter(fn ($k) => $k && $k !== 'efectivo')->unique(fn ($k) => self::family($k));
         foreach ($kinds as $kind) {
-            if (!$checks->contains(fn ($c) => $c->kind === $kind)) {
+            if (!$checks->contains(fn ($c) => self::family($c->kind) === self::family($kind))) {
                 return 'No se puede entregar: falta el comprobante de ' . self::KIND_LABEL[$kind] . '. Ninguno de los comprobantes subidos es de ' . self::KIND_LABEL[$kind] . '.';
             }
         }
@@ -210,19 +265,19 @@ class ReceiptChecker
     {
         $cash = $payments->filter(fn ($p) => (self::METHOD_KIND[$p->method] ?? null) === 'efectivo');
         if ($cash->isEmpty()) {
-            return [$this->fail("La foto es de billetes, pero el pago está registrado como {$methodsText}.")];
+            return [$this->fail("La foto es de billetes, pero el pago está registrado como {$methodsText}.", 'kind')];
         }
         $list = [];
         $currencyMethod = ['USD' => 'DOLARES_EFECTIVO', 'VES' => 'BOLIVARES_EFECTIVO', 'EUR' => 'EUROS_EFECTIVO'];
         $seen = $d['efectivo_moneda'] ?? null;
         if ($seen && isset($currencyMethod[$seen]) && !$cash->contains('method', $currencyMethod[$seen])) {
-            $list[] = $this->warn('Los billetes parecen ser ' . self::METHOD_LABEL[$currencyMethod[$seen]] . ', pero el efectivo está registrado como ' . $cash->pluck('method')->unique()->map(fn ($m) => self::METHOD_LABEL[$m])->implode(' y ') . '.');
+            $list[] = $this->warn('Los billetes parecen ser ' . self::METHOD_LABEL[$currencyMethod[$seen]] . ', pero el efectivo está registrado como ' . $cash->pluck('method')->unique()->map(fn ($m) => self::METHOD_LABEL[$m])->implode(' y ') . '.', 'cash');
         }
         $total = $d['efectivo_total_visible'] ?? null;
         if ($seen === 'USD' && $total !== null) {
             $expected = (float) $cash->where('method', 'DOLARES_EFECTIVO')->sum('amount');
             if ($expected > 0 && $total + 0.5 < $expected) {
-                $list[] = $this->warn('En la foto se ven $' . $this->usd($total) . ' en billetes y el pago en efectivo es de $' . $this->usd($expected) . '.');
+                $list[] = $this->warn('En la foto se ven $' . $this->usd($total) . ' en billetes y el pago en efectivo es de $' . $this->usd($expected) . '.', 'cash');
             }
         }
 
@@ -233,9 +288,9 @@ class ReceiptChecker
     {
         $label = self::KIND_LABEL[$kind];
         if (!$account) {
-            return [$this->warn("No hay una cuenta de {$label} en Cuentas bancarias para comparar.")];
+            return [$this->warn("No hay una cuenta de {$label} en Cuentas bancarias para comparar.", 'destination')];
         }
-        $list = $account['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.")];
+        $list = $account['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.", 'destination')];
 
         if (in_array($kind, ['pago_movil', 'transferencia'], true)) {
             $fields = $kind === 'pago_movil'
@@ -256,26 +311,26 @@ class ReceiptChecker
                 // Si el otro es otro número del todo, el banco no lo habría aceptado: puede ser un capture editado.
                 if (in_array('different', $levels, true)) {
                     $okName = array_key_first(array_filter($grades, fn ($g) => $g[0] === 'exact'));
-                    $list[] = $this->warn('Revisa la foto: ' . $read('different') . ', aunque ' . $okName . ' sí es ' . (str_starts_with($okName, 'la ') ? 'la' : 'el') . ' de la empresa (el banco no acepta un pago así).');
+                    $list[] = $this->warn('Revisa la foto: ' . $read('different') . ', aunque ' . $okName . ' sí es ' . (str_starts_with($okName, 'la ') ? 'la' : 'el') . ' de la empresa (el banco no acepta un pago así).', 'destination');
                 }
             } elseif (in_array('different', $levels, true)) {
                 $wrong = true;
-                $list[] = $this->fail(($kind === 'pago_movil' ? 'El pago móvil' : 'La transferencia') . ' no fue a la cuenta de la empresa: ' . $read('different') . '.');
+                $list[] = $this->fail(($kind === 'pago_movil' ? 'El pago móvil' : 'La transferencia') . ' no fue a la cuenta de la empresa: ' . $read('different') . '.', 'destination');
             } elseif (in_array('near', $levels, true)) {
-                $list[] = $this->warn('No se lee con seguridad a quién se hizo el pago: se leyó que ' . $read('near') . ', parecido al de la empresa. Revisa la foto.');
+                $list[] = $this->warn('No se lee con seguridad a quién se hizo el pago: se leyó que ' . $read('near') . ', parecido al de la empresa. Revisa la foto.', 'destination');
             } else {
-                $list[] = $this->warn("No se ve a qué " . ($kind === 'pago_movil' ? 'teléfono' : 'cuenta') . ' ni cédula se hizo el pago.');
+                $list[] = $this->warn("No se ve a qué " . ($kind === 'pago_movil' ? 'teléfono' : 'cuenta') . ' ni cédula se hizo el pago.', 'destination');
             }
             $bank = $d['banco_destino'] ?? null;
             if (!$wrong && $bank && $account['bank'] && !$this->sameBank($bank, $account['bank'])) {
-                $list[] = $this->warn("El banco de destino dice «{$bank}» y la cuenta de la empresa es de {$account['bank']}.");
+                $list[] = $this->warn("El banco de destino dice «{$bank}» y la cuenta de la empresa es de {$account['bank']}.", 'destination');
             }
         } else {
             $same = $this->sameMasked(mb_strtolower(trim((string) ($d['receptor_correo'] ?? ''))) ?: null, mb_strtolower((string) $account['email']) ?: null, true);
             if ($same === false) {
-                $list[] = $this->fail("El pago por {$label} no fue a la cuenta de la empresa: el correo de destino es {$d['receptor_correo']}.");
+                $list[] = $this->fail("El pago por {$label} no fue a la cuenta de la empresa: el correo de destino es {$d['receptor_correo']}.", 'destination');
             } elseif ($same === null) {
-                $list[] = $this->warn("No se ve a qué correo se hizo el pago por {$label}.");
+                $list[] = $this->warn("No se ve a qué correo se hizo el pago por {$label}.", 'destination');
             }
         }
 
@@ -290,11 +345,11 @@ class ReceiptChecker
         $date = Carbon::parse($d['fecha'])->startOfDay();
         $uploaded = Carbon::parse($uploadedAt ?? now())->startOfDay();
         if ($date->gt($uploaded->copy()->addDay())) {
-            return $this->warn('La fecha del comprobante (' . $date->format('d/m/Y') . ') es posterior a cuando se subió.');
+            return $this->warn('La fecha del comprobante (' . $date->format('d/m/Y') . ') es posterior a cuando se subió.', 'date');
         }
         $days = $date->diffInDays($uploaded);
         if ($days > self::MAX_AGE_DAYS) {
-            return $this->warn('El comprobante es del ' . $date->format('d/m/Y') . ", de {$days} días antes de subirlo.");
+            return $this->warn('El comprobante es del ' . $date->format('d/m/Y') . ", de {$days} días antes de subirlo.", 'date');
         }
 
         return null;
@@ -303,11 +358,12 @@ class ReceiptChecker
     /** @return array<int, array> issue por id de comprobante */
     private function checkAmount(string $kind, array $checks, Collection $payments): array
     {
-        $kindPayments = $payments->filter(fn ($p) => (self::METHOD_KIND[$p->method] ?? null) === $kind);
+        $kindPayments = $this->familyPayments($payments, $kind);
         if ($kindPayments->isEmpty()) {
             return [];
         }
         $ves = in_array($kind, self::VES_KINDS, true);
+        $kind = self::METHOD_KIND[$kindPayments->first()->method]; // el nombre, como está registrado el pago
         $out = [];
         if ($ves && $kindPayments->contains(fn ($p) => !(float) $p->rate)) {
             return []; // sin tasa guardada no se puede pasar a bolívares
@@ -316,9 +372,9 @@ class ReceiptChecker
         $readable = array_filter($checks, fn ($c) => $c->amount !== null);
         foreach ($checks as $c) {
             if ($c->amount === null) {
-                $out[$c->id] = $this->warn('No se lee el monto del comprobante.');
+                $out[$c->id] = $this->warn('No se lee el monto del comprobante.', 'amount');
             } elseif ($ves && $c->currency && $c->currency !== 'VES') {
-                $out[$c->id] = $this->warn("El comprobante está en {$c->currency} y el pago por " . self::KIND_LABEL[$kind] . ' se registra en bolívares.');
+                $out[$c->id] = $this->warn("El comprobante está en {$c->currency} y el pago por " . self::KIND_LABEL[$kind] . ' se registra en bolívares.', 'amount');
             }
         }
         if (count($readable) < count($checks)) {
@@ -331,12 +387,12 @@ class ReceiptChecker
         if ($got < $expected * (1 - self::SHORT_TOLERANCE) - 1) {
             $text = (count($checks) > 1 ? "Los comprobantes de {$label} suman " : "El comprobante dice ") . $fmt($got) . " y el pago por {$label} es de " . $fmt($expected) . $registered . '.';
             foreach ($checks as $c) {
-                $out[$c->id] = $this->fail($text);
+                $out[$c->id] = $this->fail($text, 'amount');
             }
         } elseif ($got > $expected * (1 + self::OVER_TOLERANCE) + 1) {
             $text = (count($checks) > 1 ? "Los comprobantes de {$label} suman " : 'El comprobante dice ') . $fmt($got) . ', más que el pago registrado (' . $fmt($expected) . '). Revisa el monto del pago.';
             foreach ($checks as $c) {
-                $out[$c->id] ??= $this->warn($text);
+                $out[$c->id] ??= $this->warn($text, 'amount');
             }
         }
 
@@ -456,6 +512,11 @@ class ReceiptChecker
         if (preg_match('/\b(\d{4})\b/', $expected, $m) && str_contains($seenNorm, $m[1])) {
             return true;
         }
+        // "Banco Universal S.A.C.A." solo no dice qué banco es: no se compara
+        $generic = ['banco', 'universal', 's', 'a', 'c', 'sa', 'ca', 'saca', 'bank'];
+        if (!array_filter(preg_split('/[^a-z0-9]+/', $seenNorm), fn ($w) => $w !== '' && !in_array($w, $generic, true))) {
+            return true;
+        }
         $name = trim(preg_replace('/\(.*?\)|\d+/', '', $this->norm($expected)));
 
         return $name !== '' && str_contains($seenNorm, $name);
@@ -476,13 +537,14 @@ class ReceiptChecker
         return number_format($n, 2, '.', ',');
     }
 
-    private function fail(string $text): array
+    /** $code: kind, destination, amount, duplicate, state, date, cash, unreadable (para decidir qué se suaviza). */
+    private function fail(string $text, string $code = 'other'): array
     {
-        return ['level' => 'fail', 'text' => $text];
+        return ['level' => 'fail', 'text' => $text, 'code' => $code];
     }
 
-    private function warn(string $text): array
+    private function warn(string $text, string $code = 'other'): array
     {
-        return ['level' => 'warning', 'text' => $text];
+        return ['level' => 'warning', 'text' => $text, 'code' => $code];
     }
 }
