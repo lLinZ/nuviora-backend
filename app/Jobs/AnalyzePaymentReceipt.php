@@ -15,7 +15,8 @@ use Throwable;
 
 /**
  * Lee un comprobante con IA y lo compara con la orden (Fran, 2026-10-03). Se encola al subirlo, para que la
- * vendedora o la agencia no esperen.
+ * vendedora o la agencia no esperen. Si no cuadra el monto o el destino, encola una segunda lectura dígito por
+ * dígito (2026-10-04) y el comprobante sigue "revisando" hasta que termine.
  */
 class AnalyzePaymentReceipt implements ShouldQueue
 {
@@ -24,8 +25,12 @@ class AnalyzePaymentReceipt implements ShouldQueue
     public int $tries = 3;
     public int $timeout = 75; // menos que retry_after (90) de la cola, para que no se relance mientras corre
 
-    public function __construct(public int $receiptId)
+    /** Segunda lectura (solo monto y destino). Con valor por defecto: los trabajos ya encolados no lo traen. */
+    public bool $reread = false;
+
+    public function __construct(public int $receiptId, bool $reread = false)
     {
+        $this->reread = $reread;
     }
 
     public function backoff(): array
@@ -54,12 +59,29 @@ class AnalyzePaymentReceipt implements ShouldQueue
         }
         $check = ReceiptCheck::firstOrCreate(['payment_receipt_id' => $receipt->id], ['order_id' => $receipt->order_id]);
 
+        if ($this->reread) {
+            $checker->recordReread($check, $reader->reread($receipt));
+            return;
+        }
         $checker->record($check, $reader->read($receipt));
+        if ($checker->needsReread($check->refresh())) {
+            // Sin el resultado de la primera a la vista: puede ser un error de lectura que la segunda corrige
+            $check->forceFill(['status' => ReceiptCheck::PENDING, 'issues' => []])->save();
+            self::dispatch($receipt->id, true);
+        }
     }
 
     public function failed(Throwable $e): void
     {
-        Log::warning("Revisión del comprobante {$this->receiptId} falló: " . $e->getMessage());
+        Log::warning('Revisión ' . ($this->reread ? '(segunda lectura) ' : '') . "del comprobante {$this->receiptId} falló: " . $e->getMessage());
+        if ($this->reread) {
+            // Sin la segunda lectura vale lo de la primera
+            $check = ReceiptCheck::with('order')->where('payment_receipt_id', $this->receiptId)->first();
+            if ($check?->order) {
+                app(ReceiptChecker::class)->evaluateOrder($check->order);
+            }
+            return;
+        }
         ReceiptCheck::where('payment_receipt_id', $this->receiptId)->update([
             'status' => ReceiptCheck::ERROR,
             'error' => mb_strimwidth($e->getMessage(), 0, 500),

@@ -42,6 +42,81 @@ TXT;
 
     public function read(PaymentReceipt $receipt): array
     {
+        $result = $this->call($receipt, self::INSTRUCTIONS, 'Lee este comprobante.', 'comprobante_de_pago', self::schema(), 'high');
+        if (!in_array($result['data']['tipo'] ?? null, self::KINDS, true)) {
+            throw new RuntimeException('Respuesta sin el formato esperado (tipo ' . json_encode($result['data']['tipo'] ?? null) . ').');
+        }
+
+        return $result;
+    }
+
+    private const RECHECK_INSTRUCTIONS = <<<'TXT'
+Eres un lector muy cuidadoso de comprobantes de pago de Venezuela. Lee SOLO estos datos de la imagen y cópialos carácter por carácter, exactamente como se ven:
+- monto_tal_cual: el monto del pago tal como aparece, con sus puntos, comas y moneda (por ejemplo "Bs. 12.345,67" o "8.800,50 Bs"). Es el monto que se pagó, no una comisión ni el saldo de la cuenta.
+- monto_digitos: los dígitos de la parte entera de ese monto, uno por uno y separados por espacios, sin puntos, comas ni decimales (para "12.345,67" es "1 2 3 4 5"; para "8.800,50" es "8 8 0 0").
+- telefono_destino, cedula_destino y cuenta_destino: el teléfono, la cédula o RIF y el número de cuenta del BENEFICIARIO o destino del pago (nunca de quien paga), escritos dígito por dígito y separados por espacios (por ejemplo "0 4 1 4 5 5 5 1 2 3 4"), con la letra de la cédula si se ve ("V 1 2 3 4 5 6 7 8"). Si el banco tapa dígitos con asteriscos, puntos o x, pon "*" en su lugar.
+Cuando hay dígitos repetidos seguidos (como 55, 444 o 000) cuéntalos uno por uno: no los juntes ni los saltes. Si un dato no se ve, null.
+TXT;
+    // Los ejemplos son números inventados a propósito: con un monto real (33.705) o el teléfono de la empresa
+    // como ejemplo, la IA podría copiarlo cuando no ve bien y dar por bueno lo que no es.
+
+    /**
+     * Segunda lectura, solo de lo que no cuadró (2026-10-04): la IA a veces junta los dígitos repetidos (leyó
+     * "3.705" donde decía 33.705 y 0412-244948 por un teléfono con tres "4" seguidos). Leyendo dígito por
+     * dígito y con la imagen a resolución completa se corrige (probado con los comprobantes reales de la
+     * semana). Como la primera, no recibe los datos esperados.
+     */
+    public function reread(PaymentReceipt $receipt): array
+    {
+        $result = $this->call($receipt, self::RECHECK_INSTRUCTIONS, 'Lee estos datos.', 'relectura', self::rereadSchema(), 'original');
+        $d = $result['data'];
+
+        return [
+            'monto' => self::parseAmount($d['monto_tal_cual'], $d['monto_digitos']),
+            'monto_tal_cual' => $d['monto_tal_cual'],
+            'monto_digitos' => $d['monto_digitos'],
+            'telefono' => $d['telefono_destino'],
+            'cedula' => $d['cedula_destino'],
+            'cuenta' => $d['cuenta_destino'],
+            'input_tokens' => $result['input_tokens'],
+            'output_tokens' => $result['output_tokens'],
+        ];
+    }
+
+    /**
+     * "33.705,00 Bs" → 33705.00. La parte entera sale de los dígitos uno por uno si la IA los dio, y los
+     * decimales, del monto tal cual.
+     */
+    public static function parseAmount(?string $asShown, ?string $digits): ?float
+    {
+        $int = $digits !== null ? preg_replace('/\D/', '', $digits) : '';
+        $intShown = '';
+        $decimals = '00';
+        if ($asShown !== null && preg_match('/\d[\d.,\s]*/', $asShown, $m)) {
+            $num = rtrim(preg_replace('/\s+/', '', $m[0]), '.,');
+            if (preg_match('/^(.*)[.,](\d{1,2})$/', $num, $p)) {
+                // con decimales: 33.705,00 o 33705.00
+                [$intShown, $decimals] = [preg_replace('/\D/', '', $p[1]), str_pad($p[2], 2, '0')];
+            } else {
+                // sin decimales: 33.705 (el punto separa los miles)
+                $intShown = preg_replace('/\D/', '', $num);
+            }
+        }
+        // Si la IA puso también los decimales en los dígitos ("3 3 7 0 5 0 0" por 33.705,00), se quitan
+        if ($intShown !== '' && strlen($int) - strlen($decimals) >= strlen($intShown) && str_ends_with($int, $decimals)) {
+            $int = substr($int, 0, -strlen($decimals));
+        }
+        $int = $int !== '' ? $int : $intShown;
+
+        return $int === '' ? null : (float) ($int . '.' . $decimals);
+    }
+
+    /**
+     * Manda la imagen con las instrucciones y el JSON Schema, y devuelve lo leído y lo que se gastó.
+     * $detail: "high" (la imagen reducida) u "original" (completa: más tokens, lee mejor los dígitos chicos).
+     */
+    private function call(PaymentReceipt $receipt, string $instructions, string $prompt, string $name, array $schema, string $detail): array
+    {
         $key = config('services.openai.key');
         if (!$key) {
             throw new RuntimeException('Falta OPENAI_API_KEY en el .env.');
@@ -65,19 +140,19 @@ TXT;
                 'model' => $model,
                 'store' => false, // las fotos traen datos bancarios de los clientes
                 'reasoning' => ['effort' => 'none'],
-                'instructions' => self::INSTRUCTIONS,
+                'instructions' => $instructions,
                 'input' => [[
                     'role' => 'user',
                     'content' => [
-                        ['type' => 'input_text', 'text' => 'Lee este comprobante.'],
-                        ['type' => 'input_image', 'image_url' => $dataUrl, 'detail' => 'high'],
+                        ['type' => 'input_text', 'text' => $prompt],
+                        ['type' => 'input_image', 'image_url' => $dataUrl, 'detail' => $detail],
                     ],
                 ]],
                 'text' => ['format' => [
                     'type' => 'json_schema',
-                    'name' => 'comprobante_de_pago',
+                    'name' => $name,
                     'strict' => true,
-                    'schema' => self::schema(),
+                    'schema' => $schema,
                 ]],
             ]);
 
@@ -102,7 +177,7 @@ TXT;
             }
         }
         $data = $text !== null ? json_decode($text, true) : null;
-        if (!is_array($data) || !in_array($data['tipo'] ?? null, self::KINDS, true)) {
+        if (!is_array($data) || array_diff($schema['required'], array_keys($data))) {
             throw new RuntimeException('Respuesta sin el formato esperado (estado ' . ($json['status'] ?? '?') . ').');
         }
 
@@ -112,6 +187,20 @@ TXT;
             'response_id' => $json['id'] ?? null,
             'input_tokens' => $json['usage']['input_tokens'] ?? null,
             'output_tokens' => $json['usage']['output_tokens'] ?? null,
+        ];
+    }
+
+    /** JSON Schema estricto de la segunda lectura. */
+    public static function rereadSchema(): array
+    {
+        $str = ['type' => ['string', 'null']];
+        $fields = ['monto_tal_cual', 'monto_digitos', 'telefono_destino', 'cedula_destino', 'cuenta_destino'];
+
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'properties' => array_fill_keys($fields, $str),
+            'required' => $fields,
         ];
     }
 

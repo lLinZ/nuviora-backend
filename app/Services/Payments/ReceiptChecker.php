@@ -5,6 +5,7 @@ namespace App\Services\Payments;
 use App\Models\CompanyAccount;
 use App\Models\Order;
 use App\Models\ReceiptCheck;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -16,6 +17,8 @@ use Illuminate\Support\Collection;
  * - Un pago digital tiene que ir a la cuenta de la empresa (teléfono, cédula, número de cuenta o correo).
  * - Los comprobantes de un método tienen que sumar lo registrado (los bolívares, con la tasa del pago).
  * - La misma referencia no puede estar en otra orden.
+ * Si no cuadra el monto o el destino, la IA lee otra vez esos datos dígito por dígito (needsReread) y vale la
+ * lectura que cuadre: leyó "3.705" donde decía 33.705. Si las dos dicen lo mismo, el pago no cuadra de verdad.
  * En modo "enforce" no se entrega la orden si algo de esto falla (deliveryBlockMessage).
  */
 class ReceiptChecker
@@ -52,6 +55,9 @@ class ReceiptChecker
 
     private const MAX_AGE_DAYS = 3;
 
+    /** Con dos lecturas de un dato de destino vale la mejor (que una coincida exacto con la empresa no es casualidad). */
+    private const GRADE_RANK = ['different' => 0, 'unknown' => 1, 'near' => 2, 'exact' => 3];
+
     public static function mode(): string
     {
         $mode = config('services.receipt_checks.mode', 'off');
@@ -75,6 +81,34 @@ class ReceiptChecker
             'input_tokens' => $result['input_tokens'] ?? null,
             'output_tokens' => $result['output_tokens'] ?? null,
             'error' => null,
+        ])->save();
+
+        $this->evaluateOrder($check->order);
+    }
+
+    /**
+     * Si conviene leer otra vez el comprobante, dígito por dígito: no cuadró el monto, o el destino de un pago en
+     * bolívares, y todavía no se releyó. Pasar la revisión recién leída de la BD.
+     */
+    public function needsReread(ReceiptCheck $check): bool
+    {
+        if (in_array($check->kind, ['efectivo', 'otro', 'ilegible', null], true) || isset($check->extracted['relectura'])) {
+            return false;
+        }
+        $codes = array_column($check->issues ?? [], 'code');
+
+        return in_array('amount', $codes, true) || (in_array('destination', $codes, true) && in_array($check->kind, self::VES_KINDS, true));
+    }
+
+    /** Guarda la segunda lectura junto a la primera y vuelve a revisar toda la orden. */
+    public function recordReread(ReceiptCheck $check, array $reread): void
+    {
+        $extracted = $check->extracted ?? [];
+        $extracted['relectura'] = Arr::only($reread, ['monto', 'monto_tal_cual', 'monto_digitos', 'telefono', 'cedula', 'cuenta']);
+        $check->forceFill([
+            'extracted' => $extracted,
+            'input_tokens' => (int) $check->input_tokens + (int) ($reread['input_tokens'] ?? 0),
+            'output_tokens' => (int) $check->output_tokens + (int) ($reread['output_tokens'] ?? 0),
         ])->save();
 
         $this->evaluateOrder($check->order);
@@ -187,8 +221,10 @@ class ReceiptChecker
             $status = $check->kind === 'ilegible' ? ReceiptCheck::UNREADABLE
                 : (in_array('fail', $levels, true) ? ReceiptCheck::FAIL
                     : (in_array('warning', $levels, true) ? ReceiptCheck::WARNING : ReceiptCheck::OK));
-            if ($check->status !== $status || $check->issues !== $list) {
-                $check->forceFill(['status' => $status, 'issues' => $list])->save();
+            // También el monto, si checkAmount se quedó con el de la segunda lectura
+            $check->forceFill(['status' => $status, 'issues' => $list]);
+            if ($check->isDirty()) {
+                $check->save();
             }
         }
 
@@ -288,18 +324,27 @@ class ReceiptChecker
     {
         $label = self::KIND_LABEL[$kind];
         if (!$account) {
-            return [$this->warn("No hay una cuenta de {$label} en Cuentas bancarias para comparar.", 'destination')];
+            return [$this->warn("No hay una cuenta de {$label} en Cuentas bancarias para comparar.", 'account')];
         }
-        $list = $account['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.", 'destination')];
+        $list = $account['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.", 'account')];
 
         if (in_array($kind, ['pago_movil', 'transferencia'], true)) {
+            $again = $d['relectura'] ?? [];
             $fields = $kind === 'pago_movil'
-                ? ['el teléfono' => [$d['receptor_telefono'] ?? null, $account['phone'], 'phone']]
-                : ['el número de cuenta' => [$d['receptor_cuenta'] ?? null, $account['account'], 'digits']];
-            $fields['la cédula'] = [$d['receptor_identificacion'] ?? null, $account['id'], 'id'];
+                ? ['el teléfono' => [[$d['receptor_telefono'] ?? null, $again['telefono'] ?? null], $account['phone'], 'phone']]
+                : ['el número de cuenta' => [[$d['receptor_cuenta'] ?? null, $again['cuenta'] ?? null], $account['account'], 'digits']];
+            $fields['la cédula'] = [[$d['receptor_identificacion'] ?? null, $again['cedula'] ?? null], $account['id'], 'id'];
             $grades = [];
-            foreach ($fields as $name => [$seen, $expected, $type]) {
-                $grades[$name] = [$this->compareId($seen, $expected, $type), $seen];
+            foreach ($fields as $name => [$readings, $expected, $type]) {
+                // Primera y segunda lectura: vale la que mejor coincide (la segunda lee dígito por dígito)
+                $best = null;
+                foreach (array_filter($readings, fn ($seen) => $seen !== null) as $seen) {
+                    $grade = $this->compareId($seen, $expected, $type);
+                    if ($best === null || self::GRADE_RANK[$grade] > self::GRADE_RANK[$best[0]]) {
+                        $best = [$grade, $seen];
+                    }
+                }
+                $grades[$name] = $best ?? ['unknown', null];
             }
             $levels = array_column($grades, 0);
             $read = fn (string $grade) => implode(' y ', array_map(fn ($name) => "{$name} de destino es {$grades[$name][1]}", array_keys(array_filter($grades, fn ($g) => $g[0] === $grade))));
@@ -323,7 +368,7 @@ class ReceiptChecker
             }
             $bank = $d['banco_destino'] ?? null;
             if (!$wrong && $bank && $account['bank'] && !$this->sameBank($bank, $account['bank'])) {
-                $list[] = $this->warn("El banco de destino dice «{$bank}» y la cuenta de la empresa es de {$account['bank']}.", 'destination');
+                $list[] = $this->warn("El banco de destino dice «{$bank}» y la cuenta de la empresa es de {$account['bank']}.", 'bank');
             }
         } else {
             $same = $this->sameMasked(mb_strtolower(trim((string) ($d['receptor_correo'] ?? ''))) ?: null, mb_strtolower((string) $account['email']) ?: null, true);
@@ -369,21 +414,47 @@ class ReceiptChecker
             return []; // sin tasa guardada no se puede pasar a bolívares
         }
         $expected = $ves ? $kindPayments->sum(fn ($p) => (float) $p->amount * (float) $p->rate) : (float) $kindPayments->sum('amount');
-        $readable = array_filter($checks, fn ($c) => $c->amount !== null);
+        $readings = [];
         foreach ($checks as $c) {
-            if ($c->amount === null) {
+            $readings[$c->id] = $this->amountReadings($c);
+            if (!$readings[$c->id]) {
                 $out[$c->id] = $this->warn('No se lee el monto del comprobante.', 'amount');
             } elseif ($ves && $c->currency && $c->currency !== 'VES') {
-                $out[$c->id] = $this->warn("El comprobante está en {$c->currency} y el pago por " . self::KIND_LABEL[$kind] . ' se registra en bolívares.', 'amount');
+                $out[$c->id] = $this->warn("El comprobante está en {$c->currency} y el pago por " . self::KIND_LABEL[$kind] . ' se registra en bolívares.', 'currency');
             }
         }
-        if (count($readable) < count($checks)) {
+        if (count(array_filter($readings)) < count($checks)) {
             return $out; // si falta leer algún monto no se puede sumar
         }
-        $got = array_sum(array_map(fn ($c) => (float) $c->amount, $readable));
+        $fits = fn (float $got) => $got >= $expected * (1 - self::SHORT_TOLERANCE) - 1 && $got <= $expected * (1 + self::OVER_TOLERANCE) + 1;
+        $first = array_map(fn ($r) => $r[0], $readings);
+        // Con segunda lectura hay más de una combinación: si alguna cuadra, esa es la buena (la IA no recibe el
+        // monto esperado, así que una lectura que cae justo en él no es casualidad)
+        $chosen = Arr::first($this->combinations($readings), fn ($combo) => $fits(array_sum($combo))) ?? $first;
+        foreach ($checks as $c) {
+            $c->amount = $chosen[$c->id]; // el que se muestra como leído
+        }
+        if ($fits(array_sum($chosen))) {
+            return $out;
+        }
+
+        $got = array_sum($first);
         $fmt = fn ($n) => $ves ? 'Bs. ' . $this->bs($n) : '$' . $this->usd($n);
         $label = self::KIND_LABEL[$kind];
         $registered = $ves ? ' ($' . $this->usd((float) $kindPayments->sum('amount')) . ' a la tasa del pago)' : '';
+        if (array_filter($readings, fn ($r) => count($r) > 1)) {
+            // Las dos lecturas no coinciden y ninguna cuadra: que lo vea una persona, sin bloquear
+            $second = array_sum(array_map(fn ($r) => $r[count($r) - 1], $readings));
+            $text = 'Lectura dudosa: ' . (count($checks) > 1
+                ? "los comprobantes de {$label} suman " . $fmt($got) . ' según la primera lectura y ' . $fmt($second) . ' según la segunda'
+                : 'el monto se leyó como ' . $fmt($got) . ' y como ' . $fmt($second))
+                . ", y el pago por {$label} es de " . $fmt($expected) . $registered . '. Revisa la foto.';
+            foreach ($checks as $c) {
+                $out[$c->id] ??= $this->warn($text, 'amount');
+            }
+
+            return $out;
+        }
         if ($got < $expected * (1 - self::SHORT_TOLERANCE) - 1) {
             $text = (count($checks) > 1 ? "Los comprobantes de {$label} suman " : "El comprobante dice ") . $fmt($got) . " y el pago por {$label} es de " . $fmt($expected) . $registered . '.';
             foreach ($checks as $c) {
@@ -397,6 +468,34 @@ class ReceiptChecker
         }
 
         return $out;
+    }
+
+    /** Los montos leídos de un comprobante: el de la primera lectura y, si la segunda dio otro, también ese. */
+    private function amountReadings(ReceiptCheck $c): array
+    {
+        $readings = array_filter([$c->extracted['monto'] ?? null, $c->extracted['relectura']['monto'] ?? null], fn ($v) => $v !== null);
+
+        return array_values(array_unique(array_map(fn ($v) => round((float) $v, 2), $readings), SORT_REGULAR));
+    }
+
+    /**
+     * Las combinaciones de lecturas de varios comprobantes (uno o dos montos cada uno), empezando por la de las
+     * primeras lecturas. @return array<int, array<int, float>> monto por id de revisión
+     */
+    private function combinations(array $readings): array
+    {
+        $combos = [[]];
+        foreach ($readings as $id => $amounts) {
+            $next = [];
+            foreach ($combos as $combo) {
+                foreach ($amounts as $amount) {
+                    $next[] = $combo + [$id => $amount];
+                }
+            }
+            $combos = $next;
+        }
+
+        return $combos;
     }
 
     // --- Cuentas de la empresa ---
@@ -537,7 +636,10 @@ class ReceiptChecker
         return number_format($n, 2, '.', ',');
     }
 
-    /** $code: kind, destination, amount, duplicate, state, date, cash, unreadable (para decidir qué se suaviza). */
+    /**
+     * $code: kind, destination, account, bank, amount, currency, duplicate, state, date, cash, unreadable (para
+     * decidir qué se suaviza y qué se relee: destination y amount).
+     */
     private function fail(string $text, string $code = 'other'): array
     {
         return ['level' => 'fail', 'text' => $text, 'code' => $code];
