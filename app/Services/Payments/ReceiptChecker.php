@@ -83,7 +83,7 @@ class ReceiptChecker
     /** Revisa otra vez todos los comprobantes leídos de la orden, sin llamar a la IA (p. ej. si cambiaron los pagos). */
     public function evaluateOrder(Order $order): void
     {
-        $checks = ReceiptCheck::where('order_id', $order->id)->whereNotNull('kind')->orderBy('id')->get();
+        $checks = ReceiptCheck::where('order_id', $order->id)->whereNotNull('kind')->with('receipt:id,created_at')->orderBy('id')->get();
         if ($checks->isEmpty()) {
             return;
         }
@@ -118,7 +118,8 @@ class ReceiptChecker
                 } elseif (($d['estado'] ?? null) === 'pendiente') {
                     $list[] = $this->warn('El comprobante dice que el pago está pendiente.');
                 }
-                if ($dateIssue = $this->checkDate($d, $check->created_at)) {
+                // Contra la fecha en que se subió el comprobante (no la de la revisión, que puede ser posterior)
+                if ($dateIssue = $this->checkDate($d, $check->receipt?->created_at ?? $check->created_at)) {
                     $list[] = $dateIssue;
                 }
 
@@ -237,23 +238,32 @@ class ReceiptChecker
         $list = $account['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.")];
 
         if (in_array($kind, ['pago_movil', 'transferencia'], true)) {
-            $checks = $kind === 'pago_movil'
+            $fields = $kind === 'pago_movil'
                 ? ['el teléfono' => [$d['receptor_telefono'] ?? null, $account['phone'], 'phone']]
                 : ['el número de cuenta' => [$d['receptor_cuenta'] ?? null, $account['account'], 'digits']];
-            $checks['la cédula'] = [$d['receptor_identificacion'] ?? null, $account['id'], 'id'];
-            $wrong = [];
-            $matched = 0;
-            foreach ($checks as $name => [$seen, $expected, $type]) {
-                $same = $this->sameMasked($this->clean($seen, $type), $this->clean($expected, $type));
-                if ($same === false) {
-                    $wrong[] = "{$name} de destino es {$seen}";
-                } elseif ($same === true) {
-                    $matched++;
-                }
+            $fields['la cédula'] = [$d['receptor_identificacion'] ?? null, $account['id'], 'id'];
+            $grades = [];
+            foreach ($fields as $name => [$seen, $expected, $type]) {
+                $grades[$name] = [$this->compareId($seen, $expected, $type), $seen];
             }
-            if ($wrong) {
-                $list[] = $this->fail(($kind === 'pago_movil' ? 'El pago móvil' : 'La transferencia') . ' no fue a la cuenta de la empresa: ' . implode(' y ', $wrong) . '.');
-            } elseif ($matched === 0) {
+            $levels = array_column($grades, 0);
+            $read = fn (string $grade) => implode(' y ', array_map(fn ($name) => "{$name} de destino es {$grades[$name][1]}", array_keys(array_filter($grades, fn ($g) => $g[0] === $grade))));
+            $wrong = false;
+            if (in_array('exact', $levels, true)) {
+                // El banco solo acepta el pago si el teléfono (o la cuenta) y la cédula son del mismo afiliado: si uno
+                // coincide exacto con la empresa, el pago llegó a la empresa y una diferencia de 1 o 2 dígitos en el
+                // otro es de lectura (2026-10-03: la IA leía 0412-244948 por un teléfono con tres "4" seguidos).
+                // Si el otro es otro número del todo, el banco no lo habría aceptado: puede ser un capture editado.
+                if (in_array('different', $levels, true)) {
+                    $okName = array_key_first(array_filter($grades, fn ($g) => $g[0] === 'exact'));
+                    $list[] = $this->warn('Revisa la foto: ' . $read('different') . ', aunque ' . $okName . ' sí es ' . (str_starts_with($okName, 'la ') ? 'la' : 'el') . ' de la empresa (el banco no acepta un pago así).');
+                }
+            } elseif (in_array('different', $levels, true)) {
+                $wrong = true;
+                $list[] = $this->fail(($kind === 'pago_movil' ? 'El pago móvil' : 'La transferencia') . ' no fue a la cuenta de la empresa: ' . $read('different') . '.');
+            } elseif (in_array('near', $levels, true)) {
+                $list[] = $this->warn('No se lee con seguridad a quién se hizo el pago: se leyó que ' . $read('near') . ', parecido al de la empresa. Revisa la foto.');
+            } else {
                 $list[] = $this->warn("No se ve a qué " . ($kind === 'pago_movil' ? 'teléfono' : 'cuenta') . ' ni cédula se hizo el pago.');
             }
             $bank = $d['banco_destino'] ?? null;
@@ -384,6 +394,38 @@ class ReceiptChecker
         }
 
         return $v === '' ? null : $v;
+    }
+
+    /**
+     * Compara un dato de destino (teléfono, cédula o cuenta) con el de la empresa:
+     * exact (igual, o igual en lo que el banco deja ver), near (a 1 o 2 dígitos: error de lectura),
+     * unknown (no se ve, la IA no está segura o no tiene forma de ese dato) o different.
+     */
+    private function compareId(?string $seen, ?string $expected, string $type): string
+    {
+        if ($seen === null || trim($seen) === '' || str_contains($seen, '?')) {
+            return 'unknown';
+        }
+        $a = $this->clean($seen, $type);
+        $b = $this->clean($expected, $type);
+        if ($a === null || $b === null) {
+            return 'unknown';
+        }
+        $masked = $this->sameMasked($a, $b);
+        if ($masked === true) {
+            return 'exact';
+        }
+        if ($masked === null) {
+            return 'unknown';
+        }
+        if (!str_contains($a, '*') && levenshtein($a, $b) <= 2) {
+            return 'near';
+        }
+        // Largo de un teléfono (04XX + 7), una cédula o una cuenta de 20 dígitos; si no lo tiene, la IA leyó otra cosa
+        [$min, $max] = ['phone' => [10, 12], 'id' => [6, 9], 'digits' => [16, 20]][$type];
+        $length = strlen($a);
+
+        return $length >= $min && $length <= $max ? 'different' : 'unknown';
     }
 
     /**
