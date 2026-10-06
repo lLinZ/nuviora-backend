@@ -74,7 +74,8 @@ class ReceiptChecker
             'kind' => $d['tipo'],
             'extracted' => $d,
             'reference' => strlen($reference) >= 6 ? $reference : null,
-            'amount' => $d['tipo'] === 'efectivo' ? ($d['efectivo_total_visible'] ?? null) : ($d['monto'] ?? null),
+            // De una foto de billetes no se toma el total: la IA los cuenta mal (2026-10-06, ver checkCash)
+            'amount' => $d['tipo'] === 'efectivo' ? null : ($d['monto'] ?? null),
             'currency' => $d['tipo'] === 'efectivo' ? ($d['efectivo_moneda'] ?? null) : ($d['moneda'] ?? null),
             'model' => $result['model'] ?? null,
             'response_id' => $result['response_id'] ?? null,
@@ -297,6 +298,11 @@ class ReceiptChecker
 
     // --- Revisiones ---
 
+    /**
+     * Foto de billetes: solo que haya efectivo registrado y que la moneda coincida. La cantidad no se revisa
+     * (2026-10-06): la IA cuenta mal los billetes de fotos tomadas de cualquier forma (dos veces el que se ve por
+     * las dos puntas, $20 por $100), y lo que se le cobra a la agencia sale del pago registrado.
+     */
     private function checkCash(array $d, Collection $payments, string $methodsText): array
     {
         $cash = $payments->filter(fn ($p) => (self::METHOD_KIND[$p->method] ?? null) === 'efectivo');
@@ -308,13 +314,6 @@ class ReceiptChecker
         $seen = $d['efectivo_moneda'] ?? null;
         if ($seen && isset($currencyMethod[$seen]) && !$cash->contains('method', $currencyMethod[$seen])) {
             $list[] = $this->warn('Los billetes parecen ser ' . self::METHOD_LABEL[$currencyMethod[$seen]] . ', pero el efectivo está registrado como ' . $cash->pluck('method')->unique()->map(fn ($m) => self::METHOD_LABEL[$m])->implode(' y ') . '.', 'cash');
-        }
-        $total = $d['efectivo_total_visible'] ?? null;
-        if ($seen === 'USD' && $total !== null) {
-            $expected = (float) $cash->where('method', 'DOLARES_EFECTIVO')->sum('amount');
-            if ($expected > 0 && $total + 0.5 < $expected) {
-                $list[] = $this->warn('En la foto se ven $' . $this->usd($total) . ' en billetes y el pago en efectivo es de $' . $this->usd($expected) . '.', 'cash');
-            }
         }
 
         return $list;

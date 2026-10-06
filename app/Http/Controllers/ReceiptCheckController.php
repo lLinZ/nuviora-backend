@@ -106,7 +106,8 @@ class ReceiptCheckController extends Controller
             'summary' => array_filter([
                 'banco' => $d['banco_origen'] ?? null,
                 'banco_destino' => $d['banco_destino'] ?? null,
-                'monto' => $c->amount,
+                // De una foto de billetes no se muestra cuánto contó la IA (2026-10-06): los cuenta mal
+                'monto' => $c->kind === 'efectivo' ? null : $c->amount,
                 'moneda' => $c->currency,
                 'referencia' => $d['referencia'] ?? null,
                 'fecha' => $d['fecha'] ?? null,
