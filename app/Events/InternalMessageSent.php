@@ -15,6 +15,9 @@ class InternalMessageSent implements ShouldBroadcast
 
     public InternalMessage $message;
 
+    /** El adjunto con su enlace firmado, armado al enviar (en la petición) y no en la cola. */
+    public ?array $attachment;
+
     public function __construct(InternalMessage $message)
     {
         $this->message = $message->loadMissing([
@@ -22,6 +25,7 @@ class InternalMessageSent implements ShouldBroadcast
             'sender.cities:id,name,agency_id',
             'conversation.order:id,agent_id,agency_id',
         ]);
+        $this->attachment = $message->attachmentPayload();
     }
 
     public function broadcastWith(): array
@@ -34,6 +38,7 @@ class InternalMessageSent implements ShouldBroadcast
                 'conversation_id' => $this->message->conversation_id,
                 'sender_id'       => $this->message->sender_id,
                 'body'            => $this->message->body,
+                'attachment'      => $this->attachment,
                 'read_at'         => $this->message->read_at,
                 'created_at'      => $this->message->created_at,
                 'sender' => $sender ? [

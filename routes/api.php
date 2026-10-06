@@ -46,6 +46,8 @@ Route::post('order/webhook/{shop_id?}', [ShopifyWebhookController::class, 'handl
 Route::get('/orders/{order}/payment-receipt', [OrderController::class, 'getPaymentReceipt'])->name('receipts.order');
 Route::get('/orders/receipt/{receipt}', [OrderController::class, 'getReceipt'])->name('receipts.show');
 Route::get('/orders/{order}/change-receipt', [OrderController::class, 'getChangeReceipt'])->name('receipts.change');
+// 🔒 Archivos del chat interno: igual, con el enlace firmado que entrega el chat (12 h)
+Route::get('/internal-chat/attachments/{message}', [\App\Http\Controllers\InternalChatController::class, 'attachment'])->name('internal-chat.attachment');
 
 // --- WhatsApp Webhook (Meta) ---
 Route::get('whatsapp/webhook', [WhatsAppWebhookController::class, 'verify']);

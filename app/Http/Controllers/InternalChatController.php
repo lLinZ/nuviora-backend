@@ -8,6 +8,8 @@ use App\Models\InternalMessage;
 use App\Models\Order;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class InternalChatController extends Controller
 {
@@ -180,7 +182,7 @@ class InternalChatController extends Controller
                 'counterpart'     => $counterpart ? ['id' => $counterpart->id, 'name' => $counterpart->chatDisplayName()] : null,
                 'is_participant'  => $isParticipant,
                 'last_message'    => $c->lastMessage ? [
-                    'body'       => $c->lastMessage->body,
+                    'body'       => $c->lastMessage->preview(), // "📷 Foto" si es un archivo
                     'sender_id'  => $c->lastMessage->sender_id,
                     'created_at' => $c->lastMessage->created_at,
                 ] : null,
@@ -322,15 +324,7 @@ class InternalChatController extends Controller
                 ->with(['sender.role', 'sender.cities:id,name,agency_id'])
                 ->orderBy('created_at')
                 ->get()
-                ->map(fn (InternalMessage $m) => [
-                    'id'         => $m->id,
-                    'sender_id'  => $m->sender_id,
-                    'sender'     => $this->senderRef($m->sender, $realNames),
-                    'body'       => $m->body,
-                    'read_at'    => $m->read_at,
-                    'created_at' => $m->created_at,
-                    'mine'       => (int) $m->sender_id === (int) $user->id,
-                ]);
+                ->map(fn (InternalMessage $m) => $this->presentMessage($m, $user, $realNames));
             if ($isParticipant) {
                 $conversation->messages()->where('sender_id', '!=', $user->id)->whereNull('read_at')->update(['read_at' => now()]);
             }
@@ -363,15 +357,7 @@ class InternalChatController extends Controller
             ->with(['sender.role', 'sender.cities:id,name,agency_id'])
             ->orderBy('created_at')
             ->get()
-            ->map(fn (InternalMessage $m) => [
-                'id'         => $m->id,
-                'sender_id'  => $m->sender_id,
-                'sender'     => $this->senderRef($m->sender, $realNames),
-                'body'       => $m->body,
-                'read_at'    => $m->read_at,
-                'created_at' => $m->created_at,
-                'mine'       => (int) $m->sender_id === (int) $user->id,
-            ]);
+            ->map(fn (InternalMessage $m) => $this->presentMessage($m, $user, $realNames));
 
         if ($conversation->hasParticipant($user->id)) {
             $conversation->messages()
@@ -384,11 +370,21 @@ class InternalChatController extends Controller
     }
 
     /**
-     * Envía un mensaje al hilo. Admin/Gerente pueden intervenir.
+     * Envía un mensaje al hilo. Admin/Gerente pueden intervenir. Puede llevar un archivo (2026-10-06): foto,
+     * video, audio o nota de voz (voice=1), PDF u otro documento, hasta 50 MB; el texto queda como pie.
      */
     public function store(Request $request, InternalConversation $conversation)
     {
-        $request->validate(['body' => 'required|string|max:5000']);
+        $request->validate([
+            'body'  => 'nullable|string|max:5000|required_without:file',
+            'file'  => 'nullable|file|max:' . InternalMessage::MAX_KB . '|mimes:' . implode(',', InternalMessage::ALLOWED_EXTENSIONS),
+            'voice' => 'nullable|boolean',
+        ], [
+            'body.required_without' => 'Escribe un mensaje o adjunta un archivo.',
+            'file.max'              => 'El archivo pesa más de 50 MB.',
+            'file.uploaded'         => 'No se pudo subir el archivo (máximo 50 MB).',
+            'file.mimes'            => 'Ese tipo de archivo no se puede enviar. Se aceptan fotos, videos, audios, PDF y documentos (Word, Excel, PowerPoint, texto, zip).',
+        ]);
 
         $user = $request->user();
         $conversation->loadMissing('order');
@@ -397,11 +393,36 @@ class InternalChatController extends Controller
             return response()->json(['message' => 'No tienes acceso a esta conversación.'], 403);
         }
 
-        $message = InternalMessage::create([
-            'conversation_id' => $conversation->id,
-            'sender_id'       => $user->id,
-            'body'            => $request->body,
-        ]);
+        $attachment = [];
+        if ($file = $request->file('file')) {
+            $voice = $request->boolean('voice');
+            // El tipo sale del contenido del archivo, no de lo que diga el navegador
+            $mime = InternalMessage::servedMime((string) $file->getMimeType(), $voice);
+            $path = $file->store("internal-chat/{$conversation->id}", 'local');
+            if (!$path) {
+                return response()->json(['message' => 'No se pudo guardar el archivo. Intenta de nuevo.'], 500);
+            }
+            $attachment = [
+                'attachment_path' => $path,
+                'attachment_name' => InternalMessage::cleanName($file->getClientOriginalName(), $file->extension()),
+                'attachment_mime' => $mime,
+                'attachment_size' => $file->getSize(),
+                'attachment_kind' => InternalMessage::kindFor($mime, $voice),
+            ];
+        }
+
+        try {
+            $message = InternalMessage::create([
+                'conversation_id' => $conversation->id,
+                'sender_id'       => $user->id,
+                'body'            => (string) $request->input('body', ''),
+            ] + $attachment);
+        } catch (\Throwable $e) {
+            if ($attachment) {
+                Storage::disk('local')->delete($attachment['attachment_path']);
+            }
+            throw $e;
+        }
 
         $conversation->update(['last_message_at' => $message->created_at]);
 
@@ -409,15 +430,46 @@ class InternalChatController extends Controller
 
         $user->loadMissing(['role', 'cities']);
 
-        return response()->json([
-            'id'         => $message->id,
-            'sender_id'  => $message->sender_id,
-            'sender'     => ['id' => $user->id, 'name' => $user->chatDisplayName()],
-            'body'       => $message->body,
-            'read_at'    => $message->read_at,
-            'created_at' => $message->created_at,
-            'mine'       => true,
-        ], 201);
+        return response()->json($this->presentMessage($message, $user, false), 201);
+    }
+
+    /**
+     * GET /internal-chat/attachments/{message} — el archivo de un mensaje. Sin sesión (se abre como <img>,
+     * <video> o en otra pestaña), pero solo con el enlace firmado que entrega el chat. Foto, video, audio y
+     * PDF se abren en el navegador (con Range, para adelantar un video); lo demás se descarga.
+     */
+    public function attachment(Request $request, InternalMessage $message)
+    {
+        if (!$request->hasValidSignatureWhileIgnoring(['download'])) {
+            abort(403, 'Enlace no válido o vencido. Vuelve a abrir el chat.');
+        }
+        $disk = Storage::disk('local');
+        abort_unless($message->attachment_path && $disk->exists($message->attachment_path), 404, 'El archivo ya no está.');
+
+        $name = $message->attachment_name ?: basename($message->attachment_path);
+        $fallback = preg_replace('/[^A-Za-z0-9._-]+/', '_', Str::ascii($name)) ?: 'archivo';
+        $inline = $message->isInline() && !$request->boolean('download');
+
+        return response()->file($disk->path($message->attachment_path), [
+            'Content-Type'           => $inline ? $message->attachment_mime : 'application/octet-stream',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control'          => 'private, max-age=43200',
+        ])->setContentDisposition($inline ? 'inline' : 'attachment', $name, $fallback);
+    }
+
+    /** Un mensaje para el chat (la bandeja, el hilo, la respuesta al enviar). */
+    private function presentMessage(InternalMessage $m, User $user, bool $realNames): array
+    {
+        return [
+            'id'         => $m->id,
+            'sender_id'  => $m->sender_id,
+            'sender'     => $this->senderRef($m->sender, $realNames),
+            'body'       => $m->body,
+            'attachment' => $m->attachmentPayload(),
+            'read_at'    => $m->read_at,
+            'created_at' => $m->created_at,
+            'mine'       => (int) $m->sender_id === (int) $user->id,
+        ];
     }
 
     /**
@@ -496,7 +548,7 @@ class InternalChatController extends Controller
                     ? ['id' => $order->agent->id, 'name' => $order->agent->chatDisplayName()]
                     : null,
                 'last_message'    => $c->lastMessage ? [
-                    'body'       => $c->lastMessage->body,
+                    'body'       => $c->lastMessage->preview(), // "📷 Foto" si es un archivo
                     'sender_id'  => $c->lastMessage->sender_id,
                     'created_at' => $c->lastMessage->created_at,
                 ] : null,
