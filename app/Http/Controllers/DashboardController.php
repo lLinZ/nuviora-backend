@@ -422,16 +422,9 @@ class DashboardController extends Controller
             ->whereIn('status_id', $pendingStatuses)
             ->count();
 
-        // Calculate commissions from Earning table
-        $earningsUsd = \App\Models\Earning::where('user_id', $user->id)
-            ->whereDate('earning_date', $date->toDateString())
-            ->where('role_type', 'agencia')
-            ->sum('amount_usd');
-
+        // Sin earnings_usd: lo que se le paga a la agencia por sus carreras solo lo ve el Admin (Fran, 2026-10-06)
         return [
             'total_sales' => (float) $totalSales,
-            'earnings_usd' => (float) $earningsUsd,
-            'earnings_local' => (float) ($earningsUsd * $rate),
             'orders_today' => [
                 'assigned' => $assigned,
                 'delivered' => $deliveredCount ?: $deliveredCountFromSettlement,

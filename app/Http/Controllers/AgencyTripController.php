@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Auth;
 /** Carreras de las agencias (tarea 5): las de una orden y la anulación por el Admin. */
 class AgencyTripController extends Controller
 {
-    /** GET /orders/{order}/trips — el acceso a la orden lo cuida order.access. */
+    /** GET /orders/{order}/trips — solo Admin/Master (la ruta lo exige): la agencia no ve sus carreras. */
     public function index(Order $order): JsonResponse
     {
         $trips = $order->agencyTrips()->with(['order:id,name', 'agency:id,names', 'deliverer:id,names', 'voider:id,names'])->orderBy('id')->get();

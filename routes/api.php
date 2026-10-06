@@ -459,7 +459,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/orders/{order}/refunds', [\App\Http\Controllers\OrderRefundController::class, 'index'])->middleware('order.access');
     Route::post('/orders/{order}/refunds', [\App\Http\Controllers\OrderRefundController::class, 'store'])->middleware('order.access');
     Route::get('/orders/{order}/refunds/{refund}/receipt', [\App\Http\Controllers\OrderRefundController::class, 'receipt'])->middleware('order.access');
-    Route::get('/orders/{order}/trips', [\App\Http\Controllers\AgencyTripController::class, 'index'])->middleware('order.access');
+    // Las carreras solo las ve el Admin; la agencia no (Fran, 2026-10-06)
+    Route::get('/orders/{order}/trips', [\App\Http\Controllers\AgencyTripController::class, 'index'])->middleware('role:Admin,Master');
     Route::post('/agency-trips/{trip}/void', [\App\Http\Controllers\AgencyTripController::class, 'void'])->middleware('role:Admin,Master');
 
     /**---------------------

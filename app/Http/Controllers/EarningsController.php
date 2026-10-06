@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Services\EarningsService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 
 class EarningsController extends Controller
@@ -41,6 +42,13 @@ class EarningsController extends Controller
 
         $data = $this->service->summary($from, $to, $agencyId);
 
+        // La agencia ve su liquidación (lo cobrado, los vueltos y el saldo), pero no sus carreras ni lo que se le paga
+        // por ellas: eso solo lo ve el Admin, para que no haya confusiones (Fran, 2026-10-06)
+        if ($agencyId) {
+            $data = Arr::only($data, ['rates', 'from', 'to', 'orders_with_change', 'agency_settlement']);
+            $data['agency_settlement'] = $data['agency_settlement']->map(fn ($a) => EarningsService::withoutTrips($a))->values();
+        }
+
         return response()->json([
             'status' => true,
             'data'   => $data,
@@ -54,6 +62,14 @@ class EarningsController extends Controller
     public function me(Request $request)
     {
         $user = Auth::user();
+
+        // Las ganancias de una agencia son sus carreras: solo las ve el Admin (Fran, 2026-10-06)
+        if ($user->role?->description === 'Agencia') {
+            return response()->json([
+                'status'  => false,
+                'message' => 'No autorizado',
+            ], 403);
+        }
 
         $date = $request->query('date');
         if ($date) {

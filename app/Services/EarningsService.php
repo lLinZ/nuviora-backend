@@ -10,6 +10,7 @@ use App\Models\Status;
 use App\Models\User;
 use App\Services\SalesGroups\LeaderCommissions;
 use Carbon\Carbon;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 
 class EarningsService
@@ -299,6 +300,18 @@ class EarningsService
             })
             ->filter()
             ->values();
+    }
+
+    /**
+     * La liquidación como la ve la propia agencia: lo cobrado, los vueltos y el saldo, sin las carreras ni lo que se
+     * le paga por ellas (Fran, 2026-10-06: eso solo lo ve el Admin).
+     */
+    public static function withoutTrips(array $settlement): array
+    {
+        $settlement = Arr::except($settlement, ['delivery_rate', 'count_trips', 'trips_by_type', 'trips_by_result', 'total_shipping_cost', 'trip_details']);
+        $settlement['order_details'] = collect($settlement['order_details'] ?? [])->map(fn ($d) => Arr::except($d, ['delivery_cost']))->values();
+
+        return $settlement;
     }
 
     /**
