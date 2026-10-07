@@ -59,6 +59,36 @@ class Client extends Model
         return $this->last_whatsapp_received_at->diffInSeconds(now()) < 86400; // 24 * 60 * 60
     }
 
+    /** Largo máximo de la dirección como variable de una plantilla de WhatsApp. */
+    public const ADDRESS_MAX = 250;
+
+    /**
+     * La dirección que el cliente escribió en el formulario, lista para la variable {{n}} de una plantilla.
+     * Fran (2026-10-06): el formulario no toma GPS, así que los mensajes llevan siempre esta, nunca el enlace.
+     * Dirección, punto de referencia y estado, sin repetir lo que ya está. Meta rechaza la plantilla entera si
+     * la variable trae saltos de línea, tabuladores o más de 4 espacios seguidos: por eso se juntan los espacios.
+     */
+    public function writtenAddress(): ?string
+    {
+        // ¿$text ya trae $piece como palabras completas? ("Santa Clara" no trae el estado "Lara")
+        $has = fn (string $text, string $piece) => (bool) preg_match(
+            '/(?<![\pL\pN])' . preg_quote(mb_strtolower($piece), '/') . '(?![\pL\pN])/u', mb_strtolower($text)
+        );
+
+        $parts = [];
+        foreach ([$this->address1, $this->address2, $this->city ?: $this->province] as $part) {
+            $part = trim(preg_replace('/\s+/u', ' ', (string) $part), " ,.;");
+            if ($part === '') continue;
+
+            if (collect($parts)->contains(fn ($p) => $has($p, $part))) continue;
+            // Si la nueva parte ya incluye una anterior (la referencia repite la dirección), queda solo la nueva
+            $parts = array_values(array_filter($parts, fn ($p) => !$has($part, $p)));
+            $parts[] = $part;
+        }
+
+        return $parts ? mb_strimwidth(implode(', ', $parts), 0, self::ADDRESS_MAX, '…') : null;
+    }
+
     public function whatsappMessages()
     {
         return $this->hasMany(WhatsappMessage::class);

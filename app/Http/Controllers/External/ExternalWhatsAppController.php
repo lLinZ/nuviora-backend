@@ -522,6 +522,9 @@ class ExternalWhatsAppController extends Controller
                 'id' => $client->id,
                 'name' => "{$client->first_name} {$client->last_name}",
                 'phone' => $client->phone,
+                // La dirección escrita en el formulario, para la variable "Dirección" de las plantillas (Fran, 2026-10-06).
+                // Si el cliente no tiene ningún dato, la ciudad de la orden: Meta no envía una plantilla con una variable vacía.
+                'address' => $client->writtenAddress() ?? $order?->city?->name,
                 'is_window_open' => $client->isWhatsappWindowOpen(),
             ],
             'order' => $order ? [
