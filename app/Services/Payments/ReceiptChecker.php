@@ -280,17 +280,28 @@ class ReceiptChecker
             return "No se puede entregar: {$reason} Borra ese comprobante y sube el correcto, o pide a administración que lo apruebe.";
         }
 
-        // Cada método digital tiene que tener al menos un comprobante de ese tipo. Si hay comprobantes sin
-        // revisar (subidos antes de esta función o con error de la IA), no se exige.
+        // Cada método digital tiene que tener al menos un comprobante de ese tipo (o uno aprobado a mano, ver
+        // abajo). Si hay comprobantes sin revisar (subidos antes de esta función o con error de la IA), no se exige.
         if ($receipts->contains(fn ($r) => !$r->check || in_array($r->check->status, [ReceiptCheck::PENDING, ReceiptCheck::ERROR], true))) {
             return null;
         }
-        $kinds = $order->payments()->pluck('method')->map(fn ($m) => self::METHOD_KIND[$m] ?? null)
-            ->filter(fn ($k) => $k && $k !== 'efectivo')->unique(fn ($k) => self::family($k));
+        $paymentKinds = $order->payments()->pluck('method')->map(fn ($m) => self::METHOD_KIND[$m] ?? null)->filter();
+        $kinds = $paymentKinds->filter(fn ($k) => $k !== 'efectivo')->unique(fn ($k) => self::family($k));
+        // Lo que Fran aprobó a mano sin que se leyera como un método de la orden (ilegible, otra cosa, otro tipo)
+        // cuenta como el comprobante del método que falte, uno por cada aprobado (2026-10-06: #8375 de Meloon,
+        // ilegible y aprobado, seguía diciendo que faltaba el de pago móvil)
+        $families = $paymentKinds->map(fn ($k) => self::family($k));
+        $approvedSpare = $checks->filter(fn ($c) => $c->isApproved() && !$families->contains(self::family($c->kind)))->count();
         foreach ($kinds as $kind) {
-            if (!$checks->contains(fn ($c) => self::family($c->kind) === self::family($kind))) {
-                return 'No se puede entregar: falta el comprobante de ' . self::KIND_LABEL[$kind] . '. Ninguno de los comprobantes subidos es de ' . self::KIND_LABEL[$kind] . '.';
+            if ($checks->contains(fn ($c) => self::family($c->kind) === self::family($kind))) {
+                continue;
             }
+            if ($approvedSpare > 0) {
+                $approvedSpare--;
+                continue;
+            }
+
+            return 'No se puede entregar: falta el comprobante de ' . self::KIND_LABEL[$kind] . '. Ninguno de los comprobantes subidos es de ' . self::KIND_LABEL[$kind] . '.';
         }
 
         return null;
