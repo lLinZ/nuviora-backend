@@ -18,7 +18,8 @@ class ReceiptCheck extends Model
 
     protected $fillable = [
         'payment_receipt_id', 'order_id', 'status', 'kind', 'extracted', 'issues', 'reference', 'amount', 'currency',
-        'model', 'response_id', 'input_tokens', 'output_tokens', 'error', 'reviewed_by', 'reviewed_at', 'review_note',
+        'company_account_id', 'model', 'response_id', 'input_tokens', 'output_tokens', 'error', 'reviewed_by',
+        'reviewed_at', 'review_note',
     ];
 
     protected $casts = [
@@ -43,6 +44,12 @@ class ReceiptCheck extends Model
     public function reviewer()
     {
         return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
+    /** La cuenta de la empresa a la que fue el pago (documento de Fran del 2026-10-06, §13). */
+    public function account()
+    {
+        return $this->belongsTo(CompanyAccount::class, 'company_account_id');
     }
 
     /** Fran lo revisó y lo dio por bueno. */

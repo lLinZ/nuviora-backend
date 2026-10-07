@@ -527,8 +527,22 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     /**---------------------
      * COMPANY ACCOUNTS (las vendedoras las ven en la orden; solo supervisión las edita)
      * ---------------------**/
+    Route::get('company-accounts-options', [CompanyAccountController::class, 'options'])->middleware('role:Admin,Gerente,Master');
     Route::apiResource('company-accounts', CompanyAccountController::class)->only(['index', 'show']);
     Route::apiResource('company-accounts', CompanyAccountController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');
+
+    /**---------------------
+     * CONCILIACIÓN de pagos digitales con los extractos (documento de Fran del 2026-10-06, Módulo 1). Los extractos
+     * tienen movimientos financieros y personales: solo el Administrador (§29).
+     * ---------------------**/
+    Route::middleware('role:Admin')->group(function () {
+        Route::get('/reconciliations', [\App\Http\Controllers\ReconciliationController::class, 'index']);
+        Route::get('/reconciliations/{date}', [\App\Http\Controllers\ReconciliationController::class, 'show']);
+        Route::post('/reconciliations/{date}/statements', [\App\Http\Controllers\ReconciliationController::class, 'upload']);
+        Route::get('/reconciliation-statements/{statement}/file', [\App\Http\Controllers\ReconciliationController::class, 'file']);
+        Route::post('/reconciliation-items/{item}/resolve', [\App\Http\Controllers\ReconciliationController::class, 'resolve']);
+        Route::get('/reconciliation-items/{item}/rows', [\App\Http\Controllers\ReconciliationController::class, 'rows']);
+    });
 
     // TEST NOTIFICATIONS (solo notifica al propio usuario)
     Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);

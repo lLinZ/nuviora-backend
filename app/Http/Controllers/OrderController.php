@@ -2550,6 +2550,8 @@ class OrderController extends Controller
             $order->payment_receipt = null;
         }
         $order->save();
+        // Sin ese comprobante cambia lo que suman los demás y lo recibido (documento de Fran, §9 y §10)
+        app(\App\Services\Payments\ReceiptChecker::class)->evaluateOrder($order);
 
         $freshOrder = $order->fresh(['paymentReceipts.check', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
         $orderArray = $freshOrder->toArray();

@@ -30,6 +30,8 @@ try {
     Schedule::command('groups:check-saturation')->everyMinute()->withoutOverlapping();
     // Órdenes que esperan agencia porque todas las de su ciudad estaban llenas (tarea 6)
     Schedule::command('orders:assign-agencies')->everyMinute()->withoutOverlapping();
+    // Conciliación de pagos digitales: cada mañana, la del día anterior (documento de Fran del 2026-10-06, §12)
+    Schedule::command('reconciliation:prepare')->dailyAt('06:00');
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

@@ -8,6 +8,7 @@ use App\Models\ReceiptCheck;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Compara lo que la IA leyó de cada comprobante con los pagos de la orden y con las cuentas de la empresa
@@ -15,7 +16,8 @@ use Illuminate\Support\Collection;
  * - El tipo de comprobante tiene que coincidir con el método registrado (billetes = efectivo, capture de banco
  *   en bolívares = pago móvil, etc.).
  * - Un pago digital tiene que ir a la cuenta de la empresa (teléfono, cédula, número de cuenta o correo).
- * - Los comprobantes de un método tienen que sumar lo registrado (los bolívares, con la tasa del pago).
+ * - Los comprobantes de un método tienen que sumar lo registrado (los bolívares, con la tasa del pago), con la regla
+ *   del monto del documento de Fran del 2026-10-06 (amountVerdict). La venta y lo recibido se guardan en la orden.
  * - La misma referencia no puede estar en otra orden.
  * Si no cuadra el monto o el destino, la IA lee otra vez esos datos dígito por dígito (needsReread) y vale la
  * lectura que cuadre: leyó "3.705" donde decía 33.705. Si las dos dicen lo mismo, el pago no cuadra de verdad.
@@ -49,14 +51,33 @@ class ReceiptChecker
     /** Los que se pagan en bolívares: el monto del comprobante se compara con el pago × su tasa. */
     private const VES_KINDS = ['pago_movil', 'transferencia'];
 
-    /** Margen para el monto: 2 % menos (redondeos y tasas) o 5 % más. */
-    private const SHORT_TOLERANCE = 0.02;
-    private const OVER_TOLERANCE = 0.05;
+    /** Pagar de más hasta un 5 % es válido; más que eso, válido con advertencia (ver amountVerdict). */
+    private const OVER_PERCENT = 5;
 
     private const MAX_AGE_DAYS = 3;
 
     /** Con dos lecturas de un dato de destino vale la mejor (que una coincida exacto con la empresa no es casualidad). */
     private const GRADE_RANK = ['different' => 0, 'unknown' => 1, 'near' => 2, 'exact' => 3];
+
+    /**
+     * La regla del monto del documento de Fran (Módulo 1, 2026-10-06):
+     * - §5: en bolívares el mínimo es el monto esperado sin los decimales (33.550,71 → 33.550,00).
+     * - §6: en otras monedas los decimales cuentan (32,57 USD → 32,56 no alcanza).
+     * - §7 y §8: hasta un 5 % más es válido; más que eso, válido con advertencia (no se rechaza).
+     * Se compara en céntimos para no depender de los decimales de un float.
+     * @return 'short'|'ok'|'over'
+     */
+    public static function amountVerdict(float $expected, float $got, bool $ves): string
+    {
+        $expectedCents = (int) round($expected * 100);
+        $gotCents = (int) round($got * 100);
+        $minCents = $ves ? intdiv($expectedCents, 100) * 100 : $expectedCents;
+        if ($gotCents < $minCents) {
+            return 'short';
+        }
+
+        return $gotCents * 100 <= $expectedCents * (100 + self::OVER_PERCENT) ? 'ok' : 'over';
+    }
 
     public static function mode(): string
     {
@@ -98,7 +119,7 @@ class ReceiptChecker
         }
         $codes = array_column($check->issues ?? [], 'code');
 
-        return in_array('amount', $codes, true) || (in_array('destination', $codes, true) && in_array($check->kind, self::VES_KINDS, true));
+        return array_intersect(['amount', 'overpaid'], $codes) || (in_array('destination', $codes, true) && in_array($check->kind, self::VES_KINDS, true));
     }
 
     /** Guarda la segunda lectura junto a la primera y vuelve a revisar toda la orden. */
@@ -136,6 +157,7 @@ class ReceiptChecker
     {
         $checks = ReceiptCheck::where('order_id', $order->id)->whereNotNull('kind')->with('receipt:id,created_at')->orderBy('id')->get();
         if ($checks->isEmpty()) {
+            $this->saveSummary($order, []);
             return;
         }
         $others = []; // órdenes con el mismo comprobante: también se marcan
@@ -147,6 +169,7 @@ class ReceiptChecker
         $issues = [];
         $seenRefs = [];
         $counted = []; // por tipo, los comprobantes que suman al monto (sin repetidos)
+        $accountIds = []; // por comprobante, la cuenta de la empresa a la que fue el pago
         foreach ($checks as $check) {
             $d = $check->extracted ?? [];
             $kind = $check->kind;
@@ -164,7 +187,8 @@ class ReceiptChecker
                 if ($kindPayments->isEmpty()) {
                     $list[] = $this->fail('El comprobante es de ' . self::KIND_LABEL[$kind] . ", pero el pago está registrado como {$methodsText}.", 'kind');
                 } else {
-                    $list = array_merge($list, $this->checkDestination($kind, $d, $accounts->get($kind)));
+                    [$destination, $accountIds[$check->id]] = $this->checkDestination($kind, $d, $accounts->where('kind', $kind));
+                    $list = array_merge($list, $destination);
                 }
                 if (($d['estado'] ?? null) === 'rechazada') {
                     $list[] = $this->fail('El comprobante dice que el pago fue rechazado.', 'state');
@@ -202,12 +226,15 @@ class ReceiptChecker
             $issues[$check->id] = $list;
         }
 
-        // Monto: lo que suman los comprobantes de cada método contra lo registrado
-        foreach ($counted as $kindChecks) {
-            foreach ($this->checkAmount($kindChecks[0]->kind, $kindChecks, $payments) as $checkId => $issue) {
+        // Monto: lo que suman los comprobantes de cada método contra lo registrado, y la venta y lo recibido de cada uno
+        $summary = [];
+        foreach ($counted as $family => $kindChecks) {
+            [$amountIssues, $summary[$family]] = $this->checkAmount($kindChecks[0]->kind, $kindChecks, $payments);
+            foreach ($amountIssues as $checkId => $issue) {
                 $issues[$checkId][] = $issue;
             }
         }
+        $this->saveSummary($order, array_filter($summary));
 
         foreach ($checks as $check) {
             $list = $issues[$check->id] ?? [];
@@ -223,7 +250,7 @@ class ReceiptChecker
                 : (in_array('fail', $levels, true) ? ReceiptCheck::FAIL
                     : (in_array('warning', $levels, true) ? ReceiptCheck::WARNING : ReceiptCheck::OK));
             // También el monto, si checkAmount se quedó con el de la segunda lectura
-            $check->forceFill(['status' => $status, 'issues' => $list]);
+            $check->forceFill(['status' => $status, 'issues' => $list, 'company_account_id' => $accountIds[$check->id] ?? null]);
             if ($check->isDirty()) {
                 $check->save();
             }
@@ -236,6 +263,19 @@ class ReceiptChecker
                 $this->evaluate($other);
             }
         }
+    }
+
+    /**
+     * Guarda en la orden la venta, lo recibido y el excedente de cada método (§9 del documento de Fran). Va directo
+     * a la tabla: no es un cambio de la orden (ni observers ni updated_at).
+     */
+    private function saveSummary(Order $order, array $summary): void
+    {
+        $query = DB::table('orders')->where('id', $order->id);
+        if (!$summary) {
+            $query->whereNotNull('receipts_summary'); // la mayoría no tiene comprobantes: que no escriba por nada
+        }
+        $query->update(['receipts_summary' => $summary ? json_encode($summary) : null]);
     }
 
     /** Pago móvil y transferencia son la misma familia: bolívares que llegan al banco de la empresa. */
@@ -330,20 +370,51 @@ class ReceiptChecker
         return $list;
     }
 
-    private function checkDestination(string $kind, array $d, ?array $account): array
+    /**
+     * A qué cuenta de la empresa fue el pago. Puede haber varias cuentas del mismo método (documento de Fran del
+     * 2026-10-06, §13: Mercantil, Banesco…): vale la que mejor coincide con lo que muestra el comprobante, y cada
+     * pago guarda su cuenta. Si el comprobante no la deja ver y el método tiene una sola cuenta activa, es esa.
+     * @return array{0: array, 1: ?int} los avisos y el id de la cuenta (null si no se sabe o no es de la empresa)
+     */
+    private function checkDestination(string $kind, array $d, Collection $accounts): array
     {
         $label = self::KIND_LABEL[$kind];
-        if (!$account) {
-            return [$this->warn("No hay una cuenta de {$label} en Cuentas bancarias para comparar.", 'account')];
+        if ($accounts->isEmpty()) {
+            return [[$this->warn("No hay una cuenta de {$label} en Cuentas bancarias para comparar.", 'account')], null];
         }
-        $list = $account['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.", 'account')];
+        $best = null;
+        foreach ($accounts as $account) {
+            $result = $this->compareDestination($kind, $d, $account);
+            // A igual coincidencia, mejor una cuenta activa
+            if ($best === null || $result['rank'] > $best['rank'] || ($result['rank'] === $best['rank'] && $account['active'] && !$best['account']['active'])) {
+                $best = $result + ['account' => $account];
+            }
+        }
+        $list = $best['account']['active'] ? [] : [$this->warn("La cuenta de {$label} está desactivada en Cuentas bancarias.", 'account')];
+        $active = $accounts->where('active', true);
+        $accountId = match (true) {
+            $best['rank'] >= 2 => $best['account']['id'],
+            $best['rank'] === 1 && $active->count() === 1 => $active->first()['id'],
+            default => null,
+        };
 
+        return [array_merge($list, $best['issues']), $accountId];
+    }
+
+    /**
+     * Compara el destino del comprobante con una cuenta de la empresa.
+     * @return array{rank: int, issues: array} rank: 3 coincide, 2 parecido, 1 no se ve, 0 es otra cuenta
+     */
+    private function compareDestination(string $kind, array $d, array $account): array
+    {
+        $label = self::KIND_LABEL[$kind];
+        $list = [];
         if (in_array($kind, ['pago_movil', 'transferencia'], true)) {
             $again = $d['relectura'] ?? [];
             $fields = $kind === 'pago_movil'
                 ? ['el teléfono' => [[$d['receptor_telefono'] ?? null, $again['telefono'] ?? null], $account['phone'], 'phone']]
                 : ['el número de cuenta' => [[$d['receptor_cuenta'] ?? null, $again['cuenta'] ?? null], $account['account'], 'digits']];
-            $fields['la cédula'] = [[$d['receptor_identificacion'] ?? null, $again['cedula'] ?? null], $account['id'], 'id'];
+            $fields['la cédula'] = [[$d['receptor_identificacion'] ?? null, $again['cedula'] ?? null], $account['doc'], 'id'];
             $grades = [];
             foreach ($fields as $name => [$readings, $expected, $type]) {
                 // Primera y segunda lectura: vale la que mejor coincide (la segunda lee dígito por dígito)
@@ -360,6 +431,7 @@ class ReceiptChecker
             $read = fn (string $grade) => implode(' y ', array_map(fn ($name) => "{$name} de destino es {$grades[$name][1]}", array_keys(array_filter($grades, fn ($g) => $g[0] === $grade))));
             $wrong = false;
             if (in_array('exact', $levels, true)) {
+                $rank = 3;
                 // El banco solo acepta el pago si el teléfono (o la cuenta) y la cédula son del mismo afiliado: si uno
                 // coincide exacto con la empresa, el pago llegó a la empresa y una diferencia de 1 o 2 dígitos en el
                 // otro es de lectura (2026-10-03: la IA leía 0412-244948 por un teléfono con tres "4" seguidos).
@@ -369,11 +441,14 @@ class ReceiptChecker
                     $list[] = $this->warn('Revisa la foto: ' . $read('different') . ', aunque ' . $okName . ' sí es ' . (str_starts_with($okName, 'la ') ? 'la' : 'el') . ' de la empresa (el banco no acepta un pago así).', 'destination');
                 }
             } elseif (in_array('different', $levels, true)) {
+                $rank = 0;
                 $wrong = true;
                 $list[] = $this->fail(($kind === 'pago_movil' ? 'El pago móvil' : 'La transferencia') . ' no fue a la cuenta de la empresa: ' . $read('different') . '.', 'destination');
             } elseif (in_array('near', $levels, true)) {
+                $rank = 2;
                 $list[] = $this->warn('No se lee con seguridad a quién se hizo el pago: se leyó que ' . $read('near') . ', parecido al de la empresa. Revisa la foto.', 'destination');
             } else {
+                $rank = 1;
                 $list[] = $this->warn("No se ve a qué " . ($kind === 'pago_movil' ? 'teléfono' : 'cuenta') . ' ni cédula se hizo el pago.', 'destination');
             }
             $bank = $d['banco_destino'] ?? null;
@@ -382,6 +457,7 @@ class ReceiptChecker
             }
         } else {
             $same = $this->sameMasked(mb_strtolower(trim((string) ($d['receptor_correo'] ?? ''))) ?: null, mb_strtolower((string) $account['email']) ?: null, true);
+            $rank = $same === true ? 3 : ($same === null ? 1 : 0);
             if ($same === false) {
                 $list[] = $this->fail("El pago por {$label} no fue a la cuenta de la empresa: el correo de destino es {$d['receptor_correo']}.", 'destination');
             } elseif ($same === null) {
@@ -389,7 +465,7 @@ class ReceiptChecker
             }
         }
 
-        return $list;
+        return ['rank' => $rank, 'issues' => $list];
     }
 
     private function checkDate(array $d, $uploadedAt): ?array
@@ -410,20 +486,26 @@ class ReceiptChecker
         return null;
     }
 
-    /** @return array<int, array> issue por id de comprobante */
+    /**
+     * Lo que suman los comprobantes de un método contra lo registrado (amountVerdict), y lo que se guarda en la orden
+     * (§9 del documento de Fran): la venta, lo recibido y el excedente, cada uno por su lado. El excedente no cambia
+     * el total de la orden ni las ganancias.
+     * @return array{0: array<int, array>, 1: ?array} issue por id de comprobante, y la venta y lo recibido (null si
+     *   no se sabe cuánto se recibió)
+     */
     private function checkAmount(string $kind, array $checks, Collection $payments): array
     {
         $kindPayments = $this->familyPayments($payments, $kind);
         if ($kindPayments->isEmpty()) {
-            return [];
+            return [[], null];
         }
         $ves = in_array($kind, self::VES_KINDS, true);
         $kind = self::METHOD_KIND[$kindPayments->first()->method]; // el nombre, como está registrado el pago
         $out = [];
         if ($ves && $kindPayments->contains(fn ($p) => !(float) $p->rate)) {
-            return []; // sin tasa guardada no se puede pasar a bolívares
+            return [[], null]; // sin tasa guardada no se puede pasar a bolívares
         }
-        $expected = $ves ? $kindPayments->sum(fn ($p) => (float) $p->amount * (float) $p->rate) : (float) $kindPayments->sum('amount');
+        $expected = round($ves ? $kindPayments->sum(fn ($p) => (float) $p->amount * (float) $p->rate) : (float) $kindPayments->sum('amount'), 2);
         $readings = [];
         foreach ($checks as $c) {
             $readings[$c->id] = $this->amountReadings($c);
@@ -434,9 +516,9 @@ class ReceiptChecker
             }
         }
         if (count(array_filter($readings)) < count($checks)) {
-            return $out; // si falta leer algún monto no se puede sumar
+            return [$out, null]; // si falta leer algún monto no se puede sumar
         }
-        $fits = fn (float $got) => $got >= $expected * (1 - self::SHORT_TOLERANCE) - 1 && $got <= $expected * (1 + self::OVER_TOLERANCE) + 1;
+        $fits = fn (float $got) => self::amountVerdict($expected, $got, $ves) === 'ok';
         $first = array_map(fn ($r) => $r[0], $readings);
         // Con segunda lectura hay más de una combinación: si alguna cuadra, esa es la buena (la IA no recibe el
         // monto esperado, así que una lectura que cae justo en él no es casualidad)
@@ -444,8 +526,16 @@ class ReceiptChecker
         foreach ($checks as $c) {
             $c->amount = $chosen[$c->id]; // el que se muestra como leído
         }
+        $received = round(array_sum($chosen), 2);
+        $summary = [
+            'metodo' => $kind,
+            'moneda' => $ves ? 'VES' : ($checks[0]->currency ?: 'USD'),
+            'venta' => $expected,
+            'recibido' => $received,
+            'excedente' => max(0, round($received - $expected, 2)),
+        ];
         if ($fits(array_sum($chosen))) {
-            return $out;
+            return [$out, $summary];
         }
 
         $got = array_sum($first);
@@ -453,7 +543,8 @@ class ReceiptChecker
         $label = self::KIND_LABEL[$kind];
         $registered = $ves ? ' ($' . $this->usd((float) $kindPayments->sum('amount')) . ' a la tasa del pago)' : '';
         if (array_filter($readings, fn ($r) => count($r) > 1)) {
-            // Las dos lecturas no coinciden y ninguna cuadra: que lo vea una persona, sin bloquear
+            // Las dos lecturas no coinciden y ninguna cuadra: que lo vea una persona, sin bloquear. No se sabe
+            // cuánto se recibió, así que no se guarda.
             $second = array_sum(array_map(fn ($r) => $r[count($r) - 1], $readings));
             $text = 'Lectura dudosa: ' . (count($checks) > 1
                 ? "los comprobantes de {$label} suman " . $fmt($got) . ' según la primera lectura y ' . $fmt($second) . ' según la segunda'
@@ -463,21 +554,32 @@ class ReceiptChecker
                 $out[$c->id] ??= $this->warn($text, 'amount');
             }
 
-            return $out;
+            return [$out, null];
         }
-        if ($got < $expected * (1 - self::SHORT_TOLERANCE) - 1) {
-            $text = (count($checks) > 1 ? "Los comprobantes de {$label} suman " : "El comprobante dice ") . $fmt($got) . " y el pago por {$label} es de " . $fmt($expected) . $registered . '.';
+        $paid = (count($checks) > 1 ? "los comprobantes de {$label} suman " : 'el comprobante dice ') . $fmt($got);
+        if (self::amountVerdict($expected, $got, $ves) === 'short') {
+            // §31, casos 3 y 6: "Monto insuficiente"
+            $min = $ves && floor($expected) != $expected ? ' El mínimo es ' . $fmt(floor($expected)) . ' (sin los decimales).' : '';
+            $text = "Monto insuficiente: {$paid} y el pago por {$label} es de " . $fmt($expected) . $registered . '.' . $min;
             foreach ($checks as $c) {
                 $out[$c->id] = $this->fail($text, 'amount');
             }
-        } elseif ($got > $expected * (1 + self::OVER_TOLERANCE) + 1) {
-            $text = (count($checks) > 1 ? "Los comprobantes de {$label} suman " : 'El comprobante dice ') . $fmt($got) . ', más que el pago registrado (' . $fmt($expected) . '). Revisa el monto del pago.';
+        } else {
+            // §8: más del 5 % no se rechaza; se acepta y se clasifica como "Validado con advertencia"
+            $text = "Validado con advertencia: el cliente pagó un monto significativamente superior al esperado ({$paid} y el pago por {$label} es de "
+                . $fmt($expected) . $registered . ', un ' . $this->percent($got / $expected - 1) . ' más).';
             foreach ($checks as $c) {
-                $out[$c->id] ??= $this->warn($text, 'amount');
+                $out[$c->id] ??= $this->warn($text, 'overpaid');
             }
         }
 
-        return $out;
+        return [$out, $summary];
+    }
+
+    /** 0.1 → "10 %", 0.052 → "5,2 %". */
+    private function percent(float $ratio): string
+    {
+        return str_replace(',0', '', number_format(round($ratio * 100, 1), 1, ',', '.')) . ' %';
     }
 
     /** Los montos leídos de un comprobante: el de la primera lectura y, si la segunda dio otro, también ese. */
@@ -510,17 +612,13 @@ class ReceiptChecker
 
     // --- Cuentas de la empresa ---
 
-    /** Las cuentas de "Cuentas bancarias" por tipo, con los datos que se comparan. */
+    /**
+     * Las cuentas de "Cuentas bancarias" con su método y los datos que se comparan. El método lo dice cada cuenta
+     * (documento de Fran del 2026-10-06, §2): no se adivina por el nombre. Puede haber varias por método (§13).
+     */
     private function accounts(): Collection
     {
-        return CompanyAccount::all()->mapWithKeys(function (CompanyAccount $a) {
-            $name = $this->norm($a->name);
-            $kind = str_contains($name, 'pago') && str_contains($name, 'movil') ? 'pago_movil'
-                : (str_contains($name, 'transfer') ? 'transferencia'
-                    : collect(['binance', 'zinli', 'zelle', 'paypal'])->first(fn ($k) => str_contains($name, $k)));
-            if (!$kind) {
-                return [];
-            }
+        return CompanyAccount::whereNotNull('method')->get()->map(function (CompanyAccount $a) {
             $field = function (string $needle) use ($a) {
                 foreach ((array) $a->details as $row) {
                     if (is_array($row) && str_contains($this->norm((string) ($row['label'] ?? '')), $needle)) {
@@ -530,14 +628,16 @@ class ReceiptChecker
                 return null;
             };
 
-            return [$kind => [
+            return [
+                'id' => $a->id,
+                'kind' => $a->method,
                 'active' => (bool) $a->is_active,
                 'phone' => $field('telefono'),
-                'id' => $field('cedula') ?? $field('rif'),
+                'doc' => $field('cedula') ?? $field('rif'),
                 'account' => $field('cuenta'),
                 'bank' => $field('banco'),
                 'email' => $field('correo') ?? $field('email'),
-            ]];
+            ];
         });
     }
 
@@ -647,8 +747,9 @@ class ReceiptChecker
     }
 
     /**
-     * $code: kind, destination, account, bank, amount, currency, duplicate, state, date, cash, unreadable (para
-     * decidir qué se suaviza y qué se relee: destination y amount).
+     * $code: kind, destination, account, bank, amount, overpaid, currency, duplicate, state, date, cash, unreadable
+     * (para decidir qué se suaviza y qué se relee: destination, amount y overpaid). overpaid es el "Validado con
+     * advertencia" del documento de Fran (§8): la ficha lo muestra con ese nombre.
      */
     private function fail(string $text, string $code = 'other'): array
     {

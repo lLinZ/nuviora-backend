@@ -18,6 +18,7 @@ class Order extends Model
         'change_payment_details' => 'array',
         'scheduled_for'          => 'datetime',
         'agency_locked'          => 'boolean',
+        'receipts_summary'       => 'array', // venta, recibido y excedente por método (documento de Fran, §9)
     ];
 
     // Relationship methods follow...
