@@ -32,6 +32,11 @@ try {
     Schedule::command('orders:assign-agencies')->everyMinute()->withoutOverlapping();
     // Conciliación de pagos digitales: cada mañana, la del día anterior (documento de Fran del 2026-10-06, §12)
     Schedule::command('reconciliation:prepare')->dailyAt('06:00');
+    // Meta Ads, solo lectura (documento de Fran del 2026-10-08, Módulo 2): cada 30 minutos (§7), y los días recientes
+    // otra vez porque Meta corrige las compras atribuidas (§25)
+    Schedule::command('meta:sync')->everyThirtyMinutes()->withoutOverlapping();
+    Schedule::command('meta:sync --recheck=7')->dailyAt('04:00');
+    Schedule::command('meta:sync --recheck=30')->weeklyOn(0, '04:30');
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

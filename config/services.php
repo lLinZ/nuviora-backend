@@ -21,6 +21,25 @@ return [
         'pixel_id' => env('FACEBOOK_PIXEL_ID'),
         'access_token' => env('FACEBOOK_ACCESS_TOKEN'),
     ],
+
+    // Integración de Meta Ads (Módulo 2 de Fran). Los tokens no van aquí: cada conexión guarda el suyo, cifrado, en
+    // meta_connections (§3, §4). La versión se cambia en un solo lugar (§53); sin versión, la Ads API responde 2635.
+    'meta' => [
+        'graph_version' => env('META_GRAPH_API_VERSION', 'v26.0'),
+        // §8: días de la importación inicial; §25: tamaño de cada pedido del histórico
+        'initial_days' => 30,
+        'history_chunk_days' => 7,
+        // §57: cada cuánto se piden los rangos fijos (alcance y frecuencia de Meta). Se ajusta con la tarea 0 (§52).
+        'presets_every_minutes' => (int) env('META_PRESETS_EVERY_MINUTES', 60),
+        // §52: se frena antes del límite de Meta, al llegar a este % de uso
+        'usage_stop_percent' => 75,
+        // Segundos de trabajo por cada parte de la sincronización (la cola relanza lo que pasa de 90 s)
+        'job_budget_seconds' => 35,
+        // §15: el evento principal es Purchase; Meta lo informa con estos nombres (se usa el primero que venga)
+        'purchase_actions' => ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase'],
+        // §32: "name" = el código completo del anuncio; "prefix" = solo "C004". Pendiente de Fran (pregunta 2).
+        'tracking_id_mode' => env('META_TRACKING_ID_MODE', 'name'),
+    ],
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],

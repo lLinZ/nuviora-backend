@@ -544,6 +544,39 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/reconciliation-items/{item}/rows', [\App\Http\Controllers\ReconciliationController::class, 'rows']);
     });
 
+    /**---------------------
+     * META ADS (documento de Fran del 2026-10-08, Módulo 2). Credenciales de Meta, gasto y métricas del negocio: solo el
+     * Administrador (§44). Todo es lectura de Meta: nada de esto modifica campañas, presupuestos ni anuncios (§1).
+     * ---------------------**/
+    Route::middleware('role:Admin')->prefix('meta')->group(function () {
+        Route::get('/connections', [\App\Http\Controllers\MetaConnectionController::class, 'index']);
+        Route::post('/connections', [\App\Http\Controllers\MetaConnectionController::class, 'store']);
+        Route::get('/connections/{connection}', [\App\Http\Controllers\MetaConnectionController::class, 'show']);
+        Route::put('/connections/{connection}', [\App\Http\Controllers\MetaConnectionController::class, 'update']);
+        Route::post('/connections/{connection}/accounts/refresh', [\App\Http\Controllers\MetaConnectionController::class, 'refreshAccounts']);
+        Route::get('/connections/{connection}/logs', [\App\Http\Controllers\MetaConnectionController::class, 'logs']);
+        Route::post('/connections/{connection}/sync', [\App\Http\Controllers\MetaConnectionController::class, 'sync']);
+        Route::put('/ad-accounts/{account}', [\App\Http\Controllers\MetaConnectionController::class, 'updateAccount']);
+
+        Route::get('/options', [\App\Http\Controllers\MetaAdsSetupController::class, 'options']);
+        Route::get('/campaigns', [\App\Http\Controllers\MetaAdsSetupController::class, 'campaigns']);
+        Route::put('/campaigns/{campaign}', [\App\Http\Controllers\MetaAdsSetupController::class, 'classify']);
+        Route::put('/ads/{ad}/tracking-id', [\App\Http\Controllers\MetaAdsSetupController::class, 'setTrackingId']);
+        Route::put('/creatives/{creative}/status', [\App\Http\Controllers\MetaAdsSetupController::class, 'setCreativeStatus']);
+        Route::get('/targets', [\App\Http\Controllers\MetaAdsSetupController::class, 'targets']);
+        Route::post('/targets', [\App\Http\Controllers\MetaAdsSetupController::class, 'storeTarget']);
+        Route::get('/rules', [\App\Http\Controllers\MetaAdsSetupController::class, 'rules']);
+        Route::post('/rules', [\App\Http\Controllers\MetaAdsSetupController::class, 'storeRule']);
+        Route::put('/rules/{rule}', [\App\Http\Controllers\MetaAdsSetupController::class, 'updateRule']);
+        Route::delete('/rules/{rule}', [\App\Http\Controllers\MetaAdsSetupController::class, 'deleteRule']);
+
+        Route::get('/report/overview', [\App\Http\Controllers\MetaReportController::class, 'overview']);
+        Route::get('/report/rows', [\App\Http\Controllers\MetaReportController::class, 'rows']);
+        Route::get('/report/series', [\App\Http\Controllers\MetaReportController::class, 'series']);
+        Route::get('/report/filters', [\App\Http\Controllers\MetaReportController::class, 'filters']);
+        Route::get('/report/creatives/{creative}', [\App\Http\Controllers\MetaReportController::class, 'creative']);
+    });
+
     // TEST NOTIFICATIONS (solo notifica al propio usuario)
     Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);
 

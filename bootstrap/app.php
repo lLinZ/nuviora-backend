@@ -28,6 +28,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ['prefix' => 'api', 'middleware' => ['api', 'auth:sanctum']],
     )
     ->withExceptions(function (Exceptions $exceptions): void {
+        // Las credenciales de Meta nunca se guardan en la sesión al fallar una validación (Módulo 2 de Fran, §4)
+        $exceptions->dontFlash(['access_token', 'app_secret']);
+
         // Add CORS headers to error responses so the browser can read them
         $exceptions->respond(function (\Symfony\Component\HttpFoundation\Response $response, \Throwable $e, Request $request) {
             $origin = $request->headers->get('Origin');
