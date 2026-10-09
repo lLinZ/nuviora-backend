@@ -37,6 +37,10 @@ try {
     Schedule::command('meta:sync')->everyThirtyMinutes()->withoutOverlapping();
     Schedule::command('meta:sync --recheck=7')->dailyAt('04:00');
     Schedule::command('meta:sync --recheck=30')->weeklyOn(0, '04:30');
+    // Los trabajos de Meta van por su propia cola: los procesa este worker de corta vida, uno a la vez, y no los
+    // workers de siempre (que leen los comprobantes de pago). Termina cuando la cola queda vacía.
+    Schedule::command('queue:work --queue=meta --stop-when-empty --tries=1 --timeout=85 --max-time=540')
+        ->everyMinute()->withoutOverlapping(15)->runInBackground();
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

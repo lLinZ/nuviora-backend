@@ -19,6 +19,9 @@ use Illuminate\Support\Facades\Cache;
  * Cada trabajo corre lo que le cabe en ~35 s y encola el resto, porque la cola relanza lo que pasa de 90 s
  * (retry_after). Una sola sincronización por conexión a la vez (§56): no se encola otra mientras haya una esperando, y
  * un candado impide que dos partes corran juntas.
+ *
+ * Va por su propia cola, "meta", que procesa el scheduler (routes/console.php). Así nunca ocupa los workers de
+ * siempre, que leen los comprobantes de pago mientras la agencia espera para entregar (2026-10-09).
  */
 class SyncMetaConnection implements ShouldQueue, ShouldBeUniqueUntilProcessing
 {
@@ -36,7 +39,10 @@ class SyncMetaConnection implements ShouldQueue, ShouldBeUniqueUntilProcessing
         public ?int $logId = null,
         public ?array $steps = null,
     ) {
+        $this->onQueue(self::QUEUE);
     }
+
+    public const QUEUE = 'meta';
 
     public function uniqueId(): string
     {
@@ -72,7 +78,8 @@ class SyncMetaConnection implements ShouldQueue, ShouldBeUniqueUntilProcessing
         }
 
         if ($remaining && $log) {
-            self::dispatch($this->connectionId, $this->kind, $this->userId, $this->options, $log->id, $remaining)->delay(now()->addSeconds(2));
+            // Sin espera: el mismo worker de la cola "meta" sigue con la parte siguiente
+            self::dispatch($this->connectionId, $this->kind, $this->userId, $this->options, $log->id, $remaining);
         }
     }
 }

@@ -132,6 +132,13 @@ describe('Errores de Meta (§54)', function () {
     });
 });
 
+describe('Cola de la sincronización', function () {
+    it('va por su propia cola, no por la de los comprobantes', function () {
+        expect((new App\Jobs\SyncMetaConnection(1))->queue)->toBe('meta');
+        expect((new App\Jobs\SyncMetaConnection(1, 'manual', null, [], 5, [['type' => 'hierarchy', 'account' => 1]]))->queue)->toBe('meta');
+    });
+});
+
 describe('Conexión de Meta', function () {
     it('no muestra el token ni el App Secret al convertirse en JSON (§4)', function () {
         $c = new MetaConnection(['name' => 'BM1', 'access_token' => TOKEN_FALSO, 'app_secret' => 'secreto']);
