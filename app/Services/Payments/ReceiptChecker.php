@@ -334,9 +334,9 @@ class ReceiptChecker
      * órdenes, o null si no hay duplicado:
      *  1. exact_file_hash: el mismo archivo exacto → bloquea.
      *  2. same_transaction_reference: la misma referencia, el mismo monto, la misma fecha y, en bolívares, el mismo
-     *     banco → bloquea. possible_same_reference: la misma referencia y nada que lo contradiga, pero algún dato falta
-     *     o no se lee con seguridad → "Posible duplicado — requiere revisión", no bloquea. Con un dato distinto es otro
-     *     pago: no se marca.
+     *     banco → bloquea. possible_same_reference: la misma referencia, pero algún dato falta, o uno solo es distinto
+     *     y no se lee con seguridad → "Posible duplicado — requiere revisión", no bloquea. Con un dato distinto leído
+     *     con seguridad, o con dos distintos, es otro pago: no se marca.
      *  3. perceptual_similarity_only: la imagen es casi igual a la de otra orden y no hay dos referencias que comparar
      *     → posible duplicado, no bloquea.
      * @return array{issue: array, reason: string, others: Collection}|null
@@ -375,21 +375,22 @@ class ReceiptChecker
             $unsure = $verdicts->where('verdict', 'unsure');
             if ($unsure->isNotEmpty()) {
                 return [
-                    'issue' => $this->warn('Posible duplicado — requiere revisión: la orden ' . $this->orderNames($unsure->pluck('check')) . " tiene un comprobante con la misma referencia ({$check->reference}), pero no se puede comparar " . $unsure->first()['missing'] . '.', 'duplicate'),
+                    'issue' => $this->warn('Posible duplicado — requiere revisión: la orden ' . $this->orderNames($unsure->pluck('check')) . " tiene un comprobante con la misma referencia ({$check->reference}), pero no se puede confirmar si es el mismo pago: " . $unsure->first()['why'] . '.', 'duplicate'),
                     'reason' => 'possible_same_reference',
                     'others' => $unsure->pluck('check'),
                 ];
             }
         }
 
-        // Sin dos referencias que comparar, una captura casi idéntica es un indicio (nunca bloquea)
+        // Sin dos referencias que comparar, una captura casi idéntica es un indicio (nunca bloquea). Con las dos
+        // referencias ya lo decidió el paso anterior: distintas, o la misma con otro pago.
         $hash = $check->receipt?->image_dhash;
         if ($hash) {
             $similar = ReceiptCheck::where('order_id', '!=', $order->id)->whereIn('kind', $family)
                 ->where('created_at', '>=', now()->subDays(self::SIMILAR_DAYS))
                 ->whereHas('receipt', fn ($q) => $q->whereNotNull('image_dhash'))
                 ->with(['order:id,name', 'receipt:id,image_dhash'])->orderBy('id')->get()
-                ->filter(fn (ReceiptCheck $o) => !($check->reference && $o->reference && $o->reference !== $check->reference)
+                ->filter(fn (ReceiptCheck $o) => !($check->reference && $o->reference)
                     && ReceiptFingerprint::distance($hash, $o->receipt->image_dhash) <= ReceiptFingerprint::NEAR_BITS);
             if ($similar->isNotEmpty()) {
                 return [
@@ -405,14 +406,16 @@ class ReceiptChecker
 
     /**
      * Si dos comprobantes con la misma referencia son el mismo pago: same (coincide todo lo que identifica al pago y se
-     * lee con seguridad), different (algún dato es distinto: es otro pago) o unsure (falta algún dato o no se lee bien).
-     * @return array{verdict: string, missing: ?string}
+     * lee con seguridad), different (es otro pago: un dato distinto leído con seguridad, o dos datos distintos a la vez)
+     * o unsure (falta algún dato, o uno solo es distinto y no se lee bien).
+     * @return array{verdict: string, why: ?string}
      */
     private function sameTransaction(ReceiptCheck $a, ReceiptCheck $b, string $kind): array
     {
         $da = $a->extracted ?? [];
         $db = $b->extracted ?? [];
         $sure = fn (array $d, string $field) => ($d['confianza_campos'][$field] ?? ($d['confianza'] ?? 'alta')) === 'alta';
+        $label = ['monto' => 'el monto', 'fecha' => 'la fecha', 'banco' => 'el banco'];
         $results = [];
         $missing = [];
 
@@ -451,19 +454,33 @@ class ReceiptChecker
             }
         }
 
-        if (in_array('different', $results, true)) {
-            return ['verdict' => 'different', 'missing' => null];
+        // Dos datos distintos a la vez (otro monto y otra fecha) no se explican con un error de lectura: es otro pago.
+        // Pasó con #4910 / #8027 (2026-10-10): la lectura de #8027, de antes de la confianza por dato, tenía confianza
+        // "media", y eso hacía dudosa cada diferencia.
+        $differ = array_keys(array_filter($results, fn ($r) => $r !== 'same'));
+        if (in_array('different', $results, true) || count($differ) >= 2) {
+            return ['verdict' => 'different', 'why' => null];
         }
-        foreach ($results as $field => $r) {
-            if ($r === 'unsure') {
-                $missing[] = "el {$field} con seguridad";
-            }
+        $why = [];
+        if ($missing) {
+            $why[] = 'en uno de los dos no se ve' . (count($missing) > 1 ? 'n ' : ' ') . $this->spanishList($missing);
+        }
+        if ($differ) {
+            $why[] = $label[$differ[0]] . ' no coincide, pero no se lee con seguridad';
         }
         if (!$sure($da, 'referencia') || !$sure($db, 'referencia')) {
-            $missing[] = 'la referencia con seguridad';
+            $why[] = 'la referencia no se lee con seguridad';
         }
 
-        return $missing ? ['verdict' => 'unsure', 'missing' => implode(', ', array_unique($missing))] : ['verdict' => 'same', 'missing' => null];
+        return $why ? ['verdict' => 'unsure', 'why' => implode('; ', $why)] : ['verdict' => 'same', 'why' => null];
+    }
+
+    /** "el monto", "el monto y la fecha", "el monto, la fecha y el banco". */
+    private function spanishList(array $items): string
+    {
+        $last = array_pop($items);
+
+        return $items ? implode(', ', $items) . " y {$last}" : $last;
     }
 
     /** El nombre del banco para comparar: sin tildes, sin "banco", "S.A." ni signos ("Banco de Venezuela" → "venezuela"). */
