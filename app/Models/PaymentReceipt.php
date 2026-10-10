@@ -10,6 +10,9 @@ class PaymentReceipt extends Model
     //
     protected $fillable = ['order_id', 'path', 'original_name'];
 
+    // Las huellas del archivo son para detectar comprobantes repetidos (ReceiptFingerprint): no van en las respuestas
+    protected $hidden = ['file_sha256', 'image_dhash'];
+
     // 🔒 Enlace firmado para ver el comprobante sin sesión (vence en 12 h)
     protected $appends = ['url'];
 

@@ -18,6 +18,9 @@ class ReceiptReader
 
     private const MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
+    /** Los datos con su propia confianza (Fran, 2026-10-09: "nivel de confianza de los campos"). */
+    public const CONFIDENCE_FIELDS = ['monto', 'referencia', 'fecha', 'banco'];
+
     private const INSTRUCTIONS = <<<'TXT'
 Eres un lector de comprobantes de pago de una tienda en Venezuela. Recibes UNA imagen que una vendedora o una agencia de reparto subió como comprobante del pago de un pedido. Describe solo lo que se ve en la imagen. No adivines: si un dato no se ve o no se lee con seguridad, devuélvelo como null.
 
@@ -38,11 +41,16 @@ Reglas de formato:
 - "estado": exitosa si dice exitosa, aprobada, completada, enviada o similar; pendiente o rechazada si lo dice; no_visible si no se indica.
 - Si es efectivo: "efectivo_moneda", las denominaciones que se ven con seguridad (valor de cada billete y cuántos hay) y "efectivo_total_visible" solo si se pueden contar todos los billetes con seguridad. Si no es efectivo, deja la lista vacía y esos campos en null.
 - "confianza": alta si se leen bien los datos principales, media si algunos cuestan, baja si casi nada.
+- "confianza_campos": la misma escala para cada dato por separado (monto, referencia, fecha y banco). "alta" solo si ese dato se lee completo y sin dudas; si no aparece en la imagen, "baja".
 TXT;
 
-    public function read(PaymentReceipt $receipt): array
+    /**
+     * Primera lectura con el modelo principal (gpt-6-luna). Con $model, la misma lectura con otro: el de respaldo
+     * (gpt-6-sol) para los comprobantes que el principal no leyó con seguridad (pedido de Fran del 2026-10-09).
+     */
+    public function read(PaymentReceipt $receipt, ?string $model = null): array
     {
-        $result = $this->call($receipt, self::INSTRUCTIONS, 'Lee este comprobante.', 'comprobante_de_pago', self::schema(), 'high');
+        $result = $this->call($receipt, self::INSTRUCTIONS, 'Lee este comprobante.', 'comprobante_de_pago', self::schema(), 'high', $model);
         if (!in_array($result['data']['tipo'] ?? null, self::KINDS, true)) {
             throw new RuntimeException('Respuesta sin el formato esperado (tipo ' . json_encode($result['data']['tipo'] ?? null) . ').');
         }
@@ -66,9 +74,9 @@ TXT;
      * dígito y con la imagen a resolución completa se corrige (probado con los comprobantes reales de la
      * semana). Como la primera, no recibe los datos esperados.
      */
-    public function reread(PaymentReceipt $receipt): array
+    public function reread(PaymentReceipt $receipt, ?string $model = null): array
     {
-        $result = $this->call($receipt, self::RECHECK_INSTRUCTIONS, 'Lee estos datos.', 'relectura', self::rereadSchema(), 'original');
+        $result = $this->call($receipt, self::RECHECK_INSTRUCTIONS, 'Lee estos datos.', 'relectura', self::rereadSchema(), 'original', $model);
         $d = $result['data'];
 
         return [
@@ -111,11 +119,18 @@ TXT;
         return $int === '' ? null : (float) ($int . '.' . $decimals);
     }
 
+    /** El modelo de respaldo, o null si no está configurado. */
+    public static function fallbackModel(): ?string
+    {
+        return config('services.openai.receipt_fallback_model') ?: null;
+    }
+
     /**
      * Manda la imagen con las instrucciones y el JSON Schema, y devuelve lo leído y lo que se gastó.
      * $detail: "high" (la imagen reducida) u "original" (completa: más tokens, lee mejor los dígitos chicos).
+     * $model: otro modelo en lugar del principal.
      */
-    private function call(PaymentReceipt $receipt, string $instructions, string $prompt, string $name, array $schema, string $detail): array
+    private function call(PaymentReceipt $receipt, string $instructions, string $prompt, string $name, array $schema, string $detail, ?string $model = null): array
     {
         $key = config('services.openai.key');
         if (!$key) {
@@ -131,7 +146,7 @@ TXT;
             throw new RuntimeException("Formato de imagen no soportado ({$mime}).");
         }
         $dataUrl = 'data:' . $mime . ';base64,' . base64_encode($disk->get($receipt->path));
-        $model = config('services.openai.receipt_model', 'gpt-6-luna');
+        $model ??= config('services.openai.receipt_model', 'gpt-6-luna');
 
         $response = Http::withToken($key)
             ->acceptJson()
@@ -243,11 +258,18 @@ TXT;
                 ],
                 'efectivo_total_visible' => ['type' => ['number', 'null']],
                 'confianza' => ['type' => 'string', 'enum' => ['alta', 'media', 'baja']],
+                'confianza_campos' => [
+                    'type' => 'object',
+                    'additionalProperties' => false,
+                    'properties' => array_fill_keys(self::CONFIDENCE_FIELDS, ['type' => 'string', 'enum' => ['alta', 'media', 'baja']]),
+                    'required' => self::CONFIDENCE_FIELDS,
+                ],
             ],
             'required' => [
                 'tipo', 'motivo_ilegible', 'banco_origen', 'banco_destino', 'monto', 'moneda', 'receptor_nombre',
                 'receptor_telefono', 'receptor_identificacion', 'receptor_cuenta', 'receptor_correo', 'referencia',
                 'fecha', 'hora', 'estado', 'efectivo_moneda', 'efectivo_denominaciones', 'efectivo_total_visible', 'confianza',
+                'confianza_campos',
             ],
         ];
     }

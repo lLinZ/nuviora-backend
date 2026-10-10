@@ -18,7 +18,12 @@ use Illuminate\Support\Facades\DB;
  * - Un pago digital tiene que ir a la cuenta de la empresa (teléfono, cédula, número de cuenta o correo).
  * - Los comprobantes de un método tienen que sumar lo registrado (los bolívares, con la tasa del pago), con la regla
  *   del monto del documento de Fran del 2026-10-06 (amountVerdict). La venta y lo recibido se guardan en la orden.
- * - La misma referencia no puede estar en otra orden.
+ * - Un pago no puede servir para dos órdenes. El duplicado lo decide el código, por capas (pedido de Fran del
+ *   2026-10-09, después de un falso positivo): el mismo archivo exacto (SHA-256) o el mismo pago (referencia, monto,
+ *   fecha y, en bolívares, banco) bloquean; si la referencia coincide pero algún dato no se puede comparar, o la imagen
+ *   se parece mucho a otra y no hay referencia con qué comparar, es "Posible duplicado — requiere revisión" y no
+ *   bloquea. La misma referencia con otro monto, otra fecha u otro banco es otro pago. Queda el motivo
+ *   (duplicate_reason).
  * Si no cuadra el monto o el destino, la IA lee otra vez esos datos dígito por dígito (needsReread) y vale la
  * lectura que cuadre: leyó "3.705" donde decía 33.705. Si las dos dicen lo mismo, el pago no cuadra de verdad.
  * En modo "enforce" no se entrega la orden si algo de esto falla (deliveryBlockMessage).
@@ -136,6 +141,48 @@ class ReceiptChecker
         $this->evaluateOrder($check->order);
     }
 
+    /**
+     * Si conviene leer el comprobante otra vez con el modelo de respaldo (Fran, 2026-10-09: "Luna → Sol → revisión
+     * manual"): baja confianza, referencia o monto que no se leen, o dos lecturas del monto que se contradicen. Una sola
+     * vez por comprobante. Pasar la revisión recién leída de la BD.
+     */
+    public function needsEscalation(ReceiptCheck $check): bool
+    {
+        $d = $check->extracted ?? [];
+        if (!ReceiptReader::fallbackModel() || isset($d['escalado']) || in_array($check->kind, ['efectivo', 'otro', null], true)) {
+            return false;
+        }
+        if ($check->kind === 'ilegible' || ($d['confianza'] ?? 'alta') !== 'alta') {
+            return true;
+        }
+        foreach (['monto', 'referencia'] as $field) {
+            if (($d['confianza_campos'][$field] ?? 'alta') !== 'alta') {
+                return true;
+            }
+        }
+        if (empty($d['referencia']) || ($d['monto'] ?? null) === null) {
+            return true;
+        }
+        // Las dos lecturas del monto dicen cosas distintas y ninguna cuadra con el pago
+        $reread = $d['relectura']['monto'] ?? null;
+
+        return $reread !== null && round((float) $reread, 2) !== round((float) $d['monto'], 2)
+            && in_array('amount', array_column($check->issues ?? [], 'code'), true);
+    }
+
+    /** Guarda la lectura del modelo de respaldo en lugar de la primera (que queda guardada) y revisa la orden. */
+    public function recordEscalation(ReceiptCheck $check, array $result): void
+    {
+        $first = $check->extracted ?? [];
+        $result['data']['escalado'] = [
+            'modelo' => $result['model'] ?? ReceiptReader::fallbackModel(),
+            'primera_lectura' => Arr::except($first, ['escalado']) + ['modelo' => $check->model],
+        ];
+        $result['input_tokens'] = (int) $check->input_tokens + (int) ($result['input_tokens'] ?? 0);
+        $result['output_tokens'] = (int) $check->output_tokens + (int) ($result['output_tokens'] ?? 0);
+        $this->record($check, $result);
+    }
+
     /** Órdenes ya revisadas en esta pasada (para no dar vueltas al revisar las que comparten un comprobante). */
     private array $visiting = [];
 
@@ -155,7 +202,7 @@ class ReceiptChecker
 
     private function evaluate(Order $order): void
     {
-        $checks = ReceiptCheck::where('order_id', $order->id)->whereNotNull('kind')->with('receipt:id,created_at')->orderBy('id')->get();
+        $checks = ReceiptCheck::where('order_id', $order->id)->whereNotNull('kind')->with('receipt:id,created_at,file_sha256,image_dhash')->orderBy('id')->get();
         if ($checks->isEmpty()) {
             $this->saveSummary($order, []);
             return;
@@ -168,6 +215,8 @@ class ReceiptChecker
 
         $issues = [];
         $seenRefs = [];
+        $seenFiles = [];
+        $duplicates = []; // por comprobante: el motivo y el otro comprobante (duplicate_reason)
         $counted = []; // por tipo, los comprobantes que suman al monto (sin repetidos)
         $accountIds = []; // por comprobante, la cuenta de la empresa a la que fue el pago
         foreach ($checks as $check) {
@@ -201,20 +250,23 @@ class ReceiptChecker
                 }
 
                 $duplicate = false;
-                if ($check->reference) {
-                    if (isset($seenRefs[$check->reference])) {
-                        $duplicate = true;
-                        $list[] = $this->warn('Este comprobante está repetido en la orden (misma referencia); cuenta una sola vez.', 'duplicate');
-                    } else {
+                $sha = $check->receipt?->file_sha256;
+                $sameFile = $sha && isset($seenFiles[$sha]);
+                if ($sameFile || ($check->reference && isset($seenRefs[$check->reference]))) {
+                    $duplicate = true;
+                    $list[] = $this->warn('Este comprobante está repetido en la orden (' . ($sameFile ? 'el mismo archivo' : 'misma referencia') . '); cuenta una sola vez.', 'duplicate');
+                } else {
+                    if ($sha) {
+                        $seenFiles[$sha] = true;
+                    }
+                    if ($check->reference) {
                         $seenRefs[$check->reference] = true;
-                        $sameRef = ReceiptCheck::where('reference', $check->reference)->where('order_id', '!=', $order->id)
-                            ->whereIn('kind', $this->familyKinds($kind))->with('order:id,name')->get();
-                        if ($sameRef->isNotEmpty()) {
-                            $names = $sameRef->map(fn ($o) => $o->order->name ?? "#{$o->order_id}")->unique()->implode(', ');
-                            $list[] = $this->fail("Este mismo comprobante (referencia {$check->reference}) está también en la orden {$names}: un pago no puede servir para dos órdenes.", 'duplicate');
-                            foreach ($sameRef as $o) {
-                                $others[$o->order_id] = true;
-                            }
+                    }
+                    if ($found = $this->otherOrderDuplicate($check, $order, $kind)) {
+                        $list[] = $found['issue'];
+                        $duplicates[$check->id] = ['reason' => $found['reason'], 'of' => $found['others']->first()->id];
+                        foreach ($found['others'] as $o) {
+                            $others[$o->order_id] = true;
                         }
                     }
                 }
@@ -245,12 +297,19 @@ class ReceiptChecker
                     ? ['level' => 'warning', 'text' => 'Lectura dudosa (la imagen no se ve del todo bien): ' . lcfirst($i['text']), 'code' => $i['code']]
                     : $i, $list);
             }
+            // Fran (2026-10-09): si tampoco el modelo de respaldo lo lee con seguridad, revisión manual (sin inventar)
+            if (isset($check->extracted['escalado']) && $this->lowConfidence($check->extracted)) {
+                $list[] = $this->warn('Ni con la segunda IA se lee con seguridad (' . $this->doubtfulFields($check->extracted) . '): requiere revisión manual.', 'review');
+            }
             $levels = array_column($list, 'level');
             $status = $check->kind === 'ilegible' ? ReceiptCheck::UNREADABLE
                 : (in_array('fail', $levels, true) ? ReceiptCheck::FAIL
                     : (in_array('warning', $levels, true) ? ReceiptCheck::WARNING : ReceiptCheck::OK));
             // También el monto, si checkAmount se quedó con el de la segunda lectura
-            $check->forceFill(['status' => $status, 'issues' => $list, 'company_account_id' => $accountIds[$check->id] ?? null]);
+            $check->forceFill([
+                'status' => $status, 'issues' => $list, 'company_account_id' => $accountIds[$check->id] ?? null,
+                'duplicate_reason' => $duplicates[$check->id]['reason'] ?? null, 'duplicate_of_check_id' => $duplicates[$check->id]['of'] ?? null,
+            ]);
             if ($check->isDirty()) {
                 $check->save();
             }
@@ -263,6 +322,178 @@ class ReceiptChecker
                 $this->evaluate($other);
             }
         }
+    }
+
+    // --- Duplicados entre órdenes (pedido de Fran del 2026-10-09) ---
+
+    /** Desde cuándo se buscan capturas parecidas (la huella de imagen es solo un indicio). */
+    private const SIMILAR_DAYS = 30;
+
+    /**
+     * El mismo comprobante en otra orden, por capas. Devuelve el aviso, el motivo y los comprobantes de las otras
+     * órdenes, o null si no hay duplicado:
+     *  1. exact_file_hash: el mismo archivo exacto → bloquea.
+     *  2. same_transaction_reference: la misma referencia, el mismo monto, la misma fecha y, en bolívares, el mismo
+     *     banco → bloquea. possible_same_reference: la misma referencia y nada que lo contradiga, pero algún dato falta
+     *     o no se lee con seguridad → "Posible duplicado — requiere revisión", no bloquea. Con un dato distinto es otro
+     *     pago: no se marca.
+     *  3. perceptual_similarity_only: la imagen es casi igual a la de otra orden y no hay dos referencias que comparar
+     *     → posible duplicado, no bloquea.
+     * @return array{issue: array, reason: string, others: Collection}|null
+     */
+    private function otherOrderDuplicate(ReceiptCheck $check, Order $order, string $kind): ?array
+    {
+        $family = $this->familyKinds($kind);
+        $sha = $check->receipt?->file_sha256;
+        if ($sha) {
+            $same = ReceiptCheck::where('order_id', '!=', $order->id)->whereIn('kind', $family)
+                ->whereHas('receipt', fn ($q) => $q->where('file_sha256', $sha))->with('order:id,name')->orderBy('id')->get();
+            if ($same->isNotEmpty()) {
+                return [
+                    'issue' => $this->fail('Este mismo archivo de comprobante está también en la orden ' . $this->orderNames($same) . ': un pago no puede servir para dos órdenes.', 'duplicate'),
+                    'reason' => 'exact_file_hash',
+                    'others' => $same,
+                ];
+            }
+        }
+
+        if ($check->reference) {
+            $sameRef = ReceiptCheck::where('reference', $check->reference)->where('order_id', '!=', $order->id)
+                ->whereIn('kind', $family)->with('order:id,name')->orderBy('id')->get();
+            $verdicts = $sameRef->map(fn (ReceiptCheck $o) => ['check' => $o] + $this->sameTransaction($check, $o, $kind));
+            $same = $verdicts->where('verdict', 'same');
+            if ($same->isNotEmpty()) {
+                $others = $same->pluck('check');
+                $what = in_array($kind, self::VES_KINDS, true) ? 'monto, fecha y banco' : 'monto y fecha';
+
+                return [
+                    'issue' => $this->fail("Este mismo pago (referencia {$check->reference}, mismo {$what}) está también en la orden " . $this->orderNames($others) . ': un pago no puede servir para dos órdenes.', 'duplicate'),
+                    'reason' => 'same_transaction_reference',
+                    'others' => $others,
+                ];
+            }
+            $unsure = $verdicts->where('verdict', 'unsure');
+            if ($unsure->isNotEmpty()) {
+                return [
+                    'issue' => $this->warn('Posible duplicado — requiere revisión: la orden ' . $this->orderNames($unsure->pluck('check')) . " tiene un comprobante con la misma referencia ({$check->reference}), pero no se puede comparar " . $unsure->first()['missing'] . '.', 'duplicate'),
+                    'reason' => 'possible_same_reference',
+                    'others' => $unsure->pluck('check'),
+                ];
+            }
+        }
+
+        // Sin dos referencias que comparar, una captura casi idéntica es un indicio (nunca bloquea)
+        $hash = $check->receipt?->image_dhash;
+        if ($hash) {
+            $similar = ReceiptCheck::where('order_id', '!=', $order->id)->whereIn('kind', $family)
+                ->where('created_at', '>=', now()->subDays(self::SIMILAR_DAYS))
+                ->whereHas('receipt', fn ($q) => $q->whereNotNull('image_dhash'))
+                ->with(['order:id,name', 'receipt:id,image_dhash'])->orderBy('id')->get()
+                ->filter(fn (ReceiptCheck $o) => !($check->reference && $o->reference && $o->reference !== $check->reference)
+                    && ReceiptFingerprint::distance($hash, $o->receipt->image_dhash) <= ReceiptFingerprint::NEAR_BITS);
+            if ($similar->isNotEmpty()) {
+                return [
+                    'issue' => $this->warn('Posible duplicado — requiere revisión: la imagen es casi igual a un comprobante de la orden ' . $this->orderNames($similar) . ', y no hay referencia con qué comparar.', 'duplicate'),
+                    'reason' => 'perceptual_similarity_only',
+                    'others' => $similar->values(),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Si dos comprobantes con la misma referencia son el mismo pago: same (coincide todo lo que identifica al pago y se
+     * lee con seguridad), different (algún dato es distinto: es otro pago) o unsure (falta algún dato o no se lee bien).
+     * @return array{verdict: string, missing: ?string}
+     */
+    private function sameTransaction(ReceiptCheck $a, ReceiptCheck $b, string $kind): array
+    {
+        $da = $a->extracted ?? [];
+        $db = $b->extracted ?? [];
+        $sure = fn (array $d, string $field) => ($d['confianza_campos'][$field] ?? ($d['confianza'] ?? 'alta')) === 'alta';
+        $results = [];
+        $missing = [];
+
+        // Monto: cualquiera de las lecturas de uno contra cualquiera del otro
+        $amountsA = array_map(fn ($v) => number_format($v, 2, '.', ''), $this->amountReadings($a));
+        $amountsB = array_map(fn ($v) => number_format($v, 2, '.', ''), $this->amountReadings($b));
+        if (!$amountsA || !$amountsB) {
+            $missing[] = 'el monto';
+        } else {
+            $results['monto'] = array_intersect($amountsA, $amountsB) ? 'same' : (($sure($da, 'monto') && $sure($db, 'monto')) ? 'different' : 'unsure');
+        }
+
+        // Fecha
+        $dateA = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($da['fecha'] ?? '')) ? $da['fecha'] : null;
+        $dateB = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($db['fecha'] ?? '')) ? $db['fecha'] : null;
+        if (!$dateA || !$dateB) {
+            $missing[] = 'la fecha';
+        } else {
+            $results['fecha'] = $dateA === $dateB ? 'same' : (($sure($da, 'fecha') && $sure($db, 'fecha')) ? 'different' : 'unsure');
+        }
+
+        // Banco, en bolívares: el de origen con el de origen y el de destino con el de destino
+        if (in_array($kind, self::VES_KINDS, true)) {
+            $pairs = [];
+            foreach (['banco_origen', 'banco_destino'] as $f) {
+                $x = $this->bankKey($da[$f] ?? null);
+                $y = $this->bankKey($db[$f] ?? null);
+                if ($x !== null && $y !== null) {
+                    $pairs[] = $x === $y;
+                }
+            }
+            if (!$pairs) {
+                $missing[] = 'el banco';
+            } else {
+                $results['banco'] = !in_array(false, $pairs, true) ? 'same' : (($sure($da, 'banco') && $sure($db, 'banco')) ? 'different' : 'unsure');
+            }
+        }
+
+        if (in_array('different', $results, true)) {
+            return ['verdict' => 'different', 'missing' => null];
+        }
+        foreach ($results as $field => $r) {
+            if ($r === 'unsure') {
+                $missing[] = "el {$field} con seguridad";
+            }
+        }
+        if (!$sure($da, 'referencia') || !$sure($db, 'referencia')) {
+            $missing[] = 'la referencia con seguridad';
+        }
+
+        return $missing ? ['verdict' => 'unsure', 'missing' => implode(', ', array_unique($missing))] : ['verdict' => 'same', 'missing' => null];
+    }
+
+    /** El nombre del banco para comparar: sin tildes, sin "banco", "S.A." ni signos ("Banco de Venezuela" → "venezuela"). */
+    private function bankKey(?string $name): ?string
+    {
+        if ($name === null || trim($name) === '') {
+            return null;
+        }
+        $words = array_filter(preg_split('/[^a-z0-9]+/', $this->norm($name)), fn ($w) => $w !== '' && !in_array($w, ['banco', 'bank', 'de', 'del', 'universal', 's', 'a', 'c', 'sa', 'ca', 'saca', 'el', 'la'], true));
+
+        return $words ? implode(' ', $words) : null;
+    }
+
+    private function orderNames(Collection $checks): string
+    {
+        return $checks->map(fn ($o) => $o->order->name ?? "#{$o->order_id}")->unique()->implode(', ');
+    }
+
+    /** Si alguna lectura importante no es segura (para la revisión manual después del respaldo). */
+    private function lowConfidence(array $d): bool
+    {
+        return ($d['confianza'] ?? 'alta') !== 'alta'
+            || ($d['confianza_campos']['monto'] ?? 'alta') !== 'alta' || ($d['confianza_campos']['referencia'] ?? 'alta') !== 'alta';
+    }
+
+    private function doubtfulFields(array $d): string
+    {
+        $fields = array_keys(array_filter($d['confianza_campos'] ?? [], fn ($c) => $c !== 'alta'));
+
+        return $fields ? implode(', ', $fields) : 'la imagen no se ve bien';
     }
 
     /**

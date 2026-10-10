@@ -56,6 +56,8 @@ return [
     'openai' => [
         'key'           => env('OPENAI_API_KEY'),
         'receipt_model' => env('OPENAI_RECEIPT_MODEL', 'gpt-6-luna'),
+        // Respaldo para los comprobantes que el principal no lee con seguridad (Fran, 2026-10-09). Vacío lo apaga.
+        'receipt_fallback_model' => env('OPENAI_RECEIPT_FALLBACK_MODEL', 'gpt-6-sol'),
     ],
     'receipt_checks' => [
         'mode' => env('RECEIPT_CHECKS_MODE', 'off'),

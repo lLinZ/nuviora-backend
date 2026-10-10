@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\PaymentReceipt;
 use App\Models\ReceiptCheck;
 use App\Services\Payments\ReceiptChecker;
+use App\Services\Payments\ReceiptFingerprint;
 use App\Services\Payments\ReceiptReader;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -16,7 +17,9 @@ use Throwable;
 /**
  * Lee un comprobante con IA y lo compara con la orden (Fran, 2026-10-03). Se encola al subirlo, para que la
  * vendedora o la agencia no esperen. Si no cuadra el monto o el destino, encola una segunda lectura dígito por
- * dígito (2026-10-04) y el comprobante sigue "revisando" hasta que termine.
+ * dígito (2026-10-04) y el comprobante sigue "revisando" hasta que termine. Si el modelo principal no lo lee con
+ * seguridad, encola otra lectura completa con el de respaldo (Fran, 2026-10-09: Luna → Sol → revisión manual). Cada
+ * lectura va en su propio trabajo, para no pasar el tiempo límite.
  */
 class AnalyzePaymentReceipt implements ShouldQueue
 {
@@ -28,9 +31,13 @@ class AnalyzePaymentReceipt implements ShouldQueue
     /** Segunda lectura (solo monto y destino). Con valor por defecto: los trabajos ya encolados no lo traen. */
     public bool $reread = false;
 
-    public function __construct(public int $receiptId, bool $reread = false)
+    /** Lectura completa con el modelo de respaldo. */
+    public bool $escalate = false;
+
+    public function __construct(public int $receiptId, bool $reread = false, bool $escalate = false)
     {
         $this->reread = $reread;
+        $this->escalate = $escalate;
     }
 
     public function backoff(): array
@@ -58,24 +65,43 @@ class AnalyzePaymentReceipt implements ShouldQueue
             return; // lo borraron mientras esperaba
         }
         $check = ReceiptCheck::firstOrCreate(['payment_receipt_id' => $receipt->id], ['order_id' => $receipt->order_id]);
+        // Las huellas del archivo, para saber si el mismo comprobante está en otra orden (Fran, 2026-10-09)
+        app(ReceiptFingerprint::class)->ensure($receipt);
 
         if ($this->reread) {
-            $checker->recordReread($check, $reader->reread($receipt));
+            // Con el mismo modelo que hizo la lectura que vale (el de respaldo, si ya se escaló)
+            $checker->recordReread($check, $reader->reread($receipt, isset($check->extracted['escalado']) ? $check->model : null));
+            $this->next($check->refresh(), $checker, false);
             return;
         }
-        $checker->record($check, $reader->read($receipt));
-        if ($checker->needsReread($check->refresh())) {
-            // Sin el resultado de la primera a la vista: puede ser un error de lectura que la segunda corrige
+        if ($this->escalate) {
+            $checker->recordEscalation($check, $reader->read($receipt, ReceiptReader::fallbackModel()));
+        } else {
+            $checker->record($check, $reader->read($receipt));
+        }
+        $this->next($check->refresh(), $checker, true);
+    }
+
+    /** Lo que sigue después de una lectura: el modelo de respaldo si no se leyó con seguridad, o la segunda lectura. */
+    private function next(ReceiptCheck $check, ReceiptChecker $checker, bool $canReread): void
+    {
+        $then = match (true) {
+            $checker->needsEscalation($check) => [false, true],
+            $canReread && $checker->needsReread($check) => [true, false],
+            default => null,
+        };
+        if ($then) {
+            // Sin el resultado de esta lectura a la vista: puede ser un error que la siguiente corrige
             $check->forceFill(['status' => ReceiptCheck::PENDING, 'issues' => []])->save();
-            self::dispatch($receipt->id, true);
+            self::dispatch($this->receiptId, ...$then);
         }
     }
 
     public function failed(Throwable $e): void
     {
-        Log::warning('Revisión ' . ($this->reread ? '(segunda lectura) ' : '') . "del comprobante {$this->receiptId} falló: " . $e->getMessage());
-        if ($this->reread) {
-            // Sin la segunda lectura vale lo de la primera
+        Log::warning('Revisión ' . ($this->reread ? '(segunda lectura) ' : ($this->escalate ? '(modelo de respaldo) ' : '')) . "del comprobante {$this->receiptId} falló: " . $e->getMessage());
+        if ($this->reread || $this->escalate) {
+            // Sin la segunda lectura (o sin el modelo de respaldo) vale lo de la primera
             $check = ReceiptCheck::with('order')->where('payment_receipt_id', $this->receiptId)->first();
             if ($check?->order) {
                 app(ReceiptChecker::class)->evaluateOrder($check->order);
