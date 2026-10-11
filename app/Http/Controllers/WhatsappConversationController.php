@@ -321,7 +321,6 @@ class WhatsappConversationController extends Controller
             $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
             if ($tpl) {
                 $renderedBody = $tpl->render($vars);
-                Log::critical("DEBUG_WA: Enviando plantilla estructurada " . $request->template_name);
             }
         }
 
@@ -357,7 +356,6 @@ class WhatsappConversationController extends Controller
                                     $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
                                 }
                             } else if ($rawType === 'HEADER' && count($vars) > 0) {
-                                Log::critical("DEBUG_WA: Fallback Header");
                                 $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
                             }
 
@@ -372,7 +370,6 @@ class WhatsappConversationController extends Controller
                 } else {
                     // Fallback for simple/old templates or missing metadata
                     if ($request->has('vars')) {
-                        Log::critical("DEBUG_WA: Fallback Body parameters for " . $request->template_name);
                         $parameters = array_map(fn($v) => ['type' => 'text', 'text' => (string)$v], $request->vars);
                         $components[] = ['type' => 'body', 'parameters' => $parameters];
                     }

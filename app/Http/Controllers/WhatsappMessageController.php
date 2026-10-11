@@ -7,7 +7,6 @@ use Illuminate\Http\Request;
 use App\Models\WhatsappMessage;
 use App\Models\Order;
 use App\Services\WhatsAppService;
-use Illuminate\Support\Facades\Log;
 
 class WhatsappMessageController extends Controller
 {
@@ -86,7 +85,6 @@ class WhatsappMessageController extends Controller
             $tpl = \App\Models\WhatsappTemplate::where('name', $request->template_name)->first();
             if ($tpl) {
                 $renderedBody = $tpl->render($vars);
-                Log::critical("DEBUG_MSG_CTRL: Enviando {$request->template_name}", ['vars' => $vars]);
             }
         }
 
@@ -118,7 +116,6 @@ class WhatsappMessageController extends Controller
                                     $parameters[] = ['type' => 'text', 'text' => (string)($vars[$idx] ?? '')];
                                 }
                             } else if ($rawType === 'HEADER' && count($vars) > 0) {
-                                Log::critical("DEBUG_MSG_CTRL: Fallback Header para {$request->template_name}");
                                 $parameters[] = ['type' => 'text', 'text' => (string)$vars[0]];
                             }
 
