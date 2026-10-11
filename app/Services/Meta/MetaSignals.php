@@ -78,11 +78,21 @@ class MetaSignals
             }
         }
 
-        // §39: "muestra todavía limitada aunque exista alguna compra"
+        // §39: "muestra todavía limitada aunque exista alguna compra". Fran (2026-10-09, pregunta 5): depende del gasto
+        // acumulado y de las compras, con umbrales que pone él. Deja de serlo cuando llega a los dos mínimos que tenga.
         foreach ($this->rules->where('type', 'limited_sample') as $r) {
-            if ($r->threshold !== null && $purchases > 0 && $purchases < $r->threshold) {
-                $signals[] = ['type' => 'limited_sample', 'severity' => $r->severity,
-                    'label' => sprintf('Muestra limitada: %s compras (menos de %s)', $purchases + 0, $r->threshold + 0)];
+            if ($purchases <= 0 || ($r->threshold === null && $r->min_spend === null)) {
+                continue;
+            }
+            $short = [];
+            if ($r->threshold !== null && $purchases < $r->threshold) {
+                $short[] = sprintf('%s compras (mínimo %s)', $purchases + 0, $r->threshold + 0);
+            }
+            if ($r->min_spend !== null && $spend < $r->min_spend) {
+                $short[] = sprintf('$%s de gasto (mínimo $%s)', number_format($spend, 2, ',', '.'), number_format($r->min_spend, 2, ',', '.'));
+            }
+            if ($short) {
+                $signals[] = ['type' => 'limited_sample', 'severity' => $r->severity, 'label' => 'Muestra limitada: ' . implode(' y ', $short)];
             }
         }
 
@@ -109,7 +119,7 @@ class MetaSignals
     public static function metricLabel(string $metric): string
     {
         return [
-            'cpa' => 'CPA', 'cpm' => 'CPM', 'ctr' => 'CTR', 'link_ctr' => 'Link CTR', 'cpc' => 'CPC', 'frequency' => 'Frequency',
+            'cpa' => 'CPA', 'cpm' => 'CPM', 'link_ctr' => 'CTR enlace', 'link_cpc' => 'CPC enlace', 'frequency' => 'Frequency',
             'hook_rate' => 'Hook Rate', 'hold_rate' => 'Hold Rate', 'lpv_rate' => 'LPV Rate', 'conversion_rate' => 'Conversion Rate',
             'spend' => 'Gasto', 'purchases' => 'Purchases',
         ][$metric] ?? $metric;

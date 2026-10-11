@@ -10,6 +10,7 @@ use App\Models\MetaCreative;
 use App\Models\MetaInsightDaily;
 use App\Models\Product;
 use App\Models\ProductAdTarget;
+use App\Services\Meta\CampaignSuggester;
 use App\Services\Meta\MetaHierarchySync;
 use App\Services\Meta\MetaVisibility;
 use Illuminate\Http\Request;
@@ -46,11 +47,14 @@ class MetaAdsSetupController extends Controller
         $spend = MetaInsightDaily::where('level', 'campaign')->where('date', '>=', $since)
             ->groupBy('meta_id')->selectRaw('meta_id, SUM(spend) spend')->pluck('spend', 'meta_id');
 
+        $suggester = new CampaignSuggester();
         $campaigns = MetaCampaign::with(['account:id,name,meta_id,is_active', 'product:id,title,showable_name', 'city:id,name', 'classifier:id,names'])
             ->whereHas('account', fn ($q) => $q->where('is_active', true))
             ->when($request->boolean('pending'), fn ($q) => $q->where(fn ($w) => $w->whereNull('product_id')->orWhereNull('city_id')))
             ->get()
             ->map(fn (MetaCampaign $c) => [
+                // Fran (2026-10-09, punto 6): a las que faltan, el sistema les sugiere producto y ciudad
+                'suggestion' => $c->isClassified() ? null : $suggester->suggest($c, $c->account?->name),
                 'id' => $c->id,
                 'meta_id' => $c->meta_id,
                 'name' => $c->name,
@@ -146,6 +150,7 @@ class MetaAdsSetupController extends Controller
     {
         $data = $request->validate([
             'threshold' => 'nullable|numeric|min:0|max:1000',
+            'min_spend' => 'nullable|numeric|min:0|max:100000',
             'severity' => ['sometimes', Rule::in(MetaAlertRule::SEVERITIES)],
             'is_active' => 'sometimes|boolean',
             'metric' => ['sometimes', Rule::in(MetaAlertRule::TREND_METRICS)],
@@ -154,9 +159,15 @@ class MetaAdsSetupController extends Controller
         if ($rule->type !== 'trend') {
             unset($data['metric'], $data['direction']);
         }
+        if ($rule->type !== 'limited_sample') {
+            unset($data['min_spend']);
+        }
         $threshold = array_key_exists('threshold', $data) ? $data['threshold'] : $rule->threshold;
-        if (($data['is_active'] ?? $rule->is_active) && $threshold === null) {
-            return response()->json(['status' => false, 'message' => 'Para activar la regla hace falta el umbral.'], 422);
+        // La muestra limitada se activa con las compras mínimas, con el gasto mínimo o con los dos (pregunta 5)
+        $minSpend = $rule->type === 'limited_sample' ? (array_key_exists('min_spend', $data) ? $data['min_spend'] : $rule->min_spend) : null;
+        if (($data['is_active'] ?? $rule->is_active) && $threshold === null && $minSpend === null) {
+            return response()->json(['status' => false, 'message' => $rule->type === 'limited_sample'
+                ? 'Para activar la regla hace falta el mínimo de compras, el de gasto o los dos.' : 'Para activar la regla hace falta el umbral.'], 422);
         }
         $rule->fill($data + ['updated_by' => Auth::id()])->save();
 
@@ -182,7 +193,7 @@ class MetaAdsSetupController extends Controller
         $today = now()->toDateString();
 
         $products = $rows->groupBy('product_id')->map(function ($history) use ($today) {
-            $current = $history->first(fn ($t) => $t->valid_from->toDateString() <= $today) ?? $history->last();
+            $current = ProductAdTarget::effective($history->reverse()->values(), $today);
             $p = $current->product;
             return [
                 'product_id' => $current->product_id,

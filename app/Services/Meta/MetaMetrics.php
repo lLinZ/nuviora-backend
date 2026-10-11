@@ -29,11 +29,9 @@ class MetaMetrics
         return [
             // §15: CPA / Cost per Purchase
             'cpa' => self::div($spend, $v('purchases')),
-            // §15: CTR (todos los clics) y Link CTR; §51: "CTR agregado = SUM(Link Clicks) / SUM(Impressions) × 100"
-            'ctr' => self::pct($v('clicks'), $impressions),
+            // §51: "CTR agregado = SUM(Link Clicks) / SUM(Impressions) × 100". CTR y CPC siempre del enlace: los de
+            // todos los clics no interesan (respuesta de Fran del 2026-10-09, pregunta 2)
             'link_ctr' => self::pct($v('link_clicks'), $impressions),
-            // §15: CPC (todos los clics) y costo por clic en el enlace
-            'cpc' => self::div($spend, $v('clicks')),
             'link_cpc' => self::div($spend, $v('link_clicks')),
             // §51: "CPM agregado = SUM(Spend) / SUM(Impressions) × 1000"
             'cpm' => self::div($spend * 1000, $impressions),

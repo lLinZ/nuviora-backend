@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\DB;
  * pantallas: el módulo financiero, el de inventario y la IA central no se hacen ahora (§59). Sale de nuestra base de
  * datos, no de Meta.
  *
- * No toca el gasto que hoy se anota a mano (product_ad_spends): el §46 dice que el módulo financiero usará este
- * "posteriormente".
+ * Desde la respuesta de Fran del 2026-10-09 (punto 7), Métricas usa dailySpend como gasto publicitario; lo anotado a
+ * mano (product_ad_spends) queda para los días en que Meta no tiene gasto de ese producto (MetricsController).
  */
 class MetaAdsData
 {

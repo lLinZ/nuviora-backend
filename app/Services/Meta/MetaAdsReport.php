@@ -293,7 +293,7 @@ class MetaAdsReport
         $prevTotals = MetaMetrics::sum($prevSum ? [$prevSum] : []);
         $prevMetrics = MetaMetrics::compute($prevTotals);
         $change = [];
-        foreach (['cpa', 'ctr', 'link_ctr', 'cpc', 'link_cpc', 'cpm', 'lpv_rate', 'conversion_rate', 'hook_rate', 'hold_rate'] as $m) {
+        foreach (['cpa', 'link_ctr', 'link_cpc', 'cpm', 'lpv_rate', 'conversion_rate', 'hook_rate', 'hold_rate'] as $m) {
             $change[$m] = MetaMetrics::change($metrics[$m], $prevMetrics[$m]);
         }
         $change['frequency'] = MetaMetrics::change($packed['frequency_daily'] ?? $metrics['frequency'], $prevMetrics['frequency']);
@@ -303,10 +303,12 @@ class MetaAdsReport
         return ['from' => $this->prevFrom, 'to' => $this->prevTo, 'totals' => $prevTotals, 'metrics' => $prevMetrics, 'change' => $change];
     }
 
+    /** Las reglas se leen una vez por reporte (no por proceso: que un cambio de regla se vea en el siguiente). */
+    private ?MetaSignals $engine = null;
+
     private function signals(array $packed, ?float $target, ?float $breakEven): array
     {
-        static $engine;
-        $engine ??= new MetaSignals();
+        $engine = $this->engine ??= new MetaSignals();
         return [
             'frequency' => MetaSignals::frequency($packed['metrics']['frequency']),
             'cpa' => MetaSignals::cpa($packed['metrics']['cpa'], $target, $breakEven),
@@ -321,9 +323,10 @@ class MetaAdsReport
         if (!$productIds) {
             return [];
         }
-        return ProductAdTarget::whereIn('product_id', $productIds)->where('valid_from', '<=', $date)
+        return ProductAdTarget::whereIn('product_id', $productIds)
             ->orderBy('valid_from')->orderBy('id')->get()
-            ->keyBy('product_id') // se queda la última vigente
+            ->groupBy('product_id')
+            ->map(fn ($rows) => ProductAdTarget::effective($rows, $date))
             ->map(fn ($t) => [
                 'target_cpa' => $t->target_cpa !== null ? (float) $t->target_cpa : null,
                 'break_even_cpa' => $t->break_even_cpa !== null ? (float) $t->break_even_cpa : null,
@@ -509,7 +512,7 @@ class MetaAdsReport
             $totals = MetaMetrics::sum($cur->has($day) ? [$cur->get($day)] : []);
             $value = $this->metricValue($metric, $totals);
             $prevDay = Carbon::parse($this->prevFrom)->addDays($offset)->toDateString();
-            $target = $targetRows->filter(fn ($t) => $t->valid_from->toDateString() <= $day)->last();
+            $target = ProductAdTarget::effective($targetRows, $day);
             $points[] = [
                 'date' => $day,
                 'value' => $value,

@@ -8,10 +8,12 @@ use Illuminate\Database\Eloquent\Model;
 class MetaAlertRule extends Model
 {
     public const TYPES = ['spend_no_purchases', 'limited_sample', 'trend'];
-    public const TREND_METRICS = ['cpa', 'cpm', 'ctr', 'link_ctr', 'cpc', 'frequency', 'hook_rate', 'hold_rate', 'lpv_rate', 'conversion_rate', 'spend', 'purchases'];
+    /** CTR y CPC solo del enlace (respuesta de Fran del 2026-10-09, pregunta 2). */
+    public const TREND_METRICS = ['cpa', 'cpm', 'link_ctr', 'link_cpc', 'frequency', 'hook_rate', 'hold_rate', 'lpv_rate', 'conversion_rate', 'spend', 'purchases'];
     public const SEVERITIES = ['info', 'alert', 'critical'];
 
-    protected $fillable = ['type', 'metric', 'direction', 'threshold', 'severity', 'is_active', 'updated_by'];
+    /** threshold: × Target CPA (spend_no_purchases), compras mínimas (limited_sample) o % (trend). min_spend: USD (limited_sample). */
+    protected $fillable = ['type', 'metric', 'direction', 'threshold', 'min_spend', 'severity', 'is_active', 'updated_by'];
 
-    protected $casts = ['threshold' => 'float', 'is_active' => 'boolean'];
+    protected $casts = ['threshold' => 'float', 'min_spend' => 'float', 'is_active' => 'boolean'];
 }

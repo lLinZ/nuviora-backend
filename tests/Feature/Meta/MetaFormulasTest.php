@@ -85,7 +85,7 @@ describe('Señales sin IA (§37, §38, §39, §40)', function () {
         new MetaAlertRule(['type' => 'spend_no_purchases', 'threshold' => 2, 'severity' => 'critical', 'is_active' => true]),
         new MetaAlertRule(['type' => 'limited_sample', 'threshold' => 5, 'severity' => 'info', 'is_active' => true]),
         new MetaAlertRule(['type' => 'trend', 'metric' => 'cpa', 'direction' => 'up', 'threshold' => 10, 'severity' => 'alert', 'is_active' => true]),
-        new MetaAlertRule(['type' => 'trend', 'metric' => 'ctr', 'direction' => 'down', 'threshold' => 15, 'severity' => 'alert', 'is_active' => true]),
+        new MetaAlertRule(['type' => 'trend', 'metric' => 'link_ctr', 'direction' => 'down', 'threshold' => 15, 'severity' => 'alert', 'is_active' => true]),
     ]);
 
     it('gasto ≥ 1 Target CPA sin compras: alerta; ≥ 2: crítica (§39)', function () use ($rules) {
@@ -102,10 +102,28 @@ describe('Señales sin IA (§37, §38, §39, §40)', function () {
         expect($s->evaluate(['spend' => 30, 'purchases' => 6], [], null, 4.70))->toBe([]);
     });
 
-    it('tendencias con el umbral configurado (§40)', function () use ($rules) {
+    it('la muestra limitada mira el gasto y las compras, con los mínimos que ponga Fran (pregunta 5)', function () {
+        $s = new MetaSignals(collect([new MetaAlertRule(['type' => 'limited_sample', 'threshold' => 5, 'min_spend' => 50, 'severity' => 'info'])]));
+        expect($s->evaluate(['spend' => 30, 'purchases' => 6], [], null, null)[0]['label'])->toBe('Muestra limitada: $30,00 de gasto (mínimo $50,00)');
+        expect($s->evaluate(['spend' => 80, 'purchases' => 3], [], null, null)[0]['label'])->toBe('Muestra limitada: 3 compras (mínimo 5)');
+        expect($s->evaluate(['spend' => 20, 'purchases' => 2], [], null, null)[0]['label'])->toBe('Muestra limitada: 2 compras (mínimo 5) y $20,00 de gasto (mínimo $50,00)');
+        expect($s->evaluate(['spend' => 80, 'purchases' => 6], [], null, null))->toBe([]);
+        expect($s->evaluate(['spend' => 20, 'purchases' => 0], [], null, null))->toBe([]); // sin compras la cubre la otra regla
+        $soloGasto = new MetaSignals(collect([new MetaAlertRule(['type' => 'limited_sample', 'min_spend' => 50, 'severity' => 'info'])]));
+        expect($soloGasto->evaluate(['spend' => 20, 'purchases' => 9], [], null, null))->toHaveCount(1);
+    });
+
+    it('tendencias con el umbral configurado (§40), con el CTR del enlace (pregunta 2)', function () use ($rules) {
         $s = new MetaSignals($rules());
-        $signals = $s->evaluate(['spend' => 47, 'purchases' => 10], ['cpa' => 4.70, 'ctr' => 1.85], ['cpa' => 4.10, 'ctr' => 2.20], 4.70);
-        expect(collect($signals)->pluck('label')->all())->toBe(['CPA aumentando +14,6 %', 'CTR disminuyendo -15,9 %']);
+        $signals = $s->evaluate(['spend' => 47, 'purchases' => 10], ['cpa' => 4.70, 'link_ctr' => 1.85], ['cpa' => 4.10, 'link_ctr' => 2.20], 4.70);
+        expect(collect($signals)->pluck('label')->all())->toBe(['CPA aumentando +14,6 %', 'CTR enlace disminuyendo -15,9 %']);
+    });
+
+    it('CTR y CPC solo del enlace: los de todos los clics no salen (pregunta 2)', function () {
+        $m = MetaMetrics::compute(['spend' => 10, 'impressions' => 1000, 'clicks' => 50, 'link_clicks' => 20]);
+        expect($m)->not->toHaveKeys(['ctr', 'cpc']);
+        expect($m['link_ctr'])->toEqualWithDelta(2.0, 1e-9);
+        expect($m['link_cpc'])->toEqualWithDelta(0.5, 1e-9);
     });
 
     it('cambiar el umbral cambia la señal sin tocar código (§39)', function () {

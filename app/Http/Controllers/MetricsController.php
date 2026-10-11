@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Models\Status;
 use App\Models\ProductAdSpend;
+use App\Services\Meta\MetaAdsData;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -30,6 +31,8 @@ class MetricsController extends Controller
         $statusAsignadoRepartidor = Status::whereRaw('LOWER(description) = ?', ['asignado a repartidor'])->first()?->id ?? 0;
         $statusEnRuta = Status::whereRaw('LOWER(description) = ?', ['en ruta'])->first()?->id ?? 0;
 
+        $spend = $this->adSpendByProductDay($startDate, $endDate, $cityId);
+
         // 1. Efectividad de Productos
         // ✅ Contamos ÓRDENES ÚNICAS por status final — no cuántas veces pasó por un status
         $productMetrics = Product::withCount([
@@ -51,7 +54,7 @@ class MetricsController extends Controller
                     if ($agencyId) $q->where('agency_id', '=', $agencyId);
                 })->select(DB::raw('COUNT(DISTINCT order_id)'));
             }
-        ])->get(['*'])->map(function($product) use ($startDate, $endDate, $statusEntregado, $shopId, $cityId, $agencyId) {
+        ])->get(['*'])->map(function($product) use ($startDate, $endDate, $statusEntregado, $shopId, $cityId, $agencyId, $spend) {
             $product->effectiveness = $product->total_orders > 0 
                 ? round((float)($product->success_orders / $product->total_orders) * 100, 2) 
                 : 0;
@@ -79,9 +82,8 @@ class MetricsController extends Controller
                 ->when($agencyId, fn($q) => $q->where('orders.agency_id', '=', $agencyId))
                 ->sum(DB::raw(($product->cost_usd ?? 0) . ' * order_products.quantity'));
 
-            $adSpend = ProductAdSpend::where('product_id', '=', $product->id)
-                ->whereBetween('date', [$startDate, $endDate])
-                ->sum('amount');
+            $days = collect($spend[$product->id] ?? []);
+            $adSpend = $days->sum('amount');
 
             // ✅ Calcular TODAS las comisiones de órdenes que contienen este producto (base, no upsells)
             $commissions = DB::table('earnings')
@@ -97,6 +99,8 @@ class MetricsController extends Controller
                 ->sum('earnings.amount_usd');
 
             $product->revenue = $revenue;
+            $product->ad_spend = round($adSpend, 2);
+            $product->ad_spend_source = self::spendSource($days);
             $product->net_profit = $revenue - $cost - $adSpend - $commissions; // ✅ Restar todo
             return $product;
         });
@@ -343,7 +347,8 @@ class MetricsController extends Controller
                 ->when($agencyId, fn($q) => $q->where('orders.agency_id', '=', $agencyId))
                 ->sum(DB::raw('products.cost_usd * order_products.quantity'));
 
-            $dayAdSpend = ProductAdSpend::whereDate('date', '=', $date)->sum('amount');
+            $dayCells = collect($spend)->map(fn ($days) => $days[$date] ?? null)->filter();
+            $dayAdSpend = $dayCells->sum('amount');
 
             // ✅ Sumar TODAS las comisiones del día (vendedores + agencias + repartidores)
             $dayCommissions = DB::table('earnings')
@@ -359,7 +364,8 @@ class MetricsController extends Controller
                 'date' => $date,
                 'revenue' => (float)$dayRevenue,
                 'cost' => (float)$dayCost,
-                'ad_spend' => (float)$dayAdSpend,
+                'ad_spend' => round((float)$dayAdSpend, 2),
+                'ad_spend_source' => self::spendSource($dayCells),
                 'commissions' => (float)$dayCommissions, // ✅ Agregar para visibilidad
                 'net_profit' => (float)($dayRevenue - $dayCost - $dayAdSpend - $dayCommissions), // ✅ Restar comisiones
             ];
@@ -388,6 +394,44 @@ class MetricsController extends Controller
             ],
             'daily' => $dailyMetrics,
         ]);
+    }
+
+    /**
+     * El gasto publicitario por producto y día (respuesta de Fran del 2026-10-09, punto 7: "obtenga directamente de Meta
+     * Ads el gasto publicitario y lo utilice en las métricas"). Sale de las campañas clasificadas (Módulo 2, §46), con el
+     * filtro de ciudad. Lo anotado a mano solo cuenta los días en que Meta no tiene gasto de ese producto en ninguna
+     * ciudad (por ejemplo, de cuentas que todavía no están conectadas), para no contarlo dos veces.
+     *
+     * @return array<int, array<string, array{amount: float, source: string}>> producto => fecha => gasto y de dónde salió
+     */
+    private function adSpendByProductDay(string $from, string $to, $cityId): array
+    {
+        $out = [];
+        $covered = [];
+        foreach (app(MetaAdsData::class)->dailySpend($from, $to, ['product', 'city']) as $r) {
+            $covered[$r['product_id']][$r['date']] = true;
+            if ($cityId && (int) $r['city_id'] !== (int) $cityId) {
+                continue;
+            }
+            $out[$r['product_id']][$r['date']] = [
+                'amount' => ($out[$r['product_id']][$r['date']]['amount'] ?? 0) + $r['spend'],
+                'source' => 'meta',
+            ];
+        }
+        foreach (ProductAdSpend::whereBetween('date', [$from, $to])->get(['product_id', 'date', 'amount']) as $m) {
+            $date = substr((string) $m->date, 0, 10);
+            if (empty($covered[$m->product_id][$date])) {
+                $out[$m->product_id][$date] = ['amount' => (float) $m->amount, 'source' => 'manual'];
+            }
+        }
+        return $out;
+    }
+
+    /** meta, manual, mixed (de los dos) o null si no hubo gasto. */
+    private static function spendSource($cells): ?string
+    {
+        $sources = collect($cells)->pluck('source')->unique()->values();
+        return $sources->count() > 1 ? 'mixed' : $sources->first();
     }
 
     public function storeAdSpend(Request $request)
