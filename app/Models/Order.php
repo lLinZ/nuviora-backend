@@ -19,9 +19,23 @@ class Order extends Model
         'scheduled_for'          => 'datetime',
         'agency_locked'          => 'boolean',
         'receipts_summary'       => 'array', // venta, recibido y excedente por método (documento de Fran, §9)
+        'location_lat'           => 'float', // coordenadas de la ubicación del cliente (Módulo 3, §7)
+        'location_lng'           => 'float',
     ];
 
     // Relationship methods follow...
+
+    /** Rutas almacén → cliente y su costo esperado (Módulo 3). Solo para administración (§14). */
+    public function deliveryRoutes()
+    {
+        return $this->hasMany(OrderDeliveryRoute::class);
+    }
+
+    /** Los cambios de la ubicación del cliente (Módulo 3, §19). */
+    public function locationHistory()
+    {
+        return $this->hasMany(OrderLocationHistory::class);
+    }
 
     public function postponements()
     {

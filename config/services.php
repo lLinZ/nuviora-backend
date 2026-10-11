@@ -40,6 +40,11 @@ return [
         // §32: "name" = el código completo del anuncio; "prefix" = solo "C004". Pendiente de Fran (pregunta 2).
         'tracking_id_mode' => env('META_TRACKING_ID_MODE', 'name'),
     ],
+    // Distancia de cada carrera de delivery (Módulo 3 de Fran, §3). La clave solo vive en el .env del servidor: nunca en
+    // Git, en el frontend ni en los logs (§44, §45).
+    'google_routes' => [
+        'key' => env('GOOGLE_ROUTES_API_KEY'),
+    ],
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],
@@ -58,6 +63,8 @@ return [
         'receipt_model' => env('OPENAI_RECEIPT_MODEL', 'gpt-6-luna'),
         // Respaldo para los comprobantes que el principal no lee con seguridad (Fran, 2026-10-09). Vacío lo apaga.
         'receipt_fallback_model' => env('OPENAI_RECEIPT_FALLBACK_MODEL', 'gpt-6-sol'),
+        // Cierres de las agencias (Módulo 3): leer el archivo y proponer coincidencias, nunca decidir montos (§48)
+        'closure_model' => env('OPENAI_CLOSURE_MODEL', 'gpt-6-luna'),
     ],
     'receipt_checks' => [
         'mode' => env('RECEIPT_CHECKS_MODE', 'off'),

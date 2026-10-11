@@ -41,6 +41,16 @@ try {
     // workers de siempre (que leen los comprobantes de pago). Termina cuando la cola queda vacía.
     Schedule::command('queue:work --queue=meta --stop-when-empty --tries=1 --timeout=85 --max-time=540')
         ->everyMinute()->withoutOverlapping(15)->runInBackground();
+    // Tarifas de delivery (Módulo 3 de Fran): las rutas de Google Routes y los enlaces de Maps van por su propia cola,
+    // con un worker de corta vida como el de Meta. Cada hora se reintenta lo que Google no pudo responder (§42).
+    Schedule::command('queue:work --queue=delivery --stop-when-empty --tries=3 --timeout=40 --max-time=300')
+        ->everyMinute()->withoutOverlapping(10)->runInBackground();
+    Schedule::command('delivery:retry')->hourly()->withoutOverlapping();
+    // Cierres semanales de las agencias (§20): al terminar la semana se abre el de cada agencia con carreras. Cada hora,
+    // por si el servidor estuvo apagado el lunes. El archivo se procesa en su propia cola (la IA puede tardar).
+    Schedule::command('delivery:closures')->hourly()->withoutOverlapping();
+    Schedule::command('queue:work --queue=closures --stop-when-empty --tries=1 --timeout=420 --max-time=500')
+        ->everyMinute()->withoutOverlapping(15)->runInBackground();
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

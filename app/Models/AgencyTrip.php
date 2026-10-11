@@ -11,7 +11,7 @@ class AgencyTrip extends Model
     public const RESULTS = ['entregado' => 'Entregado', 'novedad' => 'Novedad', 'rechazado' => 'Rechazado', 'cancelado' => 'Cancelado', 'otro' => 'Otro'];
 
     protected $fillable = [
-        'order_id', 'agency_id', 'deliverer_id', 'type', 'result', 'result_status_id', 'price_usd',
+        'order_id', 'agency_id', 'delivery_route_id', 'deliverer_id', 'type', 'result', 'result_status_id', 'price_usd',
         'trip_date', 'started_at', 'closed_at', 'earning_id', 'voided_at', 'voided_by', 'void_reason',
     ];
 

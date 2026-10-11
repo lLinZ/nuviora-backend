@@ -89,8 +89,10 @@ class AgencyTrips
         $hadAttempt = Earning::where('order_id', $order->id)->where('role_type', 'agencia')->where('user_id', $agency->id)->exists();
         $type = $order->is_exchange ? 'cambio' : ($hadAttempt ? 'reentrega' : 'normal');
         $price = round($this->price($order, $agency), 2);
+        // Módulo 3, §18: la carrera usa la ruta activa al salir (almacén → la dirección de ese momento)
+        $routeId = $this->routeFor($order);
 
-        $trip = DB::transaction(function () use ($order, $agency, $type, $price) {
+        $trip = DB::transaction(function () use ($order, $agency, $type, $price, $routeId) {
             $earning = Earning::create([
                 'order_id' => $order->id,
                 'user_id' => $agency->id,
@@ -104,6 +106,7 @@ class AgencyTrips
             return AgencyTrip::create([
                 'order_id' => $order->id,
                 'agency_id' => $agency->id,
+                'delivery_route_id' => $routeId,
                 'deliverer_id' => $order->deliverer_id,
                 'type' => $type,
                 'price_usd' => $price,
@@ -115,6 +118,17 @@ class AgencyTrips
         $this->activity($trip, 'Carrera de ' . strtolower(AgencyTrip::TYPES[$type]) . " para {$agency->names}: $" . number_format($price, 2) . '.');
 
         return $trip;
+    }
+
+    /** La ruta activa de la orden (se crea si todavía no existe). Si falla, la carrera se abre igual. */
+    private function routeFor(Order $order): ?int
+    {
+        try {
+            return app(\App\Services\Delivery\DeliveryRoutes::class)->refresh($order, 'carrera')?->id;
+        } catch (\Throwable $e) {
+            report($e);
+            return null;
+        }
     }
 
     private function close(AgencyTrip $trip, ?string $to, int $toId): AgencyTrip

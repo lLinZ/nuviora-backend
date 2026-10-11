@@ -577,6 +577,44 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/report/creatives/{creative}', [\App\Http\Controllers\MetaReportController::class, 'creative']);
     });
 
+    /**---------------------
+     * TARIFAS DE DELIVERY (documento de Fran del 2026-10-09, Módulo 3). Almacenes con coordenadas, tarifarios y el
+     * costo esperado de cada carrera: solo administración, controlado aquí y no en la pantalla (§14). La agencia no
+     * puede ver ni el tarifario, ni la distancia, ni el precio calculado.
+     * ---------------------**/
+    Route::middleware('role:Admin')->prefix('delivery')->group(function () {
+        Route::get('/warehouses', [\App\Http\Controllers\DeliveryTariffController::class, 'warehouses']);
+        Route::put('/warehouses/{warehouse}', [\App\Http\Controllers\DeliveryTariffController::class, 'updateWarehouse']);
+        Route::post('/resolve-link', [\App\Http\Controllers\DeliveryTariffController::class, 'resolveLink']);
+        Route::get('/tariffs', [\App\Http\Controllers\DeliveryTariffController::class, 'tariffs']);
+        Route::post('/tariffs', [\App\Http\Controllers\DeliveryTariffController::class, 'storeTariff']);
+        Route::get('/routes', [\App\Http\Controllers\DeliveryTariffController::class, 'routes']);
+        Route::post('/routes/{deliveryRoute}/retry', [\App\Http\Controllers\DeliveryTariffController::class, 'retryRoute']);
+
+        // Cierres semanales de las agencias (§20 a §37): revisar, resolver, aprobar y pagar
+        Route::get('/closures', [\App\Http\Controllers\AgencyClosureController::class, 'index']);
+        Route::post('/closures', [\App\Http\Controllers\AgencyClosureController::class, 'store']);
+        Route::get('/closures/settings', [\App\Http\Controllers\AgencyClosureController::class, 'settings']);
+        Route::put('/closures/settings/{agency}', [\App\Http\Controllers\AgencyClosureController::class, 'updateSettings']);
+        Route::get('/closures/{closure}', [\App\Http\Controllers\AgencyClosureController::class, 'show']);
+        Route::post('/closures/{closure}/upload', [\App\Http\Controllers\AgencyClosureController::class, 'upload']);
+        Route::post('/closures/{closure}/reprocess', [\App\Http\Controllers\AgencyClosureController::class, 'reprocess']);
+        Route::get('/closures/{closure}/trips', [\App\Http\Controllers\AgencyClosureController::class, 'trips']);
+        Route::post('/closures/{closure}/pay', [\App\Http\Controllers\AgencyClosureController::class, 'pay']);
+        Route::get('/closures/{closure}/receipt', [\App\Http\Controllers\AgencyClosureController::class, 'receipt']);
+        Route::get('/closure-files/{file}', [\App\Http\Controllers\AgencyClosureController::class, 'download']);
+        Route::post('/closure-rows/{row}/link', [\App\Http\Controllers\AgencyClosureController::class, 'link']);
+        Route::post('/closure-discrepancies/{discrepancy}/resolve', [\App\Http\Controllers\AgencyClosureController::class, 'resolve']);
+        Route::post('/closure-discrepancies/{discrepancy}/reopen', [\App\Http\Controllers\AgencyClosureController::class, 'reopen']);
+        Route::post('/closure-discrepancies/{discrepancy}/notes', [\App\Http\Controllers\AgencyClosureController::class, 'note']);
+    });
+
+    // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno
+    Route::middleware('role:Agencia')->group(function () {
+        Route::get('/my-closures', [\App\Http\Controllers\MyClosureController::class, 'index']);
+        Route::post('/my-closures/{closure}/upload', [\App\Http\Controllers\MyClosureController::class, 'upload']);
+    });
+
     // TEST NOTIFICATIONS (solo notifica al propio usuario)
     Route::post('/test/notifications', [\App\Http\Controllers\TestNotificationController::class, 'trigger']);
 

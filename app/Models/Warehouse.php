@@ -12,10 +12,14 @@ class Warehouse extends Model
     protected $fillable = [
         'warehouse_type_id',
         'user_id',
+        'city_id',
         'code',
         'name',
         'description',
         'location',
+        'maps_url',   // Módulo 3, §6: link de Maps y coordenadas del almacén (origen de las carreras)
+        'latitude',
+        'longitude',
         'is_active',
         'is_main',
     ];
@@ -23,7 +27,20 @@ class Warehouse extends Model
     protected $casts = [
         'is_active' => 'boolean',
         'is_main' => 'boolean',
+        'latitude' => 'float',
+        'longitude' => 'float',
     ];
+
+    public function city()
+    {
+        return $this->belongsTo(City::class);
+    }
+
+    /** Tiene coordenadas para calcular carreras (Módulo 3, §6). */
+    public function hasCoordinates(): bool
+    {
+        return $this->latitude !== null && $this->longitude !== null;
+    }
 
     /**
      * Get the warehouse type
