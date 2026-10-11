@@ -10,6 +10,9 @@ use Illuminate\Support\Facades\Auth;
 
 class ShopController extends Controller
 {
+    /** Lo que no se devuelve nunca (Shop::$hidden) y que, vacío al editar, no se borra. */
+    private const SECRETS = ['shopify_access_token', 'shopify_webhook_secret'];
+
     protected function ensureAdmin()
     {
         $role = Auth::user()->role?->description;
@@ -58,6 +61,13 @@ class ShopController extends Controller
             'auto_close_at' => 'nullable|date_format:H:i',
             'auto_schedule_enabled' => 'boolean',
         ]);
+
+        // La pantalla ya no recibe el token ni el secreto: si llegan vacíos, se quedan los que están
+        foreach (self::SECRETS as $key) {
+            if (array_key_exists($key, $data) && trim((string) $data[$key]) === '') {
+                unset($data[$key]);
+            }
+        }
 
         $shop->update($data);
         return response()->json($shop);

@@ -24,7 +24,24 @@ class Shop extends Model
         'auto_schedule_enabled' => 'boolean',
     ];
 
-    protected $appends = ['is_open'];
+    /**
+     * El token de la API de Shopify y el secreto de los webhooks nunca salen en una respuesta: GET /api/shops los daba a
+     * cualquier usuario con sesión, y también viajaban con las órdenes que cargan su tienda. Los usa solo el backend
+     * (ShopifyService y ShopifyWebhookController); la pantalla solo sabe si están cargados.
+     */
+    protected $hidden = ['shopify_access_token', 'shopify_webhook_secret'];
+
+    protected $appends = ['is_open', 'has_access_token', 'has_webhook_secret'];
+
+    public function getHasAccessTokenAttribute(): bool
+    {
+        return trim((string) $this->getAttributeFromArray('shopify_access_token')) !== '';
+    }
+
+    public function getHasWebhookSecretAttribute(): bool
+    {
+        return trim((string) $this->getAttributeFromArray('shopify_webhook_secret')) !== '';
+    }
 
     /**
      * Determina si la tienda está abierta basado en el horario automático 
