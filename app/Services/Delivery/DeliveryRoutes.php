@@ -63,7 +63,7 @@ class DeliveryRoutes
         if (!$order->agency_id || !$this->inAgencyStage($order)) {
             return null;
         }
-        $warehouse = $order->warehouse_id ? Warehouse::find($order->warehouse_id) : null;
+        $warehouse = $this->originWarehouse($order);
         $resolved = $order->location_status === MapsLinkResolver::OK && $order->location_lat !== null;
         $inputs = [
             'agency_id' => (int) $order->agency_id,
@@ -92,8 +92,14 @@ class DeliveryRoutes
             }
 
             $used = $active && $active->trips()->whereNull('voided_at')->exists();
-            if ($active && !$used && !$active->hasDistance()) {
-                // Todavía sin calcular y sin carreras: se completa la misma ruta
+            // La carrera sigue siendo la misma si va con la misma agencia y el cliente no se movió (una ubicación que
+            // antes no se sabía no cuenta como mudanza)
+            $moved = $active && $active->destination_lat !== null && $inputs['destination_lat'] !== null
+                && !self::samePoint($active->destination_lat, $active->destination_lng, $inputs['destination_lat'], $inputs['destination_lng']);
+            $sameTrip = !$used || ((int) $active->agency_id === $inputs['agency_id'] && !$moved);
+            if ($active && !$active->hasDistance() && $sameTrip) {
+                // Todavía sin calcular: se completa la misma ruta. También la que ya tiene su carrera, por ejemplo cuando
+                // se cargan las coordenadas del almacén: si no, la carrera se quedaría con una ruta sin costo (§29)
                 $active->fill($inputs + ['calculation_status' => $status, 'error' => null])->save();
                 return [$active, $status === OrderDeliveryRoute::PENDING];
             }
@@ -151,16 +157,44 @@ class DeliveryRoutes
         $this->tariffs->price($route, $tariff);
     }
 
-    /** Si cambiaron las coordenadas de un almacén, las órdenes en curso que salen de él se recalculan (§16, §39). */
+    /**
+     * Si cambiaron las coordenadas de un almacén, las órdenes en curso que salen de él se recalculan (§16, §39). Las ya
+     * cerradas, solo si su ruta todavía no tiene distancia: es su primer cálculo, que el cierre de la semana necesita
+     * (§29), y lo ya calculado no cambia.
+     */
     public function refreshForWarehouse(Warehouse $warehouse, ?int $userId): int
     {
         $final = Status::whereIn('description', [OrderStatus::ENTREGADO, OrderStatus::CANCELADO, OrderStatus::RECHAZADO])->pluck('id');
-        $orders = Order::where('warehouse_id', $warehouse->id)->whereNotIn('status_id', $final)
-            ->whereHas('deliveryRoutes', fn ($q) => $q->where('is_active', true))->get();
+        $orders = Order::where(function ($q) use ($warehouse) {
+            $q->whereHas('deliveryRoutes', fn ($r) => $r->where('is_active', true)->where('warehouse_id', $warehouse->id));
+            if ($warehouse->user_id) {
+                // Las de su agencia que se quedaron sin almacén
+                $q->orWhere(fn ($o) => $o->where('agency_id', $warehouse->user_id)
+                    ->whereHas('deliveryRoutes', fn ($r) => $r->where('is_active', true)->where('calculation_status', OrderDeliveryRoute::NO_WAREHOUSE)));
+            }
+        })->where(fn ($q) => $q->whereNotIn('status_id', $final)
+            ->orWhereHas('deliveryRoutes', fn ($r) => $r->where('is_active', true)->whereNull('distance_meters')))
+            ->get();
         foreach ($orders as $order) {
             $this->refresh($order, 'almacen_coordenadas', $userId);
         }
         return $orders->count();
+    }
+
+    /**
+     * El almacén de donde sale la carrera (§5): el de la orden si es de su agencia. Si no, el de la agencia, como hace el
+     * stock (Order::resolveStockWarehouseId): las órdenes asignadas por ciudad o desde Shopify antes del módulo no lo
+     * guardaron. No cambia la orden.
+     */
+    private function originWarehouse(Order $order): ?Warehouse
+    {
+        $own = $order->warehouse_id ? Warehouse::find($order->warehouse_id) : null;
+        if ($own && (int) $own->user_id === (int) $order->agency_id) {
+            return $own;
+        }
+        $agencyWarehouse = self::warehouseFor($order);
+
+        return $agencyWarehouse ? Warehouse::find($agencyWarehouse) : $own;
     }
 
     private static function sameInputs(OrderDeliveryRoute $r, array $i): bool

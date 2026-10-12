@@ -84,7 +84,7 @@ class DeliveryTariffController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'Almacén guardado.' . ($recalculated ? " Se recalculan {$recalculated} órdenes en curso." : ''),
+            'message' => 'Almacén guardado.' . ($recalculated ? ' Se calculan las rutas de ' . ($recalculated === 1 ? '1 orden.' : "{$recalculated} órdenes.") : ''),
             'note' => $note,
             'warehouse' => $this->presentWarehouse($warehouse->fresh(), City::pluck('name', 'id')),
         ]);
