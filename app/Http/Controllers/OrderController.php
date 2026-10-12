@@ -1478,18 +1478,14 @@ class OrderController extends Controller
         $order->agent_id = $agent->id;
         $order->save();
 
-        // Regenerar comisión si la orden ya estaba en estado de comisión
-        if ($order->status && in_array($order->status->description, ['Entregado', 'Confirmado'])) {
+        // Regenerar la comisión si la orden ya estaba entregada. Solo al entregar: Fran, Módulo 4, R9 (2026-10-12):
+        // "solamente y exclusivamente… cuando la orden esté entregada, no cuando esté confirmada"
+        if ($order->status && $order->status->description === 'Entregado') {
             \App\Models\Earning::where('order_id', $order->id)
                 ->where('role_type', 'vendedor')
                 ->delete();
 
-            $commissionService = app(\App\Services\CommissionService::class);
-            if ($order->status->description === 'Entregado') {
-                $commissionService->generateForDeliveredOrder($order);
-            } else {
-                $commissionService->generateForConfirmedOrder($order);
-            }
+            app(\App\Services\CommissionService::class)->generateForDeliveredOrder($order);
         }
 
         // 🔗 Sync with client to ensure consistency in CRM

@@ -93,11 +93,11 @@ describe('Semana y aviso (§20 a §22)', function () {
         expect((new AgencyWeeklyClosure(['period_start' => '2026-09-28', 'period_end' => '2026-10-04']))->weekLabel())->toBe('28 septiembre – 4 octubre');
     });
 
-    it('por defecto, el miércoles siguiente a las 8:00', function () use ($closure, $at) {
+    it('por defecto, el miércoles siguiente a las 11:00 (Módulo 4, R15)', function () use ($closure, $at) {
         $s = new AgencyClosureSetting();
-        expect($closure()->reminderAt($s)->format('Y-m-d H:i'))->toBe('2026-10-14 08:00');
-        expect($closure()->reminderDue($s, $at('2026-10-14 07:59')))->toBeFalse();
-        expect($closure()->reminderDue($s, $at('2026-10-14 08:00')))->toBeTrue();
+        expect($closure()->reminderAt($s)->format('Y-m-d H:i'))->toBe('2026-10-14 11:00');
+        expect($closure()->reminderDue($s, $at('2026-10-14 10:59')))->toBeFalse();
+        expect($closure()->reminderDue($s, $at('2026-10-14 11:00')))->toBeTrue();
         expect($closure()->reminderDue($s, $at('2026-10-20 12:00')))->toBeTrue();
     });
 

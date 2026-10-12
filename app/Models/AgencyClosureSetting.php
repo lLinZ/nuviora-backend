@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * La configuración del cierre de cada agencia (Módulo 3 de Fran): el día y la hora del aviso, y si está activo (§21); la
  * tolerancia para las diferencias (§30), que solo ve el Admin; y el mapeo de su archivo (§24). Si la agencia no tiene
- * fila, valen los valores por defecto: miércoles a las 8:00, activo y tolerancia 0 (§30: "por ahora no existe un valor
+ * fila, valen los valores por defecto: miércoles a las 11:00 (R15 del Módulo 4; antes, 8:00), activo y tolerancia 0 (§30: "por ahora no existe un valor
  * fijo").
  */
 class AgencyClosureSetting extends Model
@@ -26,7 +26,7 @@ class AgencyClosureSetting extends Model
 
     protected $attributes = [
         'closing_day' => 3,
-        'closing_time' => '08:00:00',
+        'closing_time' => '11:00:00', // Fran, Módulo 4, R15 (2026-10-12): a las 11, todas las agencias tienen el sistema abierto
         'reminder_active' => true,
         'tolerance_amount' => 0,
     ];
