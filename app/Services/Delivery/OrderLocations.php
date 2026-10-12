@@ -6,6 +6,8 @@ use App\Jobs\ResolveOrderLocation;
 use App\Models\AgencyTrip;
 use App\Models\Order;
 use App\Models\OrderLocationHistory;
+use App\Models\Warehouse;
+use Illuminate\Support\Facades\DB;
 
 /**
  * La ubicación del cliente (Módulo 3 de Fran, §7, §17 a §19):
@@ -39,7 +41,7 @@ class OrderLocations
         $short = MapsLinkResolver::isShortLink($order->location);
         $this->apply($order, $history, $short
             ? ['status' => MapsLinkResolver::PENDING, 'lat' => null, 'lng' => null, 'note' => 'Leyendo el enlace…']
-            : $this->resolver->resolve($order->location, false));
+            : $this->resolver->resolve($order->location, false, $this->reference($order)));
         if ($short) {
             ResolveOrderLocation::dispatch($order->id, $history->id);
         }
@@ -50,10 +52,29 @@ class OrderLocations
     /** Resuelve del todo (siguiendo el enlace corto) y guarda el resultado. Lo usa la cola. */
     public function resolveNow(Order $order, ?OrderLocationHistory $history = null): array
     {
-        $result = $this->resolver->resolve($order->location, true);
+        $result = $this->resolver->resolve($order->location, true, $this->reference($order));
         $this->apply($order, $history, $result);
 
         return $result;
+    }
+
+    /**
+     * El punto de referencia para un código plus corto: el almacén de la agencia de la orden o, si no tiene coordenadas
+     * (o la orden todavía no tiene agencia), el de una agencia de su ciudad. Tiene que estar a menos de medio grado.
+     */
+    private function reference(Order $order): ?array
+    {
+        $agencies = array_filter([$order->agency_id]);
+        if ($order->city_id) {
+            $agencies = array_merge($agencies, DB::table('city_agency')->where('city_id', $order->city_id)->where('is_active', true)->pluck('agency_id')->all());
+        }
+        foreach (array_unique($agencies) as $agencyId) {
+            $w = Warehouse::where('user_id', $agencyId)->whereNotNull('latitude')->orderByDesc('is_active')->orderBy('id')->first(['latitude', 'longitude']);
+            if ($w) {
+                return [(float) $w->latitude, (float) $w->longitude];
+            }
+        }
+        return null;
     }
 
     /** Guarda las coordenadas en la orden (sin observers: no es un cambio de la orden) y en el historial. */

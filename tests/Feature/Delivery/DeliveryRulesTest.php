@@ -5,6 +5,7 @@ use App\Models\AgencyTariffRange;
 use App\Services\Delivery\GoogleRoutesClient;
 use App\Services\Delivery\GoogleRoutesException;
 use App\Services\Delivery\MapsLinkResolver;
+use App\Services\Delivery\PlusCode;
 use App\Services\Delivery\TariffBook;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -126,6 +127,54 @@ describe('Links de Google Maps (§7)', function () {
     it('si el enlace corto no abre, queda pendiente (se reintenta)', function () use ($resolver) {
         Http::fake(['maps.app.goo.gl/*' => Http::response('', 404)]);
         expect($resolver()->resolve('https://maps.app.goo.gl/nada')['status'])->toBe('pending');
+    });
+
+    // Producción, 2026-10-12: 46 de las 110 ubicaciones sin leer eran lugares sin nombre, que Google llama por su código
+    // plus. El punto de PYP (10.4841938, -66.8812251) es 772MF4M9+MG; el corto, F4M9+MG.
+    it('un lugar que Google llama por su código plus corto se lee con el almacén de referencia', function () use ($resolver) {
+        $url = 'https://www.google.com/maps/place/F4M9%2BMG+Caracas,+Distrito+Capital/data=!4m2!3m1!1s0x0:0x0?entry=tts';
+        $r = $resolver()->resolve($url, true, [10.48, -66.90]);
+        expect($r['status'])->toBe('ok')
+            ->and(abs($r['lat'] - 10.4841938))->toBeLessThan(0.0002)
+            ->and(abs($r['lng'] + 66.8812251))->toBeLessThan(0.0002);
+    });
+
+    it('el enlace corto que lleva a un código plus también', function () use ($resolver) {
+        Http::fake(['maps.app.goo.gl/*' => Http::response('', 302, ['Location' => 'https://www.google.com/maps/place/F4M9%2BMG+Caracas/data=!4m2?g_st=iw'])]);
+        expect($resolver()->resolve('https://maps.app.goo.gl/plus', true, [10.48, -66.90])['status'])->toBe('ok');
+    });
+
+    it('sin almacén de referencia, el código corto queda pendiente (no se adivina)', function () use ($resolver) {
+        $r = $resolver()->resolve('https://www.google.com/maps/place/F4M9%2BMG+Caracas/data=!4m2');
+        expect($r['status'])->toBe('pending')->and($r['note'])->toContain('Código plus');
+    });
+
+    it('el código plus completo escrito a mano no necesita referencia', function () use ($resolver) {
+        expect($resolver()->resolve('772MF4M9+MG')['status'])->toBe('ok');
+    });
+
+    it('un lugar con nombre sigue pendiente: no se inventa la ubicación', function () use ($resolver) {
+        expect($resolver()->resolve('https://www.google.com/maps/place/Residencias+Los+Samanes,+Caracas/data=!4m2', true, [10.48, -66.90])['status'])->toBe('pending');
+    });
+});
+
+describe('Códigos plus (Open Location Code)', function () {
+    it('decodifica el ejemplo de la especificación (8FVC9G8F+6X, Zúrich)', function () {
+        expect(PlusCode::decode('8FVC9G8F+6X'))->toBe([47.3655625, 8.5249375]);
+    });
+
+    it('completa el corto con el punto más cercano (recoverNearest)', function () {
+        expect(PlusCode::recoverNearest('9G8F+6X', 47.4, 8.6))->toBe([47.3655625, 8.5249375]);
+    });
+
+    it('con una referencia de otra ciudad (a más de medio grado) caería en otro sitio: por eso es la de la agencia de la ciudad', function () {
+        expect(PlusCode::recoverNearest('F4M9+MG', 10.16, -67.97)[1])->toBeLessThan(-67.5);
+    });
+
+    it('no confunde otras cosas del link con un código plus', function () {
+        expect(PlusCode::find('g_ep=EgoyMDI2MTAwNi4wIPu8ASoASAFQAw'))->toBeNull()
+            ->and(PlusCode::find('Torre 7, piso 3+ Caracas'))->toBeNull()
+            ->and(PlusCode::find('ubicación: F4M9+MG Caracas'))->toBe('F4M9+MG');
     });
 });
 

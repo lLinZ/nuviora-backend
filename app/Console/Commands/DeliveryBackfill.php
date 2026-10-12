@@ -6,6 +6,7 @@ use App\Models\AgencyTrip;
 use App\Models\Order;
 use App\Models\Status;
 use App\Services\Delivery\DeliveryRoutes;
+use App\Services\Delivery\MapsLinkResolver;
 use App\Services\Delivery\OrderLocations;
 use Illuminate\Console\Command;
 
@@ -15,7 +16,7 @@ use Illuminate\Console\Command;
  */
 class DeliveryBackfill extends Command
 {
-    protected $signature = 'delivery:backfill {--days=14 : órdenes con cambios en los últimos N días} {--routes : también calcular las rutas} {--limit=0}';
+    protected $signature = 'delivery:backfill {--days=14 : órdenes con cambios en los últimos N días} {--routes : también calcular las rutas} {--relocate : volver a leer las ubicaciones que quedaron pendientes} {--limit=0}';
 
     protected $description = 'Resuelve las ubicaciones y calcula las rutas de las órdenes en curso con agencia (Módulo 3)';
 
@@ -34,7 +35,8 @@ class DeliveryBackfill extends Command
 
         $counts = ['ubicaciones' => 0, 'rutas' => 0, 'carreras' => 0];
         foreach ($query->get() as $order) {
-            if (trim((string) $order->location) !== '' && $order->location_status === null) {
+            $pending = $this->option('relocate') && $order->location_status === MapsLinkResolver::PENDING;
+            if (trim((string) $order->location) !== '' && ($order->location_status === null || $pending)) {
                 $locations->resolveNow($order);
                 $counts['ubicaciones']++;
             }

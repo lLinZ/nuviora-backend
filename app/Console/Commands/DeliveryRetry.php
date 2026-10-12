@@ -9,6 +9,7 @@ use App\Models\OrderDeliveryRoute;
 use App\Models\Status;
 use App\Services\Delivery\DeliveryRoutes;
 use App\Services\Delivery\MapsLinkResolver;
+use App\Services\Delivery\PlusCode;
 use Illuminate\Console\Command;
 
 /**
@@ -35,7 +36,8 @@ class DeliveryRetry extends Command
         $stage = Status::whereIn('description', DeliveryRoutes::AGENCY_STAGE)->pluck('id');
         $orders = Order::where('location_status', MapsLinkResolver::PENDING)->whereIn('status_id', $stage)
             ->where('updated_at', '>=', now()->subDays(7))->get(['id', 'location']);
-        $short = $orders->filter(fn ($o) => MapsLinkResolver::isShortLink($o->location));
+        // También los códigos plus que esperaban el almacén de referencia
+        $short = $orders->filter(fn ($o) => MapsLinkResolver::isShortLink($o->location) || PlusCode::find($o->location));
         foreach ($short as $order) {
             ResolveOrderLocation::dispatch($order->id);
         }

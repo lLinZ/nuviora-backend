@@ -30,9 +30,10 @@ class MapsLinkResolver
     }
 
     /**
+     * $near: el punto de referencia para un código plus corto (el almacén de la agencia de esa ciudad).
      * @return array{status: string, lat: ?float, lng: ?float, note: ?string}
      */
-    public function resolve(?string $text, bool $followShortLinks = true): array
+    public function resolve(?string $text, bool $followShortLinks = true, ?array $near = null): array
     {
         $text = trim((string) $text);
         if ($text === '') {
@@ -43,7 +44,7 @@ class MapsLinkResolver
             return $this->checked((float) $m[1], (float) $m[2], null);
         }
         if (!preg_match('~https?://\S+~i', $text, $m)) {
-            return $this->result(self::INVALID, null, null, 'No es un link de Google Maps.');
+            return $this->plusCode($text, $near) ?? $this->result(self::INVALID, null, null, 'No es un link de Google Maps.');
         }
         $url = rtrim($m[0], '.,;)');
 
@@ -63,10 +64,47 @@ class MapsLinkResolver
         }
         $coords = self::coordinatesIn($url);
         if ($coords === null) {
-            return $this->result(self::PENDING, null, null, 'El link es de un lugar o una búsqueda, sin coordenadas: pide al cliente que comparta su ubicación.');
+            // Un lugar sin nombre: Google lo llama por su código plus ("8C6F+QX Caracas")
+            return $this->plusCode(self::placeText($url), $near)
+                ?? $this->result(self::PENDING, null, null, 'El link es de un lugar o una búsqueda, sin coordenadas: pide al cliente que comparta su ubicación.');
         }
 
         return $this->checked($coords[0], $coords[1], $coords[2]);
+    }
+
+    /**
+     * Un código plus de Google (2026-10-12: así llegaron 46 de las 110 ubicaciones sin leer en producción). El completo
+     * se lee solo; el corto necesita un punto a menos de medio grado, el almacén de la agencia de esa ciudad.
+     */
+    private function plusCode(string $text, ?array $near): ?array
+    {
+        $code = PlusCode::find($text);
+        if ($code === null) {
+            return null;
+        }
+        if (PlusCode::isFull($code)) {
+            $point = PlusCode::decode($code);
+        } elseif ($near) {
+            $point = PlusCode::recoverNearest($code, (float) $near[0], (float) $near[1]);
+        } else {
+            return $this->result(self::PENDING, null, null, 'Código plus sin un almacén de referencia: se lee cuando el almacén de la agencia de la ciudad tenga sus coordenadas.');
+        }
+
+        return $point ? $this->checked($point[0], $point[1], 'Código plus de Google.') : null;
+    }
+
+    /** El nombre del lugar o la búsqueda de un link de Maps (/maps/place/<nombre>/, ?q=<nombre>), ya decodificado. */
+    private static function placeText(string $url): string
+    {
+        $parts = [];
+        if (preg_match('~/maps/(?:place|search)/([^/?#]+)~', $url, $m)) {
+            $parts[] = urldecode($m[1]);
+        }
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        if (is_string($query['q'] ?? null)) {
+            $parts[] = $query['q'];
+        }
+        return implode(' ', $parts);
     }
 
     /**
