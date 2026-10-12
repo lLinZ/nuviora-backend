@@ -210,6 +210,7 @@ class DeliveryTariffController extends Controller
                 'reason' => $r->reason,
                 'requires_review' => $r->requires_review,
                 'review_note' => $r->review_note,
+                'distance_approved_at' => $r->distance_approved_at?->toDateTimeString(),
                 'trips' => $r->trips_count,
                 'maps_url' => $r->maps_url,
                 'calculated_at' => $r->calculated_at?->toDateTimeString(),
@@ -222,6 +223,23 @@ class DeliveryTariffController extends Controller
             'labels' => OrderDeliveryRoute::STATUS_LABEL,
             'google_configured' => app(\App\Services\Delivery\GoogleRoutesClient::class)->configured(),
         ]);
+    }
+
+    /**
+     * Fran (2026-10-12): una carrera de más km que el límite de su agencia queda por revisar. Si la distancia es real (un
+     * cliente lejos de verdad), el Admin la aprueba y su costo cuenta en el cierre; si no, se corrige la ubicación.
+     */
+    public function approveDistance(OrderDeliveryRoute $deliveryRoute)
+    {
+        $route = $deliveryRoute;
+        if ($route->calculation_status !== OrderDeliveryRoute::DISTANCE_REVIEW) {
+            return response()->json(['status' => false, 'message' => 'Esta carrera no está esperando revisión de distancia.'], 422);
+        }
+        $route->update(['calculation_status' => OrderDeliveryRoute::CALCULATED, 'distance_approved_by' => Auth::id(), 'distance_approved_at' => now()]);
+        DeliveryAuditLog::record('route_distance_approved', 'order_delivery_route', $route->id,
+            ['calculation_status' => OrderDeliveryRoute::DISTANCE_REVIEW], ['calculation_status' => OrderDeliveryRoute::CALCULATED, 'distance_km' => $route->distance_km, 'expected_cost' => $route->expected_cost], Auth::id());
+
+        return response()->json(['status' => true, 'message' => 'Distancia aprobada: la carrera cuenta con $' . number_format((float) $route->expected_cost, 2) . '.']);
     }
 
     /** §42: reintento manual. Una ruta con error se vuelve a pedir; las demás se ponen al día con los datos de hoy. */

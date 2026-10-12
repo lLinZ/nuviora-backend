@@ -19,6 +19,7 @@ class OrderDeliveryRoute extends Model
     public const LOCATION_PENDING = 'location_pending';     // la ubicación del cliente no se pudo leer todavía
     public const NO_TARIFF = 'no_tariff';                   // hay distancia, pero no hay tarifario vigente
     public const OUT_OF_RANGE = 'out_of_range';             // la distancia pasa el último rango
+    public const DISTANCE_REVIEW = 'distance_review';       // pasa el límite de km de su agencia: el cierre no la cuenta
 
     public const STATUS_LABEL = [
         self::PENDING => 'Calculando',
@@ -29,13 +30,14 @@ class OrderDeliveryRoute extends Model
         self::LOCATION_PENDING => 'Ubicación sin resolver',
         self::NO_TARIFF => 'Sin tarifario',
         self::OUT_OF_RANGE => 'Fuera de los rangos',
+        self::DISTANCE_REVIEW => 'Distancia por revisar',
     ];
 
     protected $fillable = [
         'order_id', 'agency_id', 'warehouse_id', 'city_id', 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng',
         'maps_url', 'distance_meters', 'distance_km', 'tariff_date', 'agency_tariff_id', 'agency_tariff_range_id',
         'expected_cost', 'calculation_status', 'error', 'attempts', 'last_attempt_at', 'calculated_at', 'is_active',
-        'superseded_at', 'reason', 'requires_review', 'review_note', 'created_by',
+        'superseded_at', 'reason', 'requires_review', 'review_note', 'distance_approved_by', 'distance_approved_at', 'created_by',
     ];
 
     protected $casts = [
@@ -49,6 +51,7 @@ class OrderDeliveryRoute extends Model
         'last_attempt_at' => 'datetime',
         'calculated_at' => 'datetime',
         'superseded_at' => 'datetime',
+        'distance_approved_at' => 'datetime',
         'is_active' => 'boolean',
         'requires_review' => 'boolean',
     ];

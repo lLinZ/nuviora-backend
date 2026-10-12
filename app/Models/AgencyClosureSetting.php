@@ -14,13 +14,14 @@ class AgencyClosureSetting extends Model
 {
     public const DAYS = [1 => 'lunes', 2 => 'martes', 3 => 'miércoles', 4 => 'jueves', 5 => 'viernes', 6 => 'sábado', 7 => 'domingo'];
 
-    protected $fillable = ['agency_id', 'closing_day', 'closing_time', 'reminder_active', 'tolerance_amount', 'tolerance_percent', 'file_mapping', 'updated_by'];
+    protected $fillable = ['agency_id', 'closing_day', 'closing_time', 'reminder_active', 'tolerance_amount', 'tolerance_percent', 'review_distance_km', 'file_mapping', 'updated_by'];
 
     protected $casts = [
         'closing_day' => 'integer',
         'reminder_active' => 'boolean',
         'tolerance_amount' => 'float',
         'tolerance_percent' => 'float',
+        'review_distance_km' => 'float',
         'file_mapping' => 'array',
     ];
 
@@ -29,6 +30,7 @@ class AgencyClosureSetting extends Model
         'closing_time' => '11:00:00', // Fran, Módulo 4, R15 (2026-10-12): a las 11, todas las agencias tienen el sistema abierto
         'reminder_active' => true,
         'tolerance_amount' => 0,
+        'review_distance_km' => 25, // Fran, 2026-10-12: "el límite de cada agencia a los pedidos que son más de 25 km"
     ];
 
     public function agency()

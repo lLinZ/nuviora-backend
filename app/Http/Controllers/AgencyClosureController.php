@@ -273,6 +273,7 @@ class AgencyClosureController extends Controller
             'reminder_active' => 'required|boolean',
             'tolerance_amount' => 'required|numeric|min:0|max:1000',
             'tolerance_percent' => 'nullable|numeric|min:0|max:100',
+            'review_distance_km' => 'nullable|numeric|min:1|max:1000',
             'mapping' => 'nullable|array',
             'mapping.header_row' => 'required_with:mapping|integer|min:0|max:100',
             'mapping.columns' => 'required_with:mapping|array',
@@ -286,6 +287,7 @@ class AgencyClosureController extends Controller
             'reminder_active' => $data['reminder_active'],
             'tolerance_amount' => round((float) $data['tolerance_amount'], 2),
             'tolerance_percent' => isset($data['tolerance_percent']) ? round((float) $data['tolerance_percent'], 2) : null,
+            'review_distance_km' => isset($data['review_distance_km']) ? round((float) $data['review_distance_km'], 2) : $setting->review_distance_km,
             'updated_by' => Auth::id(),
         ]);
         if (array_key_exists('mapping', $data)) {
@@ -405,6 +407,7 @@ class AgencyClosureController extends Controller
             'reminder_active' => (bool) $s->reminder_active,
             'tolerance_amount' => (float) $s->tolerance_amount,
             'tolerance_percent' => $s->tolerance_percent !== null ? (float) $s->tolerance_percent : null,
+            'review_distance_km' => (float) $s->review_distance_km,
             'mapping' => $s->file_mapping,
         ];
     }

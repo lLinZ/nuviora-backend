@@ -590,6 +590,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/tariffs', [\App\Http\Controllers\DeliveryTariffController::class, 'storeTariff']);
         Route::get('/routes', [\App\Http\Controllers\DeliveryTariffController::class, 'routes']);
         Route::post('/routes/{deliveryRoute}/retry', [\App\Http\Controllers\DeliveryTariffController::class, 'retryRoute']);
+        Route::post('/routes/{deliveryRoute}/approve-distance', [\App\Http\Controllers\DeliveryTariffController::class, 'approveDistance']);
 
         // Cierres semanales de las agencias (§20 a §37): revisar, resolver, aprobar y pagar
         Route::get('/closures', [\App\Http\Controllers\AgencyClosureController::class, 'index']);

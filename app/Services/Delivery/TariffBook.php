@@ -3,6 +3,7 @@
 namespace App\Services\Delivery;
 
 use App\Models\AgencyClosureRow;
+use App\Models\AgencyClosureSetting;
 use App\Models\AgencyTariff;
 use App\Models\DeliveryAuditLog;
 use App\Models\OrderDeliveryRoute;
@@ -171,17 +172,35 @@ class TariffBook
         return $routes->count();
     }
 
-    /** Aplica una versión a una ruta que ya tiene distancia. */
+    /**
+     * Aplica una versión a una ruta que ya tiene distancia. Si pasa el límite de km de su agencia (Fran, 2026-10-12: 25 km
+     * por defecto), queda "Distancia por revisar": guarda su costo, pero el cierre no lo cuenta hasta que el Admin apruebe
+     * la distancia (casi siempre es una ubicación equivocada: carreras de $80).
+     */
     public function price(OrderDeliveryRoute $route, ?AgencyTariff $tariff): void
     {
         $quote = $tariff ? $this->quote($tariff, (int) $route->distance_meters) : null;
+        $status = !$tariff ? OrderDeliveryRoute::NO_TARIFF : ($quote ? OrderDeliveryRoute::CALCULATED : OrderDeliveryRoute::OUT_OF_RANGE);
+        if ($status === OrderDeliveryRoute::CALCULATED && $route->distance_approved_at === null
+            && (float) $route->distance_km > $this->reviewLimitKm((int) $route->agency_id)) {
+            $status = OrderDeliveryRoute::DISTANCE_REVIEW;
+        }
         $route->fill([
             'agency_tariff_id' => $tariff?->id,
             'agency_tariff_range_id' => $quote ? $quote['range']->id : null,
             'expected_cost' => $quote ? $quote['price'] : null,
-            'calculation_status' => !$tariff ? OrderDeliveryRoute::NO_TARIFF : ($quote ? OrderDeliveryRoute::CALCULATED : OrderDeliveryRoute::OUT_OF_RANGE),
+            'calculation_status' => $status,
             'calculated_at' => now(),
             'error' => null,
         ])->save();
+    }
+
+    /** @var array<int, float> */
+    private array $limits = [];
+
+    /** Los km a partir de los cuales una carrera de la agencia se revisa (su configuración del cierre). */
+    public function reviewLimitKm(int $agencyId): float
+    {
+        return $this->limits[$agencyId] ??= (float) AgencyClosureSetting::for($agencyId)->review_distance_km;
     }
 }
