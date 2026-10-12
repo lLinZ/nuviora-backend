@@ -51,6 +51,10 @@ try {
     Schedule::command('delivery:closures')->hourly()->withoutOverlapping();
     Schedule::command('queue:work --queue=closures --stop-when-empty --tries=1 --timeout=420 --max-time=500')
         ->everyMinute()->withoutOverlapping(15)->runInBackground();
+    // Finanzas (Módulo 4 de Fran): la economía de cada orden se recalcula al minuto de cualquier cambio, y cada noche
+    // se marcan todas por si algún cambio no pasó por los observers
+    Schedule::command('finance:rebuild')->everyMinute()->withoutOverlapping(10)->runInBackground();
+    Schedule::command('finance:rebuild --mark-all')->dailyAt('03:30');
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready
