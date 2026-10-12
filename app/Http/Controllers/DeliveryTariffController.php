@@ -118,6 +118,7 @@ class DeliveryTariffController extends Controller
                     'versions' => $versions->map(fn (AgencyTariff $t) => [
                         'id' => $t->id,
                         'version' => $t->version,
+                        'is_active' => $t->is_active,
                         'valid_from' => $t->valid_from->toDateString(),
                         'valid_to' => $t->valid_to?->toDateString(),
                         'notes' => $t->notes,
@@ -133,7 +134,7 @@ class DeliveryTariffController extends Controller
         ]);
     }
 
-    /** §11 a §13: una versión nueva (la anterior se cierra el día antes). */
+    /** §11 a §13: una versión nueva (la anterior se cierra el día antes), o la corrección de la última, con su misma fecha. */
     public function storeTariff(Request $request, TariffBook $book)
     {
         $data = $request->validate([
@@ -157,7 +158,14 @@ class DeliveryTariffController extends Controller
             return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['status' => true, 'message' => "Tarifario versión {$tariff->version} guardado.", 'tariff_id' => $tariff->id]);
+        $message = "Tarifario versión {$tariff->version} guardado.";
+        if ($book->corrected) {
+            $n = $book->corrected['routes'];
+            $message = "Versión {$tariff->version} guardada: corrige la versión {$book->corrected['version']}"
+                . ($n ? ($n === 1 ? ' y se recalculó 1 carrera.' : " y se recalcularon {$n} carreras.") : '.');
+        }
+
+        return response()->json(['status' => true, 'message' => $message, 'tariff_id' => $tariff->id]);
     }
 
     /** §15 y §42: las rutas calculadas, con su estado. Por defecto, las activas. */

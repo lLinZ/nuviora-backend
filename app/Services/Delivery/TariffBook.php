@@ -2,6 +2,7 @@
 
 namespace App\Services\Delivery;
 
+use App\Models\AgencyClosureRow;
 use App\Models\AgencyTariff;
 use App\Models\DeliveryAuditLog;
 use App\Models\OrderDeliveryRoute;
@@ -66,19 +67,41 @@ class TariffBook
             ->with('ranges')->first();
     }
 
+    /** La versión que corrigió la última llamada a createVersion: ['version' => n, 'routes' => carreras recalculadas]. */
+    public ?array $corrected = null;
+
     /**
      * Crea una versión nueva vigente desde $validFrom y cierra la anterior el día antes (§13). Las rutas que esperaban
      * tarifario en esas fechas se cotizan con la distancia que ya tienen, sin volver a llamar a Google (§43).
+     *
+     * Si empieza el mismo día que la última, es una corrección (Fran, 2026-10-12: "me equivoqué colocando el tarifario
+     * de Dalgo y ahora no me deja actualizarlo"): la nueva la reemplaza, la equivocada queda anulada y sus carreras se
+     * recalculan. No es un cambio de precio (§13: ese sí es una versión nueva, desde otro día), así que solo se puede
+     * mientras ningún cierre de la agencia haya usado esas carreras.
      */
     public function createVersion(int $agencyId, int $cityId, string $validFrom, array $ranges, ?string $notes, ?int $userId): AgencyTariff
     {
-        $tariff = DB::transaction(function () use ($agencyId, $cityId, $validFrom, $ranges, $notes, $userId) {
-            $last = AgencyTariff::where('agency_id', $agencyId)->where('city_id', $cityId)->lockForUpdate()
+        $this->corrected = null;
+        [$tariff, $replaced] = DB::transaction(function () use ($agencyId, $cityId, $validFrom, $ranges, $notes, $userId) {
+            $last = AgencyTariff::where('agency_id', $agencyId)->where('city_id', $cityId)->where('is_active', true)->lockForUpdate()
                 ->orderByDesc('valid_from')->orderByDesc('version')->first();
-            if ($last && $validFrom <= $last->valid_from->toDateString()) {
-                throw new \InvalidArgumentException('La versión nueva tiene que empezar después del ' . $last->valid_from->format('d/m/Y') . ', cuando empezó la anterior.');
+            $replaced = null;
+            if ($last && $validFrom === $last->valid_from->toDateString()) {
+                $closed = AgencyClosureRow::where('is_current', true)
+                    ->whereIn('delivery_route_id', OrderDeliveryRoute::where('agency_tariff_id', $last->id)->select('id'))->exists();
+                if ($closed) {
+                    throw new \InvalidArgumentException("La versión {$last->version} ya se usó en un cierre de la agencia y no se puede corregir. Carga una versión nueva que empiece otro día.");
+                }
+                $replaced = $last;
+                $last = null;
+            } elseif ($last && $validFrom < $last->valid_from->toDateString()) {
+                throw new \InvalidArgumentException('La versión nueva tiene que empezar después del ' . $last->valid_from->format('d/m/Y') . ', cuando empezó la anterior. Para corregir esa versión, guarda la nueva con la misma fecha.');
             }
             $version = (int) AgencyTariff::where('agency_id', $agencyId)->where('city_id', $cityId)->max('version') + 1;
+            if ($replaced) {
+                $replaced->update(['is_active' => false]);
+                DeliveryAuditLog::record('tariff_corrected', 'agency_tariff', $replaced->id, self::snapshot($replaced->load('ranges')), ['is_active' => false, 'replaced_by_version' => $version], $userId);
+            }
             if ($last && ($last->valid_to === null || $last->valid_to->toDateString() >= $validFrom)) {
                 $before = ['valid_to' => $last->valid_to?->toDateString()];
                 $last->valid_to = Carbon::parse($validFrom)->subDay()->toDateString();
@@ -87,7 +110,7 @@ class TariffBook
             }
             $tariff = AgencyTariff::create([
                 'agency_id' => $agencyId, 'city_id' => $cityId, 'version' => $version, 'valid_from' => $validFrom,
-                'notes' => $notes, 'created_by' => $userId,
+                'valid_to' => $replaced?->valid_to?->toDateString(), 'notes' => $notes, 'created_by' => $userId,
             ]);
             foreach (array_values($ranges) as $i => $r) {
                 $tariff->ranges()->create([
@@ -100,10 +123,18 @@ class TariffBook
             }
             DeliveryAuditLog::record('tariff_created', 'agency_tariff', $tariff->id, null, self::snapshot($tariff->load('ranges')), $userId);
 
-            return $tariff;
+            return [$tariff, $replaced];
         });
 
-        $this->quotePending($tariff->load('ranges'));
+        $tariff->load('ranges');
+        if ($replaced) {
+            $routes = OrderDeliveryRoute::where('agency_tariff_id', $replaced->id)->get();
+            foreach ($routes as $route) {
+                $this->price($route, $tariff);
+            }
+            $this->corrected = ['version' => $replaced->version, 'routes' => $routes->count()];
+        }
+        $this->quotePending($tariff);
 
         return $tariff;
     }
