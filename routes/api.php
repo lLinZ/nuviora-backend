@@ -373,6 +373,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::put('/orders/{order}/change', [OrderController::class, 'updateChange'])->middleware('order.access');
     Route::get('/order/{order}/products', [OrderController::class, 'getOrderProducts']);
     Route::put('/orders/{order}/location', [OrderController::class, 'addLocation'])->middleware('order.access');
+    Route::put('/orders/{order}/courier', [OrderController::class, 'updateCourier'])->middleware('order.access');
     // Bancos: cualquiera los lista (vueltos/pagos); solo supervisión los edita
     Route::apiResource('banks', BankController::class)->only(['index', 'show']);
     Route::apiResource('banks', BankController::class)->except(['index', 'show'])->middleware('role:Admin,Gerente,Master');

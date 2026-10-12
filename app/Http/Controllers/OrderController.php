@@ -326,6 +326,12 @@ class OrderController extends Controller
                 return response()->json(['status' => false, 'message' => $missing], 422);
             }
 
+            // Fran (2026-10-12): tampoco sin un link de Maps válido ni, en una encomienda, sin los datos de quien la recibe
+            if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
+                && (int) $order->status_id !== (int) $statusAsignarAgencia->id && ($problem = self::locationProblem($order))) {
+                return response()->json(['status' => false, 'message' => $problem], 422);
+            }
+
             // 🚚 Reparto entre las agencias de la ciudad (tareas 3c y 6): al pasar a "Asignar a agencia",
             // si nadie eligió la agencia a mano, se elige por % y cupo entre las que tienen stock.
             // Si todas las que tienen stock están llenas, no espera: se elige en partes iguales (Fran, 2026-09-30 y 2026-10-02).
@@ -1075,7 +1081,21 @@ class OrderController extends Controller
         try {
             if ($user->role?->description == 'Vendedor' || $user->role?->description == 'Gerente' || $user->role?->description == 'Admin') {
                 $oldLocation = $new_order->location;
-                
+
+                // Fran (audio del 2026-10-12, 10:33): en el campo de Maps tiene que ir un link, no los datos del cliente
+                // ni una dirección escrita. Se acepta un link de Google Maps, unas coordenadas o un código plus (sin abrir
+                // el enlace: eso lo hace después la cola). En una encomienda va el link de la oficina de donde sale.
+                if (!empty($request->location) && trim((string) $request->location) !== trim((string) $oldLocation)) {
+                    $check = app(\App\Services\Delivery\MapsLinkResolver::class)->resolve((string) $request->location, false);
+                    if ($check['status'] === \App\Services\Delivery\MapsLinkResolver::INVALID) {
+                        $message = $check['note'] === 'No es un link de Google Maps.'
+                            ? 'Eso no es un link de Google Maps. Pega el link de la ubicación que te mandó el cliente'
+                                . ($new_order->courier_shipment ? ' (en una encomienda, el de la oficina de donde sale).' : '.')
+                            : $check['note'] . ' Revisa el link.';
+                        return response()->json(['status' => false, 'message' => $message], 422);
+                    }
+                }
+
                 // Solo actualizar si viene un valor real, para evitar borrados accidentales
                 if (!empty($request->location)) {
                     $new_order->location = $request->location;
@@ -1101,6 +1121,66 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'msg' => $th->getMessage()], 400);
         }
     }
+    /**
+     * Envío por agencia de encomiendas (Fran, audios del 2026-10-12, 10:14 y 10:18): el check "Envío por agencia de
+     * encomiendas (MRW, Tealca, Zoom…)" y los datos que pide la empresa de encomiendas, "cédula, nombre, número de
+     * teléfono". El link de Maps de la orden pasa a ser el de la oficina de donde sale la encomienda.
+     */
+    public function updateCourier(Request $request, Order $order)
+    {
+        if ($order->status && $order->status->description === 'Entregado' && Auth::user()->role?->description !== 'Admin') {
+            return response()->json(['status' => false, 'message' => 'No se puede modificar una orden entregada.'], 403);
+        }
+        if (!in_array(Auth::user()->role?->description, ['Vendedor', 'Gerente', 'Admin'], true)) {
+            return response()->json(['status' => false], 403);
+        }
+        $data = $request->validate([
+            'courier_shipment' => 'required|boolean',
+            'courier_recipient_name' => 'nullable|required_if:courier_shipment,true,1|string|max:150',
+            'courier_recipient_id_number' => ['nullable', 'required_if:courier_shipment,true,1', 'string', 'max:30', 'regex:/^[VvEeJjGgPp]?[\s.\-]*\d[\d.\s]{4,14}$/'],
+            'courier_recipient_phone' => 'nullable|required_if:courier_shipment,true,1|string|max:40',
+        ], [
+            'courier_recipient_name.required_if' => 'Falta el nombre de quien recibe la encomienda.',
+            'courier_recipient_id_number.required_if' => 'Falta la cédula de quien recibe la encomienda.',
+            'courier_recipient_id_number.regex' => 'La cédula tiene que ser un número (por ejemplo, V-12345678).',
+            'courier_recipient_phone.required_if' => 'Falta el teléfono de quien recibe la encomienda.',
+        ]);
+        $before = $order->only(['courier_shipment', 'courier_recipient_name', 'courier_recipient_id_number', 'courier_recipient_phone']);
+        $order->fill([
+            'courier_shipment' => (bool) $data['courier_shipment'],
+            'courier_recipient_name' => $data['courier_shipment'] ? trim((string) $data['courier_recipient_name']) : $order->courier_recipient_name,
+            'courier_recipient_id_number' => $data['courier_shipment'] ? trim((string) $data['courier_recipient_id_number']) : $order->courier_recipient_id_number,
+            'courier_recipient_phone' => $data['courier_shipment'] ? trim((string) $data['courier_recipient_phone']) : $order->courier_recipient_phone,
+        ])->save();
+        \App\Models\OrderActivityLog::create([
+            'order_id' => $order->id,
+            'user_id' => Auth::id(),
+            'action' => 'updated',
+            'description' => $order->courier_shipment ? 'Marcó la orden como envío por agencia de encomiendas' : 'Quitó el envío por agencia de encomiendas',
+            'properties' => ['courier' => ['old' => $before, 'new' => $order->only(array_keys($before))]],
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => $order->courier_shipment ? 'Datos de la encomienda guardados.' : 'Ya no es envío por encomienda.',
+            'order' => $order->fresh(['client', 'agent', 'status']),
+        ]);
+    }
+
+    /** Lo que le falta a una orden para pasar a "Asignar a agencia" en cuanto a la ubicación, o null si está completa. */
+    public static function locationProblem(Order $order): ?string
+    {
+        if (empty($order->location) || trim((string) $order->location) === '' || $order->location_status === \App\Services\Delivery\MapsLinkResolver::INVALID) {
+            return $order->courier_shipment
+                ? 'Falta el link de Google Maps de la oficina de encomiendas de donde sale la orden.'
+                : 'Falta el link de Google Maps de la ubicación del cliente.';
+        }
+        if ($order->courier_shipment && (!$order->courier_recipient_name || !$order->courier_recipient_id_number || !$order->courier_recipient_phone)) {
+            return 'Faltan los datos de la encomienda: nombre, cédula y teléfono de quien la recibe.';
+        }
+        return null;
+    }
+
     // Resto de métodos resource (vacíos por ahora)
     /**
      * 🔥 Tarea 10: el Kanban operativo oculta las órdenes en estados finales (Entregado, Cancelado,
@@ -2367,7 +2447,8 @@ class OrderController extends Controller
         
         $hasPayments = $totalPaid > 0;
         $hasChangeInfo = (abs($changeAmount) < 0.01) || ($changeAmount > 0 && !empty($order->change_covered_by));
-        $hasLocation = !empty($order->location) && trim($order->location) !== '';
+        // Fran (2026-10-12): un link de Maps válido y, en una encomienda, los datos de quien la recibe
+        $hasLocation = self::locationProblem($order) === null;
         $missingSize = $this->missingSizeMessage($order) !== null;
         $changePending = ChangeRules::needsApproval($order);
         
@@ -2452,6 +2533,7 @@ class OrderController extends Controller
                 'has_payments' => $hasPayments,
                 'has_change_info' => $hasChangeInfo,
                 'has_location' => $hasLocation,
+                'location_problem' => self::locationProblem($order),
                 'change_approval_pending' => $changePending,
             ]
         ]);

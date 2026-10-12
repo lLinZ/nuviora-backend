@@ -21,6 +21,7 @@ class Order extends Model
         'receipts_summary'       => 'array', // venta, recibido y excedente por método (documento de Fran, §9)
         'location_lat'           => 'float', // coordenadas de la ubicación del cliente (Módulo 3, §7)
         'location_lng'           => 'float',
+        'courier_shipment'       => 'boolean', // envío por agencia de encomiendas (MRW, Tealca, Zoom…), Fran 2026-10-12
     ];
 
     // Relationship methods follow...
@@ -184,6 +185,10 @@ class Order extends Model
         'is_return',
         'is_exchange',
         'parent_order_id',
+        'courier_shipment',
+        'courier_recipient_name',
+        'courier_recipient_id_number',
+        'courier_recipient_phone',
     ];
 
     /**
