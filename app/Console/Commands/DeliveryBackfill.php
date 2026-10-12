@@ -22,7 +22,11 @@ class DeliveryBackfill extends Command
     public function handle(OrderLocations $locations, DeliveryRoutes $routes): int
     {
         $stage = Status::whereIn('description', DeliveryRoutes::AGENCY_STAGE)->pluck('id');
-        $query = Order::whereNotNull('agency_id')->whereIn('status_id', $stage)
+        // Las que están con la agencia, y las que ya no pero tienen una carrera sin ruta (canceladas o reprogramadas
+        // después de salir): esa carrera se paga y el cierre la compara (§29)
+        $query = Order::whereNotNull('agency_id')
+            ->where(fn ($q) => $q->whereIn('status_id', $stage)
+                ->orWhereHas('agencyTrips', fn ($t) => $t->whereNull('voided_at')->whereNull('delivery_route_id')))
             ->where('updated_at', '>=', now()->subDays((int) $this->option('days')))->orderBy('id');
         if ((int) $this->option('limit') > 0) {
             $query->limit((int) $this->option('limit'));

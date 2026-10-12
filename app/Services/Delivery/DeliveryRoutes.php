@@ -4,6 +4,7 @@ namespace App\Services\Delivery;
 
 use App\Constants\OrderStatus;
 use App\Jobs\CalculateDeliveryRoute;
+use App\Models\AgencyTrip;
 use App\Models\Order;
 use App\Models\OrderDeliveryRoute;
 use App\Models\Status;
@@ -60,7 +61,7 @@ class DeliveryRoutes
      */
     public function refresh(Order $order, string $reason, ?int $userId = null): ?OrderDeliveryRoute
     {
-        if (!$order->agency_id || !$this->inAgencyStage($order)) {
+        if (!$order->agency_id || (!$this->inAgencyStage($order) && !$this->wentOut($order))) {
             return null;
         }
         $warehouse = $this->originWarehouse($order);
@@ -179,6 +180,15 @@ class DeliveryRoutes
             $this->refresh($order, 'almacen_coordenadas', $userId);
         }
         return $orders->count();
+    }
+
+    /**
+     * La agencia ya salió con la orden (tiene una carrera). Su ruta hace falta aunque la orden ya no esté con la agencia
+     * (cancelada, reprogramada o de vuelta a nueva): esa carrera se paga y el cierre de la semana la compara (§29).
+     */
+    private function wentOut(Order $order): bool
+    {
+        return AgencyTrip::where('order_id', $order->id)->where('agency_id', $order->agency_id)->whereNull('voided_at')->exists();
     }
 
     /**
