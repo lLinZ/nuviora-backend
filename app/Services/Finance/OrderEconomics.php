@@ -7,6 +7,7 @@ use App\Models\AgencyClosureRow;
 use App\Models\AgencyWeeklyClosure;
 use App\Models\OrderDeliveryRoute;
 use App\Models\OrderFinancial;
+use App\Models\Setting;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -30,6 +31,9 @@ use Illuminate\Support\Facades\DB;
 class OrderEconomics
 {
     private const CHUNK = 500;
+
+    /** §60: los últimos días todavía no son una cohorte madura (por defecto, 4). */
+    public const SETTING_MATURITY_LAG = 'finance.maturity_lag_days';
 
     private ?array $statusIds = null;
 
@@ -171,6 +175,9 @@ class OrderEconomics
         $returned = array_flip(DB::table('orders')->whereIn('parent_order_id', $ids)->where('is_return', true)
             ->where('status_id', $st['delivered'])->pluck('parent_order_id')->all());
 
+        $previous = DB::table('order_financials')->whereIn('order_id', $ids)->whereNotNull('computed_at')
+            ->get(['order_id', 'outcome', 'status_id', 'revenue_main', 'revenue_upsell', 'revenue_refunded', 'delivered_date'])->keyBy('order_id');
+
         $rows = [];
         foreach ($orders as $o) {
             $o->delivered_at = $this->repairDeliveredAt($o, $st['delivered']);
@@ -178,6 +185,7 @@ class OrderEconomics
                 $earnings->get($o->id, collect()), $tripEarningIds, (float) ($leader[$o->id] ?? 0), isset($returned[$o->id]), $st);
         }
         DB::table('order_financials')->upsert($rows, ['order_id'], array_values(array_diff(array_keys($rows[0]), ['order_id'])));
+        $this->auditMatureChanges($previous, $rows);
         DB::table('order_financials')->whereIn('order_id', $ids)->where('stale_at', '<', $startedAt)->update(['stale_at' => null]);
 
         return count($rows);
@@ -267,6 +275,57 @@ class OrderEconomics
             'commission_deliverer' => $sum('repartidor'),
             'computed_at' => now(),
         ];
+    }
+
+    /**
+     * §21: una orden de una cohorte ya madura (creada hace más de finance.maturity_lag_days, §60) que cambia de resultado
+     * o de ingreso deja su registro: valor anterior, nuevo, motivo y fecha. Así se explica por qué cambió un día ya cerrado.
+     */
+    private function auditMatureChanges(Collection $previous, array $rows): void
+    {
+        if ($previous->isEmpty()) {
+            return;
+        }
+        $matureBefore = now()->subDays((int) Setting::get(self::SETTING_MATURITY_LAG, 4))->toDateString();
+        $statuses = null;
+        $now = now();
+        $entries = [];
+        foreach ($rows as $row) {
+            $old = $previous->get($row['order_id']);
+            if (!$old || $row['created_date'] >= $matureBefore) {
+                continue;
+            }
+            $oldRevenue = round((float) $old->revenue_main + (float) $old->revenue_upsell - (float) $old->revenue_refunded, 2);
+            $newRevenue = round($row['revenue_main'] + $row['revenue_upsell'] - $row['revenue_refunded'], 2);
+            if ($old->outcome === $row['outcome'] && abs($oldRevenue - $newRevenue) < 0.005) {
+                continue;
+            }
+            $statuses ??= DB::table('statuses')->pluck('description', 'id');
+            $status = $statuses[$row['status_id']] ?? 'otro estado';
+            $reason = match (true) {
+                $row['outcome'] === OrderFinancial::DELIVERED && $old->outcome !== OrderFinancial::DELIVERED
+                    => 'Entregada el ' . Carbon::parse($row['delivered_date'])->format('d/m/Y'),
+                $old->outcome === OrderFinancial::DELIVERED && $row['outcome'] !== OrderFinancial::DELIVERED
+                    => "Dejó de estar entregada: ahora está en \"{$status}\"",
+                $old->outcome !== $row['outcome'] => "Pasó a \"{$status}\"",
+                (float) $old->revenue_refunded !== $row['revenue_refunded'] => 'Devolución o reembolso',
+                default => 'Cambió el total de la orden',
+            };
+            $entries[] = [
+                'action' => 'cohort_changed',
+                'subject_type' => 'order',
+                'subject_id' => $row['order_id'],
+                'before' => json_encode(['outcome' => $old->outcome, 'net_revenue' => $oldRevenue, 'delivered_date' => $old->delivered_date]),
+                'after' => json_encode(['outcome' => $row['outcome'], 'net_revenue' => $newRevenue, 'delivered_date' => $row['delivered_date'],
+                    'cohort' => $row['created_date']]),
+                'reason' => $reason,
+                'user_id' => null,
+                'created_at' => $now,
+            ];
+        }
+        if ($entries !== []) {
+            DB::table('financial_audit_logs')->insert($entries);
+        }
     }
 
     /** §3: la fecha de entrega, aunque el cambio de estado no haya pasado por el observer (actualizaciones masivas). */

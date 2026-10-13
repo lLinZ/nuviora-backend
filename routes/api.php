@@ -611,6 +611,23 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/closure-discrepancies/{discrepancy}/notes', [\App\Http\Controllers\AgencyClosureController::class, 'note']);
     });
 
+    // Finanzas (Módulo 4 de Fran): solo el Admin (§81). Gastos manuales y recurrentes (§24 a §33) y su historial (§82)
+    Route::middleware('role:Admin')->prefix('finance')->group(function () {
+        Route::get('/options', [\App\Http\Controllers\FinanceExpenseController::class, 'options']);
+        Route::post('/expense-categories', [\App\Http\Controllers\FinanceExpenseController::class, 'storeCategory']);
+        Route::get('/expenses', [\App\Http\Controllers\FinanceExpenseController::class, 'index']);
+        Route::post('/expenses', [\App\Http\Controllers\FinanceExpenseController::class, 'store']);
+        // POST y no PUT: la corrección puede traer un comprobante nuevo, y PHP no lee archivos en un PUT
+        Route::post('/expenses/{expense}', [\App\Http\Controllers\FinanceExpenseController::class, 'update']);
+        Route::post('/expenses/{expense}/void', [\App\Http\Controllers\FinanceExpenseController::class, 'void']);
+        Route::get('/expenses/{expense}/receipt', [\App\Http\Controllers\FinanceExpenseController::class, 'receipt']);
+        Route::get('/recurring-expenses', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringIndex']);
+        Route::post('/recurring-expenses', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringStore']);
+        Route::put('/recurring-expenses/{recurring}', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringUpdate']);
+        Route::post('/recurring-expenses/{recurring}/versions', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringVersion']);
+        Route::get('/audit', [\App\Http\Controllers\FinanceExpenseController::class, 'audit']);
+    });
+
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno
     Route::middleware('role:Agencia')->group(function () {
         Route::get('/my-closures', [\App\Http\Controllers\MyClosureController::class, 'index']);
