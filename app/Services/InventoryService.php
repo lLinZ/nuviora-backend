@@ -274,6 +274,8 @@ class InventoryService
                 'movement_type' => 'adjustment',
                 'user_id' => $userId,
                 'notes' => $notes . " (Old: {$oldQuantity}, New: {$newQuantity})" . $detail,
+                // Para el libro de lotes: el total y cada variante, antes y después
+                'details' => ['old' => $oldQuantity, 'new' => $newQuantity, 'variants' => $changes ?: (object) []],
             ]);
 
             // 📦 Si bajó (el total o una talla), hay órdenes que pueden quedarse sin stock; si subió, recuperarlo

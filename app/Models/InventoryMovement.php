@@ -22,10 +22,12 @@ class InventoryMovement extends Model
         'user_id',
         'notes',
         'status',
+        'details',
     ];
 
     protected $casts = [
         'quantity' => 'integer',
+        'details' => 'array',
     ];
 
     /**
