@@ -631,6 +631,14 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/profitability', [\App\Http\Controllers\FinanceReportController::class, 'profitability']);
         Route::get('/profitability/orders', [\App\Http\Controllers\FinanceReportController::class, 'orders']);
         Route::get('/profitability/orders/{order}', [\App\Http\Controllers\FinanceReportController::class, 'order']);
+        // Cohortes, efectividad, CPA financiero y configuración (§59 a §74, §22, §66)
+        Route::get('/cohorts', [\App\Http\Controllers\FinanceCpaController::class, 'cohorts']);
+        Route::get('/cpa', [\App\Http\Controllers\FinanceCpaController::class, 'cpa']);
+        Route::post('/cpa/recalculate', [\App\Http\Controllers\FinanceCpaController::class, 'recalculate']);
+        Route::get('/cpa/history', [\App\Http\Controllers\FinanceCpaController::class, 'history']);
+        Route::get('/settings', [\App\Http\Controllers\FinanceCpaController::class, 'settings']);
+        Route::put('/settings', [\App\Http\Controllers\FinanceCpaController::class, 'updateSettings']);
+        Route::put('/product-margins/{product}', [\App\Http\Controllers\FinanceCpaController::class, 'updateMargin']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

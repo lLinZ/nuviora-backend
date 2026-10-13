@@ -55,6 +55,8 @@ try {
     // se marcan todas por si algún cambio no pasó por los observers
     Schedule::command('finance:rebuild')->everyMinute()->withoutOverlapping(10)->runInBackground();
     Schedule::command('finance:rebuild --mark-all')->dailyAt('03:30');
+    // CPA financiero con la ventana madura, los miércoles después del recordatorio de cierres de las 11:00 (§61)
+    Schedule::command('finance:cpa')->wednesdays()->at('12:00')->withoutOverlapping();
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

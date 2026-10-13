@@ -235,7 +235,8 @@ class MetaAdsReport
 
         $out = [];
         foreach ($tree as $productId => $byCity) {
-            $target = $targets[$productId] ?? ['target_cpa' => null, 'break_even_cpa' => null];
+            $manual = $targets[$productId] ?? ['target_cpa' => null, 'break_even_cpa' => null];
+            $target = $this->effectiveTarget($manual, (int) $productId);
             $pKeys = collect($byCity)->flatten()->all();
             $product = $this->node($cur, $prev, $reach, $pKeys, $compare, $target['target_cpa'], $target['break_even_cpa']);
             $product += [
@@ -243,13 +244,20 @@ class MetaAdsReport
                 'name' => ($pr = $products->get((int) $productId)) ? ($pr->showable_name ?: $pr->title) : "Producto {$productId}",
                 'target_cpa' => $target['target_cpa'],
                 'break_even_cpa' => $target['break_even_cpa'],
+                'target_source' => $target['source'],
+                'manual_target_cpa' => $manual['target_cpa'],
+                'manual_break_even_cpa' => $manual['break_even_cpa'],
+                'financial' => $target['financial'],
                 'cities' => [],
             ];
             foreach ($byCity as $cityId => $byAccount) {
-                $city = $this->node($cur, $prev, $reach, array_values($byAccount), $compare, $target['target_cpa'], $target['break_even_cpa']);
-                $city += ['city_id' => (int) $cityId, 'name' => $cities->get((int) $cityId)?->name ?? "Ciudad {$cityId}", 'accounts' => []];
+                $cityTarget = $this->effectiveTarget($manual, (int) $productId, (int) $cityId);
+                $city = $this->node($cur, $prev, $reach, array_values($byAccount), $compare, $cityTarget['target_cpa'], $cityTarget['break_even_cpa']);
+                $city += ['city_id' => (int) $cityId, 'name' => $cities->get((int) $cityId)?->name ?? "Ciudad {$cityId}", 'accounts' => [],
+                    'target_cpa' => $cityTarget['target_cpa'], 'break_even_cpa' => $cityTarget['break_even_cpa'], 'target_source' => $cityTarget['source'],
+                    'financial' => $cityTarget['financial']];
                 foreach ($byAccount as $accountId => $key) {
-                    $acc = $this->node($cur, $prev, $reach, [$key], $compare, $target['target_cpa'], $target['break_even_cpa']);
+                    $acc = $this->node($cur, $prev, $reach, [$key], $compare, $cityTarget['target_cpa'], $cityTarget['break_even_cpa']);
                     $city['accounts'][] = $acc + ['account_id' => (int) $accountId, 'name' => $accounts->get((int) $accountId)?->name];
                 }
                 $product['cities'][] = $city;
@@ -317,6 +325,30 @@ class MetaAdsReport
         ];
     }
 
+    private ?array $financialCpa = null;
+
+    /**
+     * R12 (Fran, 2026-10-12): el CPA financiero calculado (Módulo 4, §70 a §72) reemplaza al cargado a mano: el de
+     * producto + ciudad, si no el del producto. Sin cálculo (o sin compras en su ventana) vale el manual, que además se
+     * sigue mostrando como referencia.
+     * @return array{target_cpa: ?float, break_even_cpa: ?float, source: string, financial: ?array}
+     */
+    private function effectiveTarget(array $manual, ?int $productId, ?int $cityId = null): array
+    {
+        $this->financialCpa ??= app(\App\Services\Finance\FinancialCpa::class)->latest();
+        $versions = array_filter([$cityId !== null ? ($this->financialCpa["{$productId}|{$cityId}"] ?? null) : null, $this->financialCpa["{$productId}|"] ?? null]);
+        $v = collect($versions)->first(fn ($v) => $v->target !== null);
+        if ($v) {
+            return ['target_cpa' => $v->target, 'break_even_cpa' => $v->break_even, 'source' => 'financial', 'financial' => [
+                'target' => $v->target, 'break_even' => $v->break_even, 'fully_loaded' => $v->fully_loaded, 'viable' => $v->viable,
+                'city_level' => $v->city_id !== null, 'period_from' => $v->period_from?->format('Y-m-d'), 'period_to' => $v->period_to?->format('Y-m-d'),
+                'computed_at' => $v->computed_at?->format('Y-m-d H:i'), 'version' => $v->version,
+            ]];
+        }
+
+        return ['target_cpa' => $manual['target_cpa'], 'break_even_cpa' => $manual['break_even_cpa'], 'source' => 'manual', 'financial' => null];
+    }
+
     /** Target CPA y Break-even vigentes en una fecha, por producto (§34, §49). */
     public function targets(array $productIds, string $date): array
     {
@@ -378,7 +410,8 @@ class MetaAdsReport
             if (!$active && !$includeInactive && $status !== 'inactive') continue;
 
             $campaign = $level === 'campaign' ? $e : $e->campaign;
-            $target = $targets[$campaign?->product_id] ?? ['target_cpa' => null, 'break_even_cpa' => null];
+            $target = $this->effectiveTarget($targets[$campaign?->product_id] ?? ['target_cpa' => null, 'break_even_cpa' => null],
+                $campaign?->product_id, $campaign?->city_id);
             $packed = $this->pack($cur->get($e->meta_id), $reach?->get($e->meta_id));
             if ($compare) {
                 $packed['compare'] = $this->compareBlock($packed, $prev->get($e->meta_id));
@@ -398,6 +431,7 @@ class MetaAdsReport
                 'has_data' => $hasData,
                 'target_cpa' => $target['target_cpa'],
                 'break_even_cpa' => $target['break_even_cpa'],
+                'target_source' => $target['source'],
             ];
             if ($level === 'campaign') {
                 $row += [
@@ -449,7 +483,7 @@ class MetaAdsReport
             if (!empty($this->filters['status_creative']) && $cr->status !== $this->filters['status_creative']) {
                 continue;
             }
-            $target = $targets[$productOf[$cr->id] ?? 0] ?? ['target_cpa' => null, 'break_even_cpa' => null];
+            $target = $this->effectiveTarget($targets[$productOf[$cr->id] ?? 0] ?? ['target_cpa' => null, 'break_even_cpa' => null], $productOf[$cr->id] ?? null);
             $packed = $this->pack($cur->get((string) $cr->id), null);
             if ($compare) {
                 $packed['compare'] = $this->compareBlock($packed, $prev->get((string) $cr->id));
