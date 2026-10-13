@@ -626,6 +626,11 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::put('/recurring-expenses/{recurring}', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringUpdate']);
         Route::post('/recurring-expenses/{recurring}/versions', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringVersion']);
         Route::get('/audit', [\App\Http\Controllers\FinanceExpenseController::class, 'audit']);
+        // Rentabilidad por niveles y su detalle hasta el pedido (§47 a §52, §57, §58)
+        Route::get('/summary', [\App\Http\Controllers\FinanceReportController::class, 'summary']);
+        Route::get('/profitability', [\App\Http\Controllers\FinanceReportController::class, 'profitability']);
+        Route::get('/profitability/orders', [\App\Http\Controllers\FinanceReportController::class, 'orders']);
+        Route::get('/profitability/orders/{order}', [\App\Http\Controllers\FinanceReportController::class, 'order']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

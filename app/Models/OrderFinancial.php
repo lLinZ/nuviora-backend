@@ -25,6 +25,7 @@ class OrderFinancial extends Model
     protected $casts = [
         'created_date' => 'date',
         'delivered_date' => 'date',
+        'cost_date' => 'date',
         'revenue_main' => 'float',
         'revenue_upsell' => 'float',
         'revenue_refunded' => 'float',

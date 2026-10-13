@@ -156,7 +156,7 @@ class OrderEconomics
 
         $trips = DB::table('agency_trips as t')->leftJoin('order_delivery_routes as r', 'r.id', '=', 't.delivery_route_id')
             ->whereIn('t.order_id', $ids)->whereNull('t.voided_at')
-            ->get(['t.id', 't.order_id', 't.earning_id', 'r.calculation_status', 'r.expected_cost'])->groupBy('order_id');
+            ->get(['t.id', 't.order_id', 't.earning_id', 't.trip_date', 'r.calculation_status', 'r.expected_cost'])->groupBy('order_id');
         $tripIds = $trips->flatten(1)->pluck('id')->all();
         $tripEarningIds = array_flip($trips->flatten(1)->pluck('earning_id')->filter()->all());
         // §19: el costo aprobado de cada carrera en un cierre listo para pago o pagado
@@ -168,7 +168,7 @@ class OrderEconomics
             ->groupBy('cr.matched_trip_id')->select('cr.matched_trip_id', DB::raw('SUM(COALESCE(cr.approved_cost, 0)) AS cost'))
             ->pluck('cost', 'matched_trip_id');
 
-        $earnings = DB::table('earnings')->whereIn('order_id', $ids)->get(['id', 'order_id', 'role_type', 'amount_usd'])->groupBy('order_id');
+        $earnings = DB::table('earnings')->whereIn('order_id', $ids)->get(['id', 'order_id', 'role_type', 'amount_usd', 'earning_date'])->groupBy('order_id');
         $leader = DB::table('leader_commissions')->whereIn('order_id', $ids)->groupBy('order_id')
             ->select('order_id', DB::raw('SUM(amount_usd) AS total'))->pluck('total', 'order_id');
         // R3: una devolución antigua (orden hija is_return) ya entregada anula el ingreso de la original
@@ -238,9 +238,12 @@ class OrderEconomics
             }
         }
         // Antes del Módulo 3: lo que se le pagaba a la agencia (solo si la orden salió, como en la nómina de agencias)
-        $legacy = $o->was_shipped ? round($earnings->where('role_type', 'agencia')
-            ->reject(fn ($e) => isset($tripEarningIds[$e->id]))->sum(fn ($e) => (float) $e->amount_usd), 2) : 0.0;
-        $legacyTrips = $o->was_shipped ? $earnings->where('role_type', 'agencia')->reject(fn ($e) => isset($tripEarningIds[$e->id]))->count() : 0;
+        $legacyEarnings = $o->was_shipped ? $earnings->where('role_type', 'agencia')->reject(fn ($e) => isset($tripEarningIds[$e->id])) : collect();
+        $legacy = round($legacyEarnings->sum(fn ($e) => (float) $e->amount_usd), 2);
+        $legacyTrips = $legacyEarnings->count();
+        $deliveredDate = $delivered && $o->delivered_at ? Carbon::parse($o->delivered_at)->toDateString() : null;
+        // §3 y §5: la entregada cuenta sus costos el día de la entrega; la que no, el día de su última carrera
+        $lastTrip = collect([$trips->max('trip_date'), $legacyEarnings->max('earning_date')])->filter()->max();
 
         $sum = fn (string $role) => $delivered ? round($earnings->where('role_type', $role)->sum(fn ($e) => (float) $e->amount_usd), 2) : 0.0;
 
@@ -249,7 +252,8 @@ class OrderEconomics
             'kind' => $kind,
             'parent_order_id' => $o->parent_order_id,
             'created_date' => Carbon::parse($o->created_at)->toDateString(),
-            'delivered_date' => $delivered && $o->delivered_at ? Carbon::parse($o->delivered_at)->toDateString() : null,
+            'delivered_date' => $deliveredDate,
+            'cost_date' => $deliveredDate ?? ($lastTrip ? substr((string) $lastTrip, 0, 10) : null),
             'outcome' => $outcome,
             'status_id' => $o->status_id,
             'product_id' => $main?->product_id,
@@ -266,7 +270,7 @@ class OrderEconomics
             'cogs_missing_lines' => $missing,
             'delivery_cost' => round($delivery + $legacy, 2),
             'delivery_trips' => $trips->count() + $legacyTrips,
-            'delivery_final_trips' => $final,
+            'delivery_final_trips' => $final + $legacyTrips, // lo pagado antes del Módulo 3 también es definitivo
             'delivery_missing_trips' => $noCost,
             'delivery_legacy_cost' => $legacy,
             'commission_seller' => $sum('vendedor'),
