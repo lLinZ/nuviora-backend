@@ -143,7 +143,7 @@ class FinanceSupplierController extends Controller
             'currency' => 'required|in:USD,USDT,VES',
             'rate' => 'nullable|required_if:currency,VES|numeric|min:0.0001',
             'paid_at' => 'required|date|before_or_equal:today',
-            'company_account_id' => 'nullable|integer|exists:company_accounts,id',
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
             'notes' => 'nullable|string|max:500',
             'receipt' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
         ], self::MESSAGES);

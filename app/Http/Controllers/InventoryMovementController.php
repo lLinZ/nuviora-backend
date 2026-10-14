@@ -363,7 +363,7 @@ class InventoryMovementController extends Controller
             'payment_type' => 'required|in:cash,credit',
             'due_date' => 'nullable|required_if:payment_type,credit|date|after_or_equal:today',
             'terms' => 'nullable|string|max:500',
-            'company_account_id' => 'nullable|integer|exists:company_accounts,id',
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
         ], [
             'supplier_id.required' => 'Elige el proveedor de la compra.',
             'total_amount.required' => 'Escribe cuánto costó la compra en total.',

@@ -673,6 +673,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/cash/movements', [\App\Http\Controllers\FinanceCashController::class, 'storeMovement']);
         Route::post('/cash/movements/{movement}/void', [\App\Http\Controllers\FinanceCashController::class, 'voidMovement']);
         Route::get('/cash/movements/{movement}/receipt', [\App\Http\Controllers\FinanceCashController::class, 'movementReceipt']);
+        // Agencias (entrega 3c; §43, §101 a §104, R16)
+        Route::get('/agencies', [\App\Http\Controllers\FinanceCashController::class, 'agencies']);
+        Route::post('/agencies/{agency}/settle', [\App\Http\Controllers\FinanceCashController::class, 'settle']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

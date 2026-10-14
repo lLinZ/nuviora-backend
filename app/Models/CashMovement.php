@@ -15,6 +15,7 @@ class CashMovement extends Model
     public const INTERNAL_TRANSFER = 'internal_transfer';   // §39 y §40: de una cuenta a otra; la comisión sí es gasto
     public const EXCHANGE = 'exchange';                     // §41: cambio de moneda
     public const ADJUSTMENT = 'adjustment';                 // §83: ajuste de saldo, con motivo
+    public const AGENCY_SETTLEMENT = 'agency_settlement';   // §43: la agencia entrega el efectivo que cobró (3c)
 
     public const KIND_LABEL = [
         self::OWNER_CONTRIBUTION => 'Aporte del propietario',
@@ -22,7 +23,11 @@ class CashMovement extends Model
         self::INTERNAL_TRANSFER => 'Transferencia entre cuentas',
         self::EXCHANGE => 'Cambio de moneda',
         self::ADJUSTMENT => 'Ajuste de saldo',
+        self::AGENCY_SETTLEMENT => 'Liquidación de efectivo de agencia',
     ];
+
+    /** Los que se registran con el diálogo de movimientos (la liquidación tiene el suyo). */
+    public const MANUAL = [self::OWNER_CONTRIBUTION, self::OWNER_WITHDRAWAL, self::INTERNAL_TRANSFER, self::EXCHANGE, self::ADJUSTMENT];
 
     protected $fillable = [
         'kind', 'occurred_on', 'from_account_id', 'from_amount', 'to_account_id', 'to_amount', 'rate', 'fee', 'amount_usd', 'agency_id',
@@ -62,6 +67,12 @@ class CashMovement extends Model
     public function feeExpense()
     {
         return $this->hasOne(Expense::class);
+    }
+
+    /** R16: lo que se descontó de lo que se le debe a la agencia en esta liquidación. */
+    public function compensations()
+    {
+        return $this->hasMany(PayablePayment::class);
     }
 
     public function snapshot(): array

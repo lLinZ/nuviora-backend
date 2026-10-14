@@ -29,7 +29,7 @@ class InventoryPurchases
     /**
      * @param array{product_id:int, warehouse_id:int, quantity:int, variants?:mixed, notes?:?string, supplier_id:int,
      *              total_amount:float|string, currency:string, rate?:float|string|null, payment_type:string, due_date?:?string,
-     *              terms?:?string, company_account_id?:?int} $data
+     *              terms?:?string, financial_account_id?:?int} $data
      */
     public function create(array $data): InventoryPurchase
     {
@@ -93,7 +93,7 @@ class InventoryPurchases
                     'amount' => $total,
                     'currency' => $data['currency'],
                     'rate' => $usd['rate'],
-                    'company_account_id' => $data['company_account_id'] ?? null,
+                    'financial_account_id' => $data['financial_account_id'] ?? null,
                     'notes' => 'Pago al contado de la compra',
                 ]);
             }

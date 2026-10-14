@@ -9,11 +9,13 @@ use App\Models\AgencyWeeklyClosure;
 use App\Models\CompanyAccount;
 use App\Models\Earning;
 use App\Models\InventoryLot;
+use App\Models\InventoryTransferTrip;
 use App\Models\LeaderCommission;
 use App\Models\Order;
 use App\Models\OrderDeliveryRoute;
 use App\Models\OrderProduct;
 use App\Models\OrderRefund;
+use App\Models\PayablePayment;
 use App\Models\Product;
 use App\Models\ReconciliationItem;
 use App\Models\Status;
@@ -73,6 +75,14 @@ class FinanceTriggers
         // Entrega 3 (§75, §76): un pago digital de la conciliación entra a la caja, o cambia su estado, al momento
         ReconciliationItem::saved(fn (ReconciliationItem $item) => self::safely(fn () => app(CashLedger::class)->syncReconciliationItem($item)));
         ReconciliationItem::deleted(fn (ReconciliationItem $item) => self::safely(fn () => app(CashLedger::class)->syncReconciliationItem($item->id, true)));
+        // Entrega 3c: los pagos de deudas y los viajes salen de su cuenta de la caja; el cierre aprobado es una deuda (§101)
+        PayablePayment::saved(fn (PayablePayment $p) => self::safely(fn () => app(CashLedger::class)->syncPayablePayment($p)));
+        InventoryTransferTrip::saved(fn (InventoryTransferTrip $t) => self::safely(fn () => app(CashLedger::class)->syncTrip($t)));
+        AgencyWeeklyClosure::saved(function (AgencyWeeklyClosure $closure) {
+            if ($closure->wasChanged(['status', 'final_approved_total']) || $closure->wasRecentlyCreated) {
+                self::safely(fn () => app(AgencyCash::class)->syncClosure($closure));
+            }
+        });
         // R14: si una cuenta del Módulo 1 pasa a otra cuenta de la caja (o cambia de método), sus pagos se mueven con ella
         CompanyAccount::saved(function (CompanyAccount $account) {
             if ($account->wasChanged(['financial_account_id', 'method', 'is_active'])) {

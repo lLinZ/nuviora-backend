@@ -20,7 +20,7 @@ class AccountPayable extends Model
 
     protected $fillable = [
         'payee_type', 'supplier_id', 'agency_id', 'payee_name', 'source_type', 'source_id', 'description', 'currency', 'amount',
-        'rate', 'amount_usd', 'paid_amount', 'paid_usd', 'issued_at', 'due_date', 'terms', 'created_by',
+        'rate', 'amount_usd', 'paid_amount', 'paid_usd', 'issued_at', 'due_date', 'terms', 'voided_at', 'void_reason', 'created_by',
     ];
 
     protected $casts = [
@@ -31,6 +31,7 @@ class AccountPayable extends Model
         'paid_usd' => 'float',
         'issued_at' => 'date:Y-m-d',
         'due_date' => 'date:Y-m-d',
+        'voided_at' => 'datetime',
     ];
 
     public function supplier(): BelongsTo

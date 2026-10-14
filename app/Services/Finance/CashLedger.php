@@ -8,7 +8,9 @@ use App\Models\CompanyAccount;
 use App\Models\Currency;
 use App\Models\FinancialAccount;
 use App\Models\FinancialTransaction as Tx;
+use App\Models\InventoryTransferTrip;
 use App\Models\Order;
+use App\Models\PayablePayment;
 use App\Models\ReconciliationItem;
 use App\Models\Setting;
 use App\Models\Status;
@@ -321,8 +323,74 @@ class CashLedger
                 $leg('in', $m->toAccount, $m->to_amount, Tx::EXCHANGE_IN, $usd),
                 $fee,
             ],
+            // §43: el efectivo pasa de la agencia a la cuenta donde se guarda (no es ingreso nuevo). Lo descontado de lo que
+            // se le debe (R16) sale con sus pagos de deuda
+            CashMovement::AGENCY_SETTLEMENT => $m->from_amount > 0 ? [
+                $leg('out', $m->fromAccount, -$m->from_amount, Tx::AGENCY_SETTLEMENT_OUT, -$usd),
+                $leg('in', $m->toAccount, $m->to_amount, Tx::AGENCY_SETTLEMENT_IN, $usd),
+            ] : [],
             default => [],
         }));
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Pagos de deudas (§17, §102) y viajes de traslado (§13)
+
+    /** Un pago de una deuda sale de la cuenta de donde se pagó (en una compensación, del efectivo de la agencia, R16). */
+    public function syncPayablePayment(PayablePayment|int $payment): void
+    {
+        $id = $payment instanceof PayablePayment ? $payment->id : $payment;
+        $p = PayablePayment::with(['account', 'payable.supplier:id,name', 'payable.agency:id,names'])->find($id);
+        $reason = !$p ? 'El pago ya no existe.' : ($p->voided_at ? "Se anuló el pago: {$p->void_reason}" : null);
+        $legs = [];
+        if ($p && !$p->voided_at && $p->account && $this->counts($p->account, $p->paid_at->toDateString())) {
+            [$amount, $rate, $usd] = $this->inAccountCurrency((float) $p->amount, $p->currency, $p->account->currency,
+                $p->currency === 'VES' ? (float) $p->rate : self::binanceRate());
+            $payable = $p->payable;
+            $legs[] = [
+                'leg' => 'main',
+                'financial_account_id' => $p->account->id,
+                'occurred_on' => $p->paid_at->toDateString(),
+                'amount' => -$amount,
+                'currency' => $p->account->currency,
+                'rate' => $rate,
+                'amount_usd' => -round((float) $p->amount_usd ?: $usd, 2),
+                'kind' => Tx::PAYABLE_PAYMENT,
+                'status' => Tx::CONFIRMED,
+                'order_id' => null,
+                'description' => mb_substr(($p->cash_movement_id ? 'Descontado de su efectivo: ' : 'Pago a ') . ($payable?->payeeName() ?? 'deuda')
+                    . ($payable?->description ? " ({$payable->description})" : ''), 0, 255),
+            ];
+        }
+        $this->apply('payable_payment', $id, $legs, $reason);
+    }
+
+    /** §13: lo que se pagó del viaje (mano de obra, combustible y otros). El desgaste no es dinero que sale (decisión nuestra). */
+    public function syncTrip(InventoryTransferTrip|int $trip): void
+    {
+        $id = $trip instanceof InventoryTransferTrip ? $trip->id : $trip;
+        $t = InventoryTransferTrip::with('account')->find($id);
+        $reason = !$t ? 'El viaje ya no existe.' : ($t->voided_at ? "Se anuló el viaje: {$t->void_reason}" : null);
+        $legs = [];
+        $paid = $t ? round((float) $t->labor + (float) $t->fuel + (float) $t->other, 2) : 0.0;
+        if ($t && !$t->voided_at && $t->account && $paid > 0 && $this->counts($t->account, $t->trip_date->toDateString())) {
+            $vesRate = $t->currency === 'VES' ? (float) $t->rate : self::binanceRate();
+            [$amount, $rate, $usd] = $this->inAccountCurrency($paid, $t->currency, $t->account->currency, $vesRate);
+            $legs[] = [
+                'leg' => 'main',
+                'financial_account_id' => $t->account->id,
+                'occurred_on' => $t->trip_date->toDateString(),
+                'amount' => -$amount,
+                'currency' => $t->account->currency,
+                'rate' => $rate,
+                'amount_usd' => -$usd,
+                'kind' => Tx::TRIP_PAYMENT,
+                'status' => Tx::CONFIRMED,
+                'order_id' => null,
+                'description' => mb_substr('Viaje de traslado' . ($t->description ? ": {$t->description}" : ''), 0, 255),
+            ];
+        }
+        $this->apply('trip', $id, $legs, $reason);
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -342,8 +410,14 @@ class CashLedger
 
         $movements = CashMovement::pluck('id');
         $movements->each(fn ($id) => $this->syncCashMovement($id));
+        $payments = PayablePayment::where('paid_at', '>', $since)->pluck('id')
+            ->merge(Tx::whereNull('voided_at')->where('source_type', 'payable_payment')->pluck('source_id'))->unique();
+        $payments->each(fn ($id) => $this->syncPayablePayment($id));
+        $trips = InventoryTransferTrip::where('trip_date', '>', $since)->pluck('id')
+            ->merge(Tx::whereNull('voided_at')->where('source_type', 'trip')->pluck('source_id'))->unique();
+        $trips->each(fn ($id) => $this->syncTrip($id));
 
-        return ['orders' => count($orders), 'items' => $items->count(), 'movements' => $movements->count()];
+        return ['orders' => count($orders), 'items' => $items->count(), 'movements' => $movements->count() + $payments->count() + $trips->count()];
     }
 
     // ---------------------------------------------------------------------------------------------------------------

@@ -13,10 +13,13 @@ use App\Models\User;
 use App\Services\Delivery\Closures\ClosureMatcher;
 use App\Services\Delivery\Closures\ClosureProcessor;
 use App\Services\Delivery\Closures\ClosureReview;
+use App\Services\Finance\AgencyCash;
 use App\Jobs\ProcessClosureFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
 /**
@@ -87,6 +90,16 @@ class AgencyClosureController extends Controller
                     'reference' => $closure->payment_reference, 'has_receipt' => (bool) $closure->payment_receipt_path,
                 ] : null,
                 'tolerance' => ['amount' => $setting->tolerance_amount, 'percent' => $setting->tolerance_percent],
+                // Módulo 4 (§101, §102, R16): la deuda del cierre (lo que ya se descontó del efectivo no se paga dos veces) y
+                // las cuentas de la caja de donde puede salir el pago
+                'debt' => ($debt = app(AgencyCash::class)->closurePayable($closure)) ? [
+                    'amount' => $debt->amount, 'paid' => $debt->paid_amount, 'balance' => $debt->balance(),
+                    'compensated' => round((float) $debt->payments()->whereNull('voided_at')->whereNotNull('cash_movement_id')->sum('applied_amount'), 2),
+                ] : null,
+                'pay_accounts' => \App\Models\FinancialAccount::where('is_active', true)->where('kind', '!=', \App\Models\FinancialAccount::AGENCY_CASH)
+                    ->whereIn('currency', ['USD', 'USDT', 'VES'])->orderBy('name')->get(['id', 'name', 'currency']),
+                'cash_start_date' => \App\Services\Finance\CashLedger::startDate(),
+                'binance_rate' => \App\Services\Finance\CashLedger::binanceRate(),
             ],
             'rows' => $rows->map(fn (AgencyClosureRow $r) => $this->presentRow($r)),
             'files' => $closure->files()->with('uploader:id,names')->get()->map(fn (AgencyClosureFile $f) => [
@@ -214,21 +227,36 @@ class AgencyClosureController extends Controller
         return response()->json(['status' => true, 'message' => 'Fila enlazada.']);
     }
 
-    /** §37: registrar el pago. */
-    public function pay(Request $request, AgencyWeeklyClosure $closure, ClosureReview $review)
+    /**
+     * §37: registrar el pago. Módulo 4 (§102, caso 16): sale de una cuenta de la caja y salda la deuda del cierre; lo que ya se
+     * descontó del efectivo de la agencia (R16) no se vuelve a pagar.
+     */
+    public function pay(Request $request, AgencyWeeklyClosure $closure, ClosureReview $review, AgencyCash $agencyCash)
     {
         $data = $request->validate([
-            'amount' => 'nullable|numeric|min:0|max:1000000',
             'date' => 'required|date_format:Y-m-d',
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'amount_ves' => 'nullable|numeric|min:0.01|max:99999999999',
             'method' => 'nullable|string|max:60',
             'reference' => 'nullable|string|max:120',
             'receipt' => 'nullable|file|max:10240|mimes:jpg,jpeg,png,webp,pdf',
-        ]);
+        ], ['financial_account_id.required' => 'Elige la cuenta de donde sale el pago.']);
         if ($request->hasFile('receipt')) {
             $data['receipt_path'] = $request->file('receipt')->store("agency-closures/{$closure->agency_id}/pagos", 'local');
         }
         try {
-            $review->pay($closure, $data, Auth::id());
+            DB::transaction(function () use ($closure, $data, $review, $agencyCash) {
+                if ($closure->status !== AgencyWeeklyClosure::READY) {
+                    $review->pay($closure, $data, Auth::id()); // da el mensaje de por qué no se puede
+                }
+                $agencyCash->payClosure($closure, $data, $data['receipt_path'] ?? null, Auth::id());
+                $review->pay($closure->fresh(), ['amount' => $closure->final_approved_total] + $data, Auth::id());
+            });
+        } catch (ValidationException $e) {
+            if (isset($data['receipt_path'])) {
+                Storage::disk('local')->delete($data['receipt_path']);
+            }
+            return response()->json(['status' => false, 'message' => collect($e->errors())->flatten()->first()], 422);
         } catch (RuntimeException $e) {
             if (isset($data['receipt_path'])) {
                 Storage::disk('local')->delete($data['receipt_path']);

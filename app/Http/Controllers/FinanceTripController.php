@@ -102,7 +102,7 @@ class FinanceTripController extends Controller
             'other' => 'nullable|numeric|min:0|max:9999999999',
             'movement_ids' => 'required|array|min:1',
             'movement_ids.*' => 'integer',
-            'company_account_id' => 'nullable|integer|exists:company_accounts,id',
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
             'notes' => 'nullable|string|max:500',
             'receipt' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
         ];

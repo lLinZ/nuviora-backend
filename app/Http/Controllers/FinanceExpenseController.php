@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\City;
-use App\Models\CompanyAccount;
+use App\Models\FinancialAccount;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
 use App\Models\FinancialAuditLog;
@@ -59,7 +59,10 @@ class FinanceExpenseController extends Controller
             'suppliers' => Supplier::orderBy('name')->get(['id', 'name', 'is_active']),
             'currencies' => Expense::CURRENCIES,
             // Compras y pagos a proveedores (entrega 2b): de qué cuenta salió el pago (opcional hasta la caja, entrega 3)
-            'company_accounts' => CompanyAccount::where('is_active', true)->orderBy('name')->get(['id', 'name', 'currency']),
+            // Las cuentas de la caja de donde sale un pago (entrega 3). El efectivo de las agencias no: se mueve con su liquidación
+            'financial_accounts' => FinancialAccount::where('is_active', true)->where('kind', '!=', FinancialAccount::AGENCY_CASH)
+                ->orderBy('name')->get(['id', 'name', 'currency', 'kind']),
+            'cash_start_date' => \App\Services\Finance\CashLedger::startDate(),
             'payment_types' => InventoryPurchase::PAYMENT_TYPES,
             // Viajes de traslado (entrega 2c, §15): la regla de desgaste vigente
             'vehicle_wear' => TransferTrips::wearRule() + ['label' => TransferTrips::wearLabel(TransferTrips::wearRule()['mode'], TransferTrips::wearRule()['value'])],

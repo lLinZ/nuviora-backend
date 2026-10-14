@@ -2,8 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AccountPayable;
+use App\Models\AgencyWeeklyClosure;
 use App\Models\CashMovement;
 use App\Models\CompanyAccount;
+use App\Models\Earning;
+use App\Models\User;
+use App\Services\Finance\AgencyCash;
 use App\Models\FinancialAccount;
 use App\Models\FinancialAuditLog;
 use App\Models\FinancialTransaction as Tx;
@@ -63,7 +68,7 @@ class FinanceCashController extends Controller
             'currencies' => FinancialAccount::CURRENCIES,
             'transaction_kinds' => Tx::KIND_LABEL,
             'statuses' => Tx::STATUS_LABEL,
-            'movement_kinds' => CashMovement::KIND_LABEL,
+            'movement_kinds' => array_intersect_key(CashMovement::KIND_LABEL, array_flip(CashMovement::MANUAL)),
         ]);
     }
 
@@ -215,7 +220,7 @@ class FinanceCashController extends Controller
     public function storeMovement(Request $request, CashMovements $movements): JsonResponse
     {
         $data = $request->validate([
-            'kind' => ['required', Rule::in(array_keys(CashMovement::KIND_LABEL))],
+            'kind' => ['required', Rule::in(CashMovement::MANUAL)],
             'occurred_on' => 'required|date|before_or_equal:today',
             'from_account_id' => 'nullable|integer|exists:financial_accounts,id',
             'from_amount' => 'nullable|numeric|min:0.01|max:9999999999',
@@ -253,6 +258,79 @@ class FinanceCashController extends Controller
         }
 
         return response()->json(['status' => true, 'message' => 'Movimiento anulado: ya no cuenta, pero queda en el historial.']);
+    }
+
+    /**
+     * §104: las agencias dentro de Finanzas. Por agencia: sus cierres (pendiente con el monto provisional; aprobado por
+     * pagar), el efectivo que tiene y lo que se le debe, aparte (§103: no se compensa solo).
+     */
+    public function agencies(CashLedger $ledger, AgencyCash $agencyCash): JsonResponse
+    {
+        $balances = $ledger->balances()->where('kind', FinancialAccount::AGENCY_CASH)->groupBy('agency_id');
+        $agencies = User::whereHas('role', fn ($q) => $q->where('description', 'Agencia'))->orderBy('names')->get(['id', 'names', 'color']);
+
+        return response()->json([
+            'agencies' => $agencies->map(function (User $agency) use ($balances, $agencyCash) {
+                $cash = collect($balances->get($agency->id) ?? [])->values();
+                $payables = AccountPayable::where('payee_type', 'agency')->where('agency_id', $agency->id)->whereNull('voided_at')
+                    ->orderByDesc('issued_at')->limit(20)->get();
+                $closures = AgencyWeeklyClosure::where('agency_id', $agency->id)->orderByDesc('period_start')->limit(6)->get();
+
+                return [
+                    'id' => $agency->id,
+                    'name' => $agency->names,
+                    'color' => $agency->color,
+                    'cash' => $cash->map(fn ($a) => ['account_id' => $a['id'], 'currency' => $a['currency'], 'balance' => $a['balance'],
+                        'balance_usd' => $a['balance_usd'], 'opening_balance' => $a['opening_balance']])->values(),
+                    'cash_usd' => round($cash->sum(fn ($a) => $a['balance_usd'] ?? 0), 2),
+                    'owed_usd' => round($agencyCash->openPayables($agency->id)->sum(fn (AccountPayable $p) => $p->balance()), 2),
+                    'payables' => $payables->map(fn (AccountPayable $p) => [
+                        'id' => $p->id, 'description' => $p->description, 'amount' => $p->amount, 'paid' => $p->paid_amount, 'balance' => $p->balance(),
+                        'issued_at' => $p->issued_at->toDateString(), 'status' => $p->status(), 'closure_id' => $p->source_type === AgencyCash::SOURCE_CLOSURE ? $p->source_id : null,
+                    ])->values(),
+                    'closures' => $closures->map(fn (AgencyWeeklyClosure $c) => [
+                        'id' => $c->id,
+                        'period_start' => $c->period_start->toDateString(),
+                        'period_end' => $c->period_end->toDateString(),
+                        'status' => $c->status,
+                        'status_label' => AgencyWeeklyClosure::STATUS_LABEL[$c->status] ?? $c->status,
+                        // §104: mientras no se apruebe, el monto provisional es lo que el sistema calcula de sus carreras
+                        'provisional' => round((float) ($c->expected_total ?? Earning::where('user_id', $agency->id)->where('role_type', 'agencia')
+                            ->whereBetween('earning_date', [$c->period_start->toDateString(), $c->period_end->toDateString()])->sum('amount_usd')), 2),
+                        'approved' => $c->final_approved_total,
+                        'paid_at' => $c->paid_at?->toDateString(),
+                        'payment_amount' => $c->payment_amount,
+                        'payment_method' => $c->payment_method,
+                    ])->values(),
+                ];
+            })->values(),
+        ]);
+    }
+
+    /** §43, §103 y R16: la agencia entrega el efectivo; si el Admin lo marca, una parte se descuenta de lo que se le debe. */
+    public function settle(Request $request, User $agency, AgencyCash $agencyCash): JsonResponse
+    {
+        abort_unless($agency->role?->description === 'Agencia', 404);
+        $data = $request->validate([
+            'currency' => ['required', Rule::in(['USD', 'VES'])],
+            'occurred_on' => 'required|date|before_or_equal:today',
+            'delivered' => 'nullable|numeric|min:0|max:9999999999',
+            'to_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'compensation' => 'nullable|numeric|min:0|max:9999999999',
+            'rate' => 'nullable|numeric|min:0.0001|max:99999999',
+            'reference' => 'nullable|string|max:120',
+            'notes' => 'nullable|string|max:500',
+            'receipt' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+        ], ['occurred_on.before_or_equal' => 'La fecha no puede ser futura.']);
+        try {
+            $agencyCash->settle($agency->id, $data['currency'], $data, $request->file('receipt'), Auth::id());
+        } catch (RuntimeException $e) {
+            return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['status' => false, 'message' => collect($e->errors())->flatten()->first()], 422);
+        }
+
+        return response()->json(['status' => true, 'message' => 'Liquidación registrada.']);
     }
 
     public function movementReceipt(CashMovement $movement)

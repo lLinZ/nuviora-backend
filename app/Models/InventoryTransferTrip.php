@@ -16,7 +16,7 @@ class InventoryTransferTrip extends Model
 {
     protected $fillable = [
         'trip_date', 'description', 'currency', 'rate', 'labor', 'fuel', 'other', 'wear', 'total', 'total_usd', 'wear_mode', 'wear_value',
-        'units', 'unit_cost_usd', 'company_account_id', 'receipt_path', 'notes', 'voided_at', 'voided_by', 'void_reason', 'created_by',
+        'units', 'unit_cost_usd', 'company_account_id', 'financial_account_id', 'receipt_path', 'notes', 'voided_at', 'voided_by', 'void_reason', 'created_by',
     ];
 
     protected $casts = [
@@ -39,9 +39,10 @@ class InventoryTransferTrip extends Model
         return $this->hasMany(InventoryMovement::class, 'trip_id');
     }
 
+    /** La cuenta de la caja de donde se pagó el viaje (entrega 3). */
     public function account(): BelongsTo
     {
-        return $this->belongsTo(CompanyAccount::class, 'company_account_id');
+        return $this->belongsTo(FinancialAccount::class, 'financial_account_id');
     }
 
     public function creator(): BelongsTo
@@ -98,7 +99,7 @@ class InventoryTransferTrip extends Model
             'wear_label' => TransferTrips::wearLabel($this->wear_mode, $this->wear_value),
             'units' => $this->units,
             'unit_cost_usd' => $this->unit_cost_usd,
-            'company_account_id' => $this->company_account_id,
+            'financial_account_id' => $this->financial_account_id,
             'account' => $this->account?->name,
             'notes' => $this->notes,
             'has_receipt' => $this->receipt_path !== null,

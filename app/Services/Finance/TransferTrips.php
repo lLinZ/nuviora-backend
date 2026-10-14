@@ -98,7 +98,7 @@ class TransferTrips
 
     /**
      * @param array{trip_date: string, description?: ?string, currency: string, rate?: float|string|null, labor?: float|string|null,
-     *              fuel?: float|string|null, other?: float|string|null, movement_ids: int[], company_account_id?: ?int, notes?: ?string} $data
+     *              fuel?: float|string|null, other?: float|string|null, movement_ids: int[], financial_account_id?: ?int, notes?: ?string} $data
      */
     public function create(array $data, ?UploadedFile $receipt = null): InventoryTransferTrip
     {
@@ -213,7 +213,7 @@ class TransferTrips
             'other' => $other,
             'units' => $units,
             'unit_cost_usd' => $units > 0 ? round($totals['total_usd'] / $units, 4) : 0,
-            'company_account_id' => $data['company_account_id'] ?? null,
+            'financial_account_id' => $data['financial_account_id'] ?? null,
             'notes' => $data['notes'] ?? null,
         ] + $totals;
     }

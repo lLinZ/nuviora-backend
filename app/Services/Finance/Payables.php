@@ -4,6 +4,7 @@ namespace App\Services\Finance;
 
 use App\Models\AccountPayable;
 use App\Models\Expense;
+use App\Models\FinancialAccount;
 use App\Models\FinancialAuditLog;
 use App\Models\PayablePayment;
 use Illuminate\Http\UploadedFile;
@@ -21,15 +22,20 @@ class Payables
 {
     /**
      * @param array{amount: float|string, currency: string, rate?: float|string|null, paid_at?: string|null,
-     *              company_account_id?: int|null, notes?: string|null} $data
+     *              financial_account_id?: int|null, cash_movement_id?: int|null, receipt_path?: string|null, notes?: string|null} $data
      */
     public function pay(AccountPayable $payable, array $data, ?UploadedFile $receipt = null): PayablePayment
     {
         return DB::transaction(function () use ($payable, $data, $receipt) {
             $payable = AccountPayable::whereKey($payable->id)->lockForUpdate()->firstOrFail();
+            if ($payable->voided_at) {
+                throw ValidationException::withMessages(['payable' => 'Esa deuda está anulada.']);
+            }
             $amount = round((float) $data['amount'], 2);
             $currency = $data['currency'];
             $usd = Expense::toUsd($amount, $currency, isset($data['rate']) ? (float) $data['rate'] : null);
+            $paidAt = Carbon::parse($data['paid_at'] ?? today())->toDateString();
+            $this->checkAccount($data['financial_account_id'] ?? null, $currency, $paidAt);
 
             if ($payable->currency === 'VES' && $currency !== 'VES') {
                 throw ValidationException::withMessages(['currency' => 'Esta deuda está en bolívares: el pago también va en bolívares.']);
@@ -48,9 +54,10 @@ class Payables
                 'rate' => $usd['rate'],
                 'amount_usd' => $usd['amount_usd'],
                 'applied_amount' => round($applied, 2),
-                'paid_at' => Carbon::parse($data['paid_at'] ?? today())->toDateString(),
-                'company_account_id' => $data['company_account_id'] ?? null,
-                'receipt_path' => $receipt?->store('payables', 'local'),
+                'paid_at' => $paidAt,
+                'financial_account_id' => $data['financial_account_id'] ?? null,
+                'cash_movement_id' => $data['cash_movement_id'] ?? null,
+                'receipt_path' => $receipt?->store('payables', 'local') ?? ($data['receipt_path'] ?? null),
                 'notes' => $data['notes'] ?? null,
                 'created_by' => auth()->id(),
             ]);
@@ -78,6 +85,32 @@ class Payables
 
             return $payment->fresh();
         });
+    }
+
+    /**
+     * Entrega 3: el pago sale de una cuenta de la caja en su misma moneda (USD y USDT valen igual, §33). Desde el arranque
+     * de la caja la cuenta es obligatoria: si no, el dinero salió sin que la caja lo sepa. Lo de antes ya está en los saldos
+     * iniciales.
+     */
+    private function checkAccount(?int $accountId, string $currency, string $paidAt): void
+    {
+        if (!$accountId) {
+            if ($paidAt > CashLedger::startDate()) {
+                throw ValidationException::withMessages(['financial_account_id' => 'Elige la cuenta de donde salió el pago.']);
+            }
+            return;
+        }
+        $account = FinancialAccount::find($accountId);
+        $family = fn (string $c) => in_array($c, ['USD', 'USDT'], true) ? 'USD' : $c;
+        if (!$account || !$account->is_active) {
+            throw ValidationException::withMessages(['financial_account_id' => 'Esa cuenta no existe o está inactiva.']);
+        }
+        if ($family($account->currency) !== $family($currency)) {
+            throw ValidationException::withMessages(['financial_account_id' => "La cuenta {$account->name} es en {$account->currency}: el pago tiene que ir en esa moneda."]);
+        }
+        if ($paidAt <= $account->opening_date->toDateString()) {
+            throw ValidationException::withMessages(['paid_at' => "La fecha tiene que ser después del saldo inicial de {$account->name}."]);
+        }
     }
 
     /** Lo pagado es la suma de los pagos que no están anulados. */

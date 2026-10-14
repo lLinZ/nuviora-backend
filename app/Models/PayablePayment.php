@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PayablePayment extends Model
 {
     protected $fillable = [
-        'account_payable_id', 'amount', 'currency', 'rate', 'amount_usd', 'applied_amount', 'paid_at', 'company_account_id',
+        'account_payable_id', 'amount', 'currency', 'rate', 'amount_usd', 'applied_amount', 'paid_at', 'company_account_id', 'financial_account_id', 'cash_movement_id',
         'receipt_path', 'notes', 'voided_at', 'voided_by', 'void_reason', 'created_by',
     ];
 
@@ -30,9 +30,10 @@ class PayablePayment extends Model
         return $this->belongsTo(AccountPayable::class, 'account_payable_id');
     }
 
+    /** La cuenta de la caja de donde salió (entrega 3). En una compensación, el efectivo de la agencia (R16). */
     public function account(): BelongsTo
     {
-        return $this->belongsTo(CompanyAccount::class, 'company_account_id');
+        return $this->belongsTo(FinancialAccount::class, 'financial_account_id');
     }
 
     public function creator(): BelongsTo
@@ -70,8 +71,9 @@ class PayablePayment extends Model
             'amount_usd' => $this->amount_usd,
             'applied_amount' => $this->applied_amount,
             'paid_at' => $this->paid_at?->format('Y-m-d'),
-            'company_account_id' => $this->company_account_id,
+            'financial_account_id' => $this->financial_account_id,
             'account' => $this->account?->name,
+            'cash_movement_id' => $this->cash_movement_id,
             'notes' => $this->notes,
             'has_receipt' => $this->receipt_path !== null,
             'voided_at' => $this->voided_at?->format('Y-m-d H:i'),

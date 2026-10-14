@@ -24,6 +24,11 @@ class FinancialTransaction extends Model
     public const EXCHANGE_IN = 'exchange_in';
     public const EXCHANGE_FEE = 'exchange_fee';
     public const ADJUSTMENT = 'adjustment';
+    // Pagos (entrega 3c y 3d)
+    public const PAYABLE_PAYMENT = 'payable_payment';           // pago de una deuda: proveedor, agencia… (§17, §102)
+    public const TRIP_PAYMENT = 'trip_payment';                 // lo pagado de un viaje de traslado (§13)
+    public const AGENCY_SETTLEMENT_OUT = 'agency_settlement_out'; // liquidación de efectivo: sale de la agencia (§43)
+    public const AGENCY_SETTLEMENT_IN = 'agency_settlement_in';   // …y entra a la cuenta donde se guarda
 
     public const KIND_LABEL = [
         self::CUSTOMER_PAYMENT => 'Pago de cliente',
@@ -38,10 +43,14 @@ class FinancialTransaction extends Model
         self::EXCHANGE_IN => 'Cambio de moneda (entra)',
         self::EXCHANGE_FEE => 'Comisión del cambio',
         self::ADJUSTMENT => 'Ajuste de saldo',
+        self::PAYABLE_PAYMENT => 'Pago de una deuda',
+        self::TRIP_PAYMENT => 'Viaje de traslado',
+        self::AGENCY_SETTLEMENT_OUT => 'Liquidación de efectivo (sale de la agencia)',
+        self::AGENCY_SETTLEMENT_IN => 'Liquidación de efectivo (entra)',
     ];
 
     /** Movimientos entre cuentas de la empresa: no son entradas ni salidas del negocio (§39, §41). */
-    public const INTERNAL = [self::TRANSFER_OUT, self::TRANSFER_IN, self::EXCHANGE_OUT, self::EXCHANGE_IN];
+    public const INTERNAL = [self::TRANSFER_OUT, self::TRANSFER_IN, self::EXCHANGE_OUT, self::EXCHANGE_IN, self::AGENCY_SETTLEMENT_OUT, self::AGENCY_SETTLEMENT_IN];
 
     // Estados (§75)
     public const CONFIRMED = 'confirmed';

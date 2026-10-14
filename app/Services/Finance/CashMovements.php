@@ -114,6 +114,9 @@ class CashMovements
         }
         DB::transaction(function () use ($movement, $reason, $userId) {
             $movement->update(['voided_at' => now(), 'voided_by' => $userId, 'void_reason' => $reason]);
+            if ($movement->kind === CashMovement::AGENCY_SETTLEMENT) {
+                app(AgencyCash::class)->undoCompensations($movement, $reason, $userId);
+            }
             Expense::where('cash_movement_id', $movement->id)->whereNull('voided_at')
                 ->update(['voided_at' => now(), 'voided_by' => $userId, 'void_reason' => "Se anuló el movimiento de caja: {$reason}"]);
             $this->ledger->syncCashMovement($movement);
