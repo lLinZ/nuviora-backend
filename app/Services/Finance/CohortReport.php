@@ -30,7 +30,7 @@ class CohortReport
         $sums = "SUM(kind = 'normal') AS created, SUM(kind = 'normal' AND outcome = 'delivered') AS delivered,
             SUM(kind = 'normal' AND outcome = 'not_delivered') AS not_delivered, SUM(kind = 'normal' AND outcome = 'open') AS open,
             SUM(revenue_main + revenue_upsell - revenue_refunded) AS revenue,
-            SUM(cogs_main + cogs_upsell + delivery_cost + commission_deliverer + commission_seller + commission_upsell + commission_leader) AS variable";
+            SUM(cogs_main + cogs_upsell + logistics_cost + delivery_cost + commission_deliverer + commission_seller + commission_upsell + commission_leader) AS variable";
 
         $spend = [];
         foreach ($this->meta->dailySpend($from->toDateString(), $to->toDateString(), ['product', 'city']) as $s) {

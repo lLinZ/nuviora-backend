@@ -7,6 +7,7 @@ use App\Models\FinancialAuditLog;
 use App\Models\InventoryPurchase;
 use App\Models\PayablePayment;
 use App\Models\Supplier;
+use App\Services\Finance\InventoryPurchases;
 use App\Services\Finance\Payables;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -172,6 +173,22 @@ class FinanceSupplierController extends Controller
         abort_unless($payment->receipt_path && Storage::disk('local')->exists($payment->receipt_path), 404, 'El comprobante ya no está.');
 
         return Storage::disk('local')->download($payment->receipt_path, "pago-{$payment->id}." . pathinfo($payment->receipt_path, PATHINFO_EXTENSION));
+    }
+
+    /** Corregir el costo de una compra (entrega 2e, §83): cambia sus lotes y su deuda, con motivo. */
+    public function correctPurchase(Request $request, InventoryPurchase $purchase, InventoryPurchases $purchases): JsonResponse
+    {
+        $data = $request->validate([
+            'total_amount' => 'required|numeric|min:0.01|max:9999999999',
+            'currency' => 'required|in:USD,USDT,VES',
+            'rate' => 'nullable|required_if:currency,VES|numeric|min:0.0001',
+            'reason' => 'required|string|max:500',
+        ], self::MESSAGES + ['total_amount.required' => 'Escribe el costo total correcto de la compra.', 'reason.required' => 'Escribe el motivo de la corrección.']);
+        $fixed = $purchases->correct($purchase, $data, $data['reason']);
+        $unit = number_format($fixed->unit_cost_usd, 2, ',', '.');
+
+        return response()->json(['message' => "Compra corregida: \${$unit} por unidad. Las órdenes que vendieron esas unidades se recalculan en un minuto.",
+            'purchase' => $fixed->toPayload()]);
     }
 
     /** El comprobante de una compra (§9, opcional): se sube después del ingreso. El anterior no se borra (§83). */

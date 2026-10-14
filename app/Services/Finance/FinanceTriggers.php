@@ -7,6 +7,7 @@ use App\Models\AgencyClosureRow;
 use App\Models\AgencyTrip;
 use App\Models\AgencyWeeklyClosure;
 use App\Models\Earning;
+use App\Models\InventoryLot;
 use App\Models\LeaderCommission;
 use App\Models\Order;
 use App\Models\OrderDeliveryRoute;
@@ -54,6 +55,16 @@ class FinanceTriggers
             if ($closure->wasChanged('status')) {
                 self::safely(fn () => OrderEconomics::markStaleWhere(DB::table('agency_closure_rows')
                     ->where('closure_id', $closure->id)->whereNotNull('matched_order_id')->select('matched_order_id')));
+            }
+        });
+
+        // Entrega 2e: el costo de un lote (completado, corregido o de una compra corregida) cambia el de las órdenes que
+        // tomaron unidades de ese lote
+        InventoryLot::saved(function (InventoryLot $lot) {
+            if ($lot->wasChanged('unit_cost_usd')) {
+                self::safely(fn () => OrderEconomics::markStaleWhere(DB::table('inventory_lot_allocations as a')
+                    ->join('inventory_lot_layers as l', 'l.id', '=', 'a.layer_id')->where('l.lot_id', $lot->id)
+                    ->where('a.reference_type', 'Order')->whereNotNull('a.reference_id')->select('a.reference_id')));
             }
         });
 

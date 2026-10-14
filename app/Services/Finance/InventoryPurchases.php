@@ -5,6 +5,7 @@ namespace App\Services\Finance;
 use App\Models\AccountPayable;
 use App\Models\Expense;
 use App\Models\FinancialAuditLog;
+use App\Models\InventoryLot;
 use App\Models\InventoryPurchase;
 use App\Models\Product;
 use App\Models\Supplier;
@@ -98,6 +99,54 @@ class InventoryPurchases
             }
 
             FinancialAuditLog::record('inventory_purchase_created', 'inventory_purchase', $purchase->id, null, $purchase->fresh()->snapshot());
+
+            return $purchase->fresh(['supplier', 'product', 'warehouse']);
+        });
+    }
+
+    /**
+     * Corregir el costo de una compra ya registrada (§83: con motivo y en la auditoría). Las unidades no cambian. Cambian
+     * el costo unitario de sus lotes (y con eso el de las órdenes que ya los vendieron) y la deuda: al contado, también
+     * el pago con que nació pagada. No se acepta si ya se pagó más que el costo nuevo, ni cambiar la moneda con pagos.
+     *
+     * @param array{total_amount: float|string, currency: string, rate?: float|string|null} $data
+     */
+    public function correct(InventoryPurchase $purchase, array $data, string $reason): InventoryPurchase
+    {
+        return DB::transaction(function () use ($purchase, $data, $reason) {
+            $before = $purchase->fresh(['supplier', 'product', 'warehouse'])->snapshot();
+            $total = round((float) $data['total_amount'], 2);
+            $usd = Expense::toUsd($total, $data['currency'], isset($data['rate']) ? (float) $data['rate'] : null);
+            $payable = AccountPayable::where('source_type', AccountPayable::SOURCE_PURCHASE)->where('source_id', $purchase->id)->lockForUpdate()->first();
+
+            if ($payable) {
+                $payments = $payable->payments()->whereNull('voided_at')->get();
+                $cashPayment = $purchase->payment_type === 'cash' && $payments->count() === 1 ? $payments->first() : null;
+                if ($cashPayment) {
+                    // Al contado: el pago con que nació pagada pasa a ser por el costo nuevo
+                    $cashPayment->update(['amount' => $total, 'currency' => $data['currency'], 'rate' => $usd['rate'], 'amount_usd' => $usd['amount_usd'],
+                        'applied_amount' => $data['currency'] === 'VES' ? $total : $usd['amount_usd']]);
+                } else {
+                    if ($payments->isNotEmpty() && $data['currency'] !== $payable->currency) {
+                        throw ValidationException::withMessages(['currency' => 'Esta compra ya tiene pagos: la moneda no se puede cambiar. Corrige solo el monto.']);
+                    }
+                    if (round($payable->paid_amount, 2) > $total + 0.005) {
+                        throw ValidationException::withMessages(['total_amount' => 'Ya se pagó más que ese costo. Anula primero el pago que sobra en Finanzas › Proveedores.']);
+                    }
+                }
+                $payable->update(['currency' => $data['currency'], 'amount' => $total, 'rate' => $usd['rate'], 'amount_usd' => $usd['amount_usd']]);
+                $this->payables->recalculate($payable);
+            }
+
+            $unit = round($usd['amount_usd'] / max(1, $purchase->quantity), 4);
+            $purchase->update(['total_amount' => $total, 'currency' => $data['currency'], 'rate' => $usd['rate'], 'total_usd' => $usd['amount_usd'],
+                'unit_cost_usd' => $unit]);
+            // Cada lote se guarda por su cuenta: así FinanceTriggers marca las órdenes que vendieron unidades de él
+            foreach (InventoryLot::where('purchase_id', $purchase->id)->get() as $lot) {
+                $lot->update(['unit_cost_usd' => $unit, 'cost_source' => 'purchase']);
+            }
+            FinancialAuditLog::record('inventory_purchase_corrected', 'inventory_purchase', $purchase->id, $before,
+                $purchase->fresh(['supplier', 'product', 'warehouse'])->snapshot(), $reason);
 
             return $purchase->fresh(['supplier', 'product', 'warehouse']);
         });

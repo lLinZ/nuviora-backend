@@ -18,6 +18,11 @@ class OrderFinancial extends Model
     public const KIND_EXCHANGE = 'exchange';
     public const KIND_RETURN = 'return';
 
+    /** De dónde sale el costo del producto (entrega 2e): de sus lotes, del catálogo (provisional) o de ambos. */
+    public const COGS_LOTS = 'lots';
+    public const COGS_CATALOG = 'catalog';
+    public const COGS_MIXED = 'mixed';
+
     public $timestamps = false;
 
     protected $guarded = ['id'];
@@ -31,6 +36,7 @@ class OrderFinancial extends Model
         'revenue_refunded' => 'float',
         'cogs_main' => 'float',
         'cogs_upsell' => 'float',
+        'logistics_cost' => 'float',
         'cogs_is_provisional' => 'boolean',
         'delivery_cost' => 'float',
         'delivery_legacy_cost' => 'float',
@@ -56,7 +62,7 @@ class OrderFinancial extends Model
     /** Todo lo que costó la orden, entregada o no (§5). */
     public function totalCost(): float
     {
-        return round($this->cogs_main + $this->cogs_upsell + $this->delivery_cost + $this->commission_seller
+        return round($this->cogs_main + $this->cogs_upsell + $this->logistics_cost + $this->delivery_cost + $this->commission_seller
             + $this->commission_upsell + $this->commission_leader + $this->commission_deliverer, 2);
     }
 }

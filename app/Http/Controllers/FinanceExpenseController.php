@@ -282,7 +282,7 @@ class FinanceExpenseController extends Controller
     /** El historial de un gasto o un recurrente (§82). */
     public function audit(Request $request): JsonResponse
     {
-        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase', 'inventory_trip'])],
+        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase', 'inventory_trip', 'inventory_lot'])],
             'subject_id' => 'required|integer']);
 
         return response()->json([

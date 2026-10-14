@@ -197,31 +197,40 @@ class LotLedger
         $limit = now()->subSeconds($lagSeconds);
         $last = self::lastProcessedId();
         $done = 0;
+        $orders = [];
 
-        while (microtime(true) - $started < $maxSeconds) {
-            $batch = InventoryMovement::where('id', '>', $last)->orderBy('id')->limit(200)->get();
-            if ($batch->isEmpty()) {
-                break;
-            }
-            foreach ($batch as $movement) {
-                if ($lagSeconds > 0 && $movement->created_at && $movement->created_at->gt($limit)) {
-                    return $done;
+        try {
+            while (microtime(true) - $started < $maxSeconds) {
+                $batch = InventoryMovement::where('id', '>', $last)->orderBy('id')->limit(200)->get();
+                if ($batch->isEmpty()) {
+                    break;
                 }
-                DB::transaction(function () use ($movement) {
-                    if ($movement->status === 'completed') {
-                        $this->apply($movement);
+                foreach ($batch as $movement) {
+                    if ($lagSeconds > 0 && $movement->created_at && $movement->created_at->gt($limit)) {
+                        return $done;
                     }
-                    Setting::set(self::LAST_KEY, $movement->id);
-                });
-                $last = $movement->id;
-                $done++;
-                if (microtime(true) - $started >= $maxSeconds) {
-                    return $done;
+                    DB::transaction(function () use ($movement) {
+                        if ($movement->status === 'completed') {
+                            $this->apply($movement);
+                        }
+                        Setting::set(self::LAST_KEY, $movement->id);
+                    });
+                    if ($movement->reference_type === OrderStock::REFERENCE && $movement->reference_id) {
+                        $orders[] = (int) $movement->reference_id;
+                    }
+                    $last = $movement->id;
+                    $done++;
+                    if (microtime(true) - $started >= $maxSeconds) {
+                        return $done;
+                    }
                 }
             }
-        }
 
-        return $done;
+            return $done;
+        } finally {
+            // Las órdenes que tomaron o devolvieron lotes cambian de costo (entrega 2e): se recalculan
+            OrderEconomics::markStale($orders);
+        }
     }
 
     /**
@@ -240,8 +249,12 @@ class LotLedger
             DB::table('inventory_lot_layers')->update(['quantity' => DB::raw('opening_quantity')]);
             Setting::set(self::LAST_KEY, (int) Setting::get(self::CUTOFF_KEY));
         });
+        $done = $this->process(0, $maxSeconds);
+        // Todas las órdenes con lotes pueden haber cambiado de capas
+        OrderEconomics::markStaleWhere(DB::table('inventory_lot_allocations')->where('reference_type', OrderStock::REFERENCE)
+            ->whereNotNull('reference_id')->select('reference_id'));
 
-        return $this->process(0, $maxSeconds);
+        return $done;
     }
 
     /**
@@ -301,7 +314,7 @@ class LotLedger
         $tripCost = InventoryTransferTrip::whereNull('voided_at')->pluck('unit_cost_usd', 'id');
         $movementTrip = InventoryMovement::whereNotNull('trip_id')->where('movement_type', 'transfer')->pluck('trip_id', 'id');
         $landed = [];
-        $changed = 0;
+        $changed = [];
         InventoryLotLayer::select('id', 'parent_layer_id', 'created_by_movement_id', 'landed_cost_per_unit')
             ->chunkById(2000, function ($layers) use ($tripCost, $movementTrip, &$landed, &$changed) {
                 foreach ($layers as $layer) {
@@ -315,12 +328,17 @@ class LotLedger
                     $landed[$layer->id] = $value;
                     if (abs($value - (float) $layer->landed_cost_per_unit) > 0.00005) {
                         DB::table('inventory_lot_layers')->where('id', $layer->id)->update(['landed_cost_per_unit' => $value, 'updated_at' => now()]);
-                        $changed++;
+                        $changed[] = $layer->id;
                     }
                 }
             });
+        // Las órdenes que tomaron unidades de esas capas cambian de logística (entrega 2e)
+        foreach (array_chunk($changed, 1000) as $ids) {
+            OrderEconomics::markStaleWhere(DB::table('inventory_lot_allocations')->where('reference_type', OrderStock::REFERENCE)
+                ->whereIn('layer_id', $ids)->whereNotNull('reference_id')->select('reference_id'));
+        }
 
-        return $changed;
+        return count($changed);
     }
 
     /** Lo que una orden tiene fuera, por capa (las unidades sin lote van con layer_id vacío). */

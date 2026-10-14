@@ -5,6 +5,7 @@ namespace App\Services\Finance;
 use App\Constants\OrderStatus;
 use App\Models\AgencyClosureRow;
 use App\Models\AgencyWeeklyClosure;
+use App\Models\InventoryLot;
 use App\Models\OrderDeliveryRoute;
 use App\Models\OrderFinancial;
 use App\Models\Setting;
@@ -20,9 +21,11 @@ use Illuminate\Support\Facades\DB;
  *   estado no pasó por el observer.
  * - Ingreso (§4, R1): solo si se entregó, el total en USD de la orden; el upsell aparte (§7). Una devolución anula el
  *   ingreso de la original (R3): los reembolsos (orders.refunded_usd) y las órdenes de devolución antiguas entregadas.
- * - Costo del producto (§9, R5): cantidad × products.cost_usd de lo entregado, PROVISIONAL hasta que haya lotes. Un
- *   cambio carga la pieza que sale (la que vuelve queda para revisión, R3); una devolución no, porque el producto se
- *   quedó con el cliente.
+ * - Costo del producto (§9, §11, R5; entrega 2e): el de los lotes de lo que la orden sacó del inventario (FIFO, lo
+ *   asigna LotLedger), y su logística atribuible, la parte de los viajes de traslado de esas unidades (§14). Lo que no
+ *   tiene lote (salió antes del corte, o sin stock) va a products.cost_usd y queda PROVISIONAL (cogs_source catalog o
+ *   mixed). Un cambio carga la pieza que sale (la que vuelve queda para revisión, R3); una devolución no, porque el
+ *   producto se quedó con el cliente.
  * - Delivery (§5, §18, §19): todas las carreras no anuladas, entregada o no. El costo aprobado en un cierre listo para
  *   pago o pagado; si no, el esperado de su ruta si está calculada; si no, 0 y se cuenta como "sin costo". Antes del
  *   Módulo 3 no había carreras: se toma lo que se le pagaba a la agencia por esa orden (earnings "agencia").
@@ -152,7 +155,8 @@ class OrderEconomics
 
         $lines = DB::table('order_products as op')->leftJoin('products as p', 'p.id', '=', 'op.product_id')
             ->whereIn('op.order_id', $ids)->orderBy('op.id')
-            ->get(['op.order_id', 'op.product_id', 'op.price', 'op.quantity', 'op.is_upsell', 'p.cost_usd'])->groupBy('order_id');
+            ->get(['op.order_id', 'op.product_id', 'op.variant_id', 'op.price', 'op.quantity', 'op.is_upsell', 'p.cost_usd'])->groupBy('order_id');
+        $held = $this->heldUnits($ids);
 
         $trips = DB::table('agency_trips as t')->leftJoin('order_delivery_routes as r', 'r.id', '=', 't.delivery_route_id')
             ->whereIn('t.order_id', $ids)->whereNull('t.voided_at')
@@ -181,8 +185,8 @@ class OrderEconomics
         $rows = [];
         foreach ($orders as $o) {
             $o->delivered_at = $this->repairDeliveredAt($o, $st['delivered']);
-            $rows[] = $this->economics($o, $lines->get($o->id, collect()), $trips->get($o->id, collect()), $approved,
-                $earnings->get($o->id, collect()), $tripEarningIds, (float) ($leader[$o->id] ?? 0), isset($returned[$o->id]), $st);
+            $rows[] = $this->economics($o, $lines->get($o->id, collect()), $held->get($o->id, collect()), $trips->get($o->id, collect()),
+                $approved, $earnings->get($o->id, collect()), $tripEarningIds, (float) ($leader[$o->id] ?? 0), isset($returned[$o->id]), $st);
         }
         DB::table('order_financials')->upsert($rows, ['order_id'], array_values(array_diff(array_keys($rows[0]), ['order_id'])));
         $this->auditMatureChanges($previous, $rows);
@@ -191,8 +195,8 @@ class OrderEconomics
         return count($rows);
     }
 
-    private function economics(object $o, Collection $lines, Collection $trips, Collection $approved, Collection $earnings,
-        array $tripEarningIds, float $leader, bool $hasDeliveredReturn, array $st): array
+    private function economics(object $o, Collection $lines, Collection $held, Collection $trips, Collection $approved,
+        Collection $earnings, array $tripEarningIds, float $leader, bool $hasDeliveredReturn, array $st): array
     {
         $outcome = match ((int) $o->status_id) {
             $st['delivered'] => OrderFinancial::DELIVERED,
@@ -212,17 +216,8 @@ class OrderEconomics
         $revenueMain = $delivered ? round($total - $revenueUpsell, 2) : 0.0;
         $refunded = $delivered ? round(min($total, $hasDeliveredReturn ? $total : (float) $o->refunded_usd), 2) : 0.0;
 
-        $cogs = ['main' => 0.0, 'upsell' => 0.0];
-        $missing = 0;
-        if ($delivered && $kind !== OrderFinancial::KIND_RETURN) {
-            foreach ($lines as $l) {
-                if ($l->cost_usd === null || (float) $l->cost_usd <= 0) {
-                    $missing++;
-                    continue;
-                }
-                $cogs[$l->is_upsell ? 'upsell' : 'main'] += (float) $l->cost_usd * (int) $l->quantity;
-            }
-        }
+        $cogs = $delivered && $kind !== OrderFinancial::KIND_RETURN ? $this->goodsCost($lines, $held)
+            : ['main' => 0.0, 'upsell' => 0.0, 'logistics' => 0.0, 'missing' => 0, 'source' => null, 'provisional' => false];
 
         $delivery = 0.0;
         $final = 0;
@@ -266,8 +261,10 @@ class OrderEconomics
             'revenue_refunded' => $refunded,
             'cogs_main' => round($cogs['main'], 2),
             'cogs_upsell' => round($cogs['upsell'], 2),
-            'cogs_is_provisional' => true, // hasta la entrega 2 (lotes y FIFO)
-            'cogs_missing_lines' => $missing,
+            'logistics_cost' => round($cogs['logistics'], 2),
+            'cogs_is_provisional' => $cogs['provisional'],
+            'cogs_source' => $cogs['source'],
+            'cogs_missing_lines' => $cogs['missing'],
             'delivery_cost' => round($delivery + $legacy, 2),
             'delivery_trips' => $trips->count() + $legacyTrips,
             'delivery_final_trips' => $final + $legacyTrips, // lo pagado antes del Módulo 3 también es definitivo
@@ -279,6 +276,110 @@ class OrderEconomics
             'commission_deliverer' => $sum('repartidor'),
             'computed_at' => now(),
         ];
+    }
+
+    /**
+     * Lo que cada orden tiene fuera del inventario por lotes, por capa: unidades, costo del lote y logística de la capa.
+     * Las unidades que salieron sin lote vienen con layer_id vacío.
+     *
+     * @param int[] $ids
+     * @return Collection<int, Collection<int, object>> por order_id
+     */
+    private function heldUnits(array $ids): Collection
+    {
+        return DB::table('inventory_lot_allocations as a')
+            ->leftJoin('inventory_lot_layers as l', 'l.id', '=', 'a.layer_id')
+            ->leftJoin('inventory_lots as lot', 'lot.id', '=', 'l.lot_id')
+            ->where('a.reference_type', 'Order')->whereIn('a.reference_id', $ids)
+            ->groupBy('a.reference_id', 'a.product_id', 'a.variant_id', 'a.layer_id')
+            ->havingRaw('SUM(a.quantity) < 0')
+            ->selectRaw('a.reference_id AS order_id, a.product_id, a.variant_id, a.layer_id, -SUM(a.quantity) AS units,
+                MAX(lot.unit_cost_usd) AS unit_cost, MAX(l.landed_cost_per_unit) AS landed, MAX(lot.kind) AS lot_kind')
+            ->get()->groupBy('order_id');
+    }
+
+    /**
+     * §9, §11, §14: el costo de lo entregado y su logística. Por producto y variante, las unidades de la orden se reparten
+     * entre sus líneas (primero las de su misma variante): cada una lleva el costo promedio de sus lotes y su logística.
+     * Lo que no alcanza a tener lote con costo va a products.cost_usd (provisional); si tampoco hay, la línea queda "sin
+     * costo". Los lotes "por completar" (pending_cost) tienen el costo de catálogo: también son provisionales.
+     *
+     * @return array{main: float, upsell: float, logistics: float, missing: int, source: ?string, provisional: bool}
+     */
+    private function goodsCost(Collection $lines, Collection $held): array
+    {
+        // Lo que tiene la orden, por producto y variante
+        $pool = [];
+        foreach ($held as $h) {
+            $p = &$pool[(int) $h->product_id][(int) ($h->variant_id ?? 0)];
+            $p ??= ['units' => 0.0, 'costed' => 0.0, 'cost' => 0.0, 'logistics' => 0.0, 'pending' => 0.0];
+            $units = (float) $h->units;
+            $p['units'] += $units;
+            if ($h->layer_id !== null && $h->unit_cost !== null) {
+                $p['costed'] += $units;
+                $p['cost'] += $units * (float) $h->unit_cost;
+                if ($h->lot_kind === InventoryLot::KIND_PENDING_COST) {
+                    $p['pending'] += $units;
+                }
+            }
+            $p['logistics'] += $units * (float) ($h->landed ?? 0);
+            unset($p);
+        }
+
+        $out = ['main' => 0.0, 'upsell' => 0.0, 'logistics' => 0.0, 'missing' => 0, 'source' => null, 'provisional' => false];
+        $fromLots = 0.0;
+        $fromCatalog = 0.0;
+        foreach ($lines as $l) {
+            $need = (float) (int) $l->quantity;
+            if ($need <= 0) {
+                continue;
+            }
+            $productId = (int) $l->product_id;
+            $variant = (int) ($l->variant_id ?? 0);
+            $cost = 0.0;
+            $costed = 0.0;
+            // Primero de su variante; después, de lo demás de ese producto
+            foreach (array_unique(array_merge([$variant], array_keys($pool[$productId] ?? []))) as $v) {
+                if ($need <= 0 || ($pool[$productId][$v]['units'] ?? 0) <= 0) {
+                    continue;
+                }
+                $p = &$pool[$productId][$v];
+                $take = min($need, $p['units']);
+                $f = $take / $p['units'];
+                $cost += $p['cost'] * $f;
+                $costed += $p['costed'] * $f;
+                $out['logistics'] += $p['logistics'] * $f;
+                if ($p['pending'] * $f > 0) {
+                    $out['provisional'] = true;
+                }
+                foreach (['costed', 'cost', 'logistics', 'pending'] as $k) {
+                    $p[$k] -= $p[$k] * $f;
+                }
+                $p['units'] -= $take;
+                $need -= $take;
+                unset($p);
+            }
+            // Lo que no tiene lote con costo: el costo de catálogo, provisional
+            $withoutLotCost = (float) (int) $l->quantity - $costed;
+            if ($withoutLotCost > 0.0001) {
+                if ($l->cost_usd !== null && (float) $l->cost_usd > 0) {
+                    $cost += $withoutLotCost * (float) $l->cost_usd;
+                    $fromCatalog += $withoutLotCost;
+                } else {
+                    $out['missing']++;
+                }
+                $out['provisional'] = true;
+            }
+            $fromLots += $costed;
+            $out[$l->is_upsell ? 'upsell' : 'main'] += $cost;
+        }
+        $out['source'] = match (true) {
+            $fromLots > 0 && $fromCatalog <= 0 && $out['missing'] === 0 => OrderFinancial::COGS_LOTS,
+            $fromLots > 0 => OrderFinancial::COGS_MIXED,
+            default => OrderFinancial::COGS_CATALOG,
+        };
+
+        return $out;
     }
 
     /**

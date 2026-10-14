@@ -20,7 +20,8 @@ use Illuminate\Support\Facades\DB;
  *   margen (§29), sin repartirlos entre productos.
  * - Merma (entrega 2d, R8): lo que se da de baja después de revisarlo, al costo de su lote, también es "otros
  *   variables atribuibles" del producto y la ciudad del almacén, en la fecha de la baja (Shrinkage).
- * - Logística atribuible: el transporte de inventario llega con los lotes (entrega 2); por ahora 0.
+ * - Logística atribuible (§14, entrega 2e): la parte de los viajes de traslado de las unidades entregadas
+ *   (order_financials.logistics_cost). El costo del producto sale de sus lotes; donde no hay lote, del catálogo.
  * Por producto, ciudad o producto + ciudad (§50 a §52); lo que no es de ninguno queda en una fila "sin asignar".
  */
 class ProfitAndLoss
@@ -28,7 +29,7 @@ class ProfitAndLoss
     public const GROUPS = ['product', 'city', 'product_city'];
 
     private const ORDER_SUMS = [
-        'revenue_main', 'revenue_upsell', 'revenue_refunded', 'cogs_main', 'cogs_upsell', 'delivery_cost', 'delivery_legacy_cost',
+        'revenue_main', 'revenue_upsell', 'revenue_refunded', 'cogs_main', 'cogs_upsell', 'logistics_cost', 'delivery_cost', 'delivery_legacy_cost',
         'commission_seller', 'commission_upsell', 'commission_leader', 'commission_deliverer', 'cogs_missing_lines',
         'delivery_trips', 'delivery_final_trips', 'delivery_missing_trips',
     ];
@@ -97,8 +98,8 @@ class ProfitAndLoss
         $cell = function (?int $product, ?int $city) use (&$cells): string {
             $key = ($product ?? '-') . '|' . ($city ?? '-');
             $cells[$key] ??= ['product_id' => $product, 'city_id' => $city, 'orders_delivered' => 0, 'orders_not_delivered' => 0,
-                'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0, 'shrinkage' => 0.0, 'shrinkage_provisional' => 0]
-                + array_fill_keys(self::ORDER_SUMS, 0.0);
+                'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0, 'shrinkage' => 0.0, 'shrinkage_provisional' => 0,
+                'cogs_catalog_orders' => 0] + array_fill_keys(self::ORDER_SUMS, 0.0);
 
             return $key;
         };
@@ -106,11 +107,12 @@ class ProfitAndLoss
         $select = implode(', ', array_map(fn ($c) => "SUM({$c}) AS {$c}", self::ORDER_SUMS));
         $rows = DB::table('order_financials')->whereBetween('cost_date', [$from->toDateString(), $to->toDateString()])
             ->groupBy('product_id', 'city_id')
-            ->selectRaw("product_id, city_id, SUM(outcome = 'delivered') AS orders_delivered, SUM(outcome = 'not_delivered') AS orders_not_delivered, {$select}")
+            ->selectRaw("product_id, city_id, SUM(outcome = 'delivered') AS orders_delivered, SUM(outcome = 'not_delivered') AS orders_not_delivered,
+                SUM(outcome = 'delivered' AND kind <> 'return' AND COALESCE(cogs_source, 'catalog') <> 'lots') AS cogs_catalog_orders, {$select}")
             ->get();
         foreach ($rows as $r) {
             $k = $cell($r->product_id !== null ? (int) $r->product_id : null, $r->city_id !== null ? (int) $r->city_id : null);
-            foreach (array_merge(self::ORDER_SUMS, ['orders_delivered', 'orders_not_delivered']) as $c) {
+            foreach (array_merge(self::ORDER_SUMS, ['orders_delivered', 'orders_not_delivered', 'cogs_catalog_orders']) as $c) {
                 $cells[$k][$c] += (float) $r->{$c};
             }
         }
@@ -136,7 +138,7 @@ class ProfitAndLoss
     private function add(array $cells): array
     {
         $sum = ['orders_delivered' => 0, 'orders_not_delivered' => 0, 'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0,
-            'shrinkage' => 0.0, 'shrinkage_provisional' => 0] + array_fill_keys(self::ORDER_SUMS, 0.0);
+            'shrinkage' => 0.0, 'shrinkage_provisional' => 0, 'cogs_catalog_orders' => 0] + array_fill_keys(self::ORDER_SUMS, 0.0);
         foreach ($cells as $c) {
             foreach ($sum as $k => $v) {
                 $sum[$k] += $c[$k];
@@ -151,6 +153,7 @@ class ProfitAndLoss
     {
         $revenue = round($s['revenue_main'] + $s['revenue_upsell'] - $s['revenue_refunded'], 2);
         $cogs = round($s['cogs_main'] + $s['cogs_upsell'], 2);
+        $logistics = round($s['logistics_cost'], 2);
         $delivery = round($s['delivery_cost'] + $s['commission_deliverer'], 2);
         $sellers = round($s['commission_seller'] + $s['commission_upsell'], 2);
         $leaders = round($s['commission_leader'], 2);
@@ -158,7 +161,7 @@ class ProfitAndLoss
         // Otros variables atribuibles: los gastos de un producto o una ciudad, más la merma
         $shrinkage = round($s['shrinkage'], 2);
         $other = round($s['other_variable'] + $s['shrinkage'], 2);
-        $contribution = round($revenue - $cogs - $delivery - $sellers - $leaders - $advertising - $other, 2);
+        $contribution = round($revenue - $cogs - $logistics - $delivery - $sellers - $leaders - $advertising - $other, 2);
 
         return [
             'revenue' => $revenue,
@@ -166,7 +169,7 @@ class ProfitAndLoss
             'revenue_upsell' => round($s['revenue_upsell'], 2),
             'revenue_refunded' => round($s['revenue_refunded'], 2),
             'cogs' => $cogs,
-            'logistics' => 0.0,
+            'logistics' => $logistics,
             'delivery' => $delivery,
             'delivery_legacy' => round($s['delivery_legacy_cost'], 2),
             'commission_sellers' => $sellers,
@@ -192,6 +195,7 @@ class ProfitAndLoss
                 'delivery_missing_trips' => (int) $s['delivery_missing_trips'],
                 'delivery_estimated_trips' => max(0, (int) ($s['delivery_trips'] - $s['delivery_final_trips'] - $s['delivery_missing_trips'])),
                 'shrinkage_provisional_units' => (int) $s['shrinkage_provisional'],
+                'cogs_catalog_orders' => (int) $s['cogs_catalog_orders'],
             ],
         ];
     }
@@ -260,7 +264,10 @@ class ProfitAndLoss
 
     private function warnings(CarbonInterface $from, CarbonInterface $to, array $company): array
     {
-        $w = ['El costo de los productos es provisional (products.cost_usd) hasta que haya lotes de inventario.'];
+        $w = [];
+        if ($n = $company['checks']['cogs_catalog_orders']) {
+            $w[] = "{$n} órdenes entregadas tienen costo de catálogo (products.cost_usd) en vez del de sus lotes: salieron antes del inventario por lotes o sin stock. Su costo es provisional.";
+        }
         if ($n = $company['checks']['cogs_missing_lines']) {
             $w[] = "{$n} líneas entregadas son de productos sin costo cargado: su ganancia sale más alta de lo real.";
         }

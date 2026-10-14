@@ -74,6 +74,8 @@ class FinanceReportController extends Controller
                 'cost_date' => $f->cost_date?->toDateString(),
                 'revenue' => $f->netRevenue(),
                 'cogs' => round($f->cogs_main + $f->cogs_upsell, 2),
+                'logistics' => round((float) $f->logistics_cost, 2),
+                'cogs_source' => $f->cogs_source,
                 'delivery' => round($f->delivery_cost + $f->commission_deliverer, 2),
                 'commissions' => round($f->commission_seller + $f->commission_upsell + $f->commission_leader, 2),
                 'result' => round($f->netRevenue() - $f->totalCost(), 2),
@@ -125,11 +127,31 @@ class FinanceReportController extends Controller
             'financials' => $f ? [
                 'outcome' => $f->outcome, 'kind' => $f->kind, 'revenue_main' => $f->revenue_main, 'revenue_upsell' => $f->revenue_upsell,
                 'revenue_refunded' => $f->revenue_refunded, 'revenue' => $f->netRevenue(), 'cogs_main' => $f->cogs_main, 'cogs_upsell' => $f->cogs_upsell,
+                'logistics' => (float) $f->logistics_cost, 'cogs_source' => $f->cogs_source, 'cogs_is_provisional' => (bool) $f->cogs_is_provisional,
                 'delivery' => round($f->delivery_cost + $f->commission_deliverer, 2), 'commission_seller' => $f->commission_seller,
                 'commission_upsell' => $f->commission_upsell, 'commission_leader' => $f->commission_leader, 'total_cost' => $f->totalCost(),
                 'result' => round($f->netRevenue() - $f->totalCost(), 2), 'computed_at' => $f->computed_at?->format('Y-m-d H:i'),
             ] : null,
             'lines' => $lines,
+            // §49 hasta el lote (entrega 2e): de qué lote salió cada unidad, a qué costo y con qué logística
+            'lots' => DB::table('inventory_lot_allocations as a')
+                ->leftJoin('inventory_lot_layers as l', 'l.id', '=', 'a.layer_id')
+                ->leftJoin('inventory_lots as lot', 'lot.id', '=', 'l.lot_id')
+                ->leftJoin('inventory_purchases as pu', 'pu.id', '=', 'lot.purchase_id')
+                ->leftJoin('suppliers as su', 'su.id', '=', 'pu.supplier_id')
+                ->leftJoin('products as p', 'p.id', '=', 'a.product_id')
+                ->leftJoin('product_variants as v', 'v.id', '=', 'a.variant_id')
+                ->leftJoin('warehouses as w', 'w.id', '=', 'a.warehouse_id')
+                ->where('a.reference_type', 'Order')->where('a.reference_id', $order->id)
+                ->groupBy('a.layer_id', 'lot.id', 'lot.kind', 'lot.received_at', 'lot.unit_cost_usd', 'l.landed_cost_per_unit', 'su.name', 'p.title', 'v.title', 'w.name')
+                ->havingRaw('SUM(a.quantity) < 0')
+                ->selectRaw('lot.id AS lot_id, lot.kind, lot.received_at, lot.unit_cost_usd, l.landed_cost_per_unit AS landed, su.name AS supplier,
+                    p.title AS product, v.title AS variant, w.name AS warehouse, -SUM(a.quantity) AS units')
+                ->get()->map(fn ($r) => [
+                    'lot_id' => $r->lot_id, 'kind' => $r->kind, 'received_at' => $r->received_at ? substr((string) $r->received_at, 0, 10) : null,
+                    'supplier' => $r->supplier, 'product' => $r->product, 'variant' => $r->variant, 'warehouse' => $r->warehouse, 'units' => (int) $r->units,
+                    'unit_cost' => $r->unit_cost_usd !== null ? (float) $r->unit_cost_usd : null, 'landed' => (float) ($r->landed ?? 0),
+                ]),
             'trips' => $trips->map(function ($t) use ($closures) {
                 $closure = $closures->get($t->id)?->first(fn ($c) => in_array($c->status, [AgencyWeeklyClosure::READY, AgencyWeeklyClosure::PAID], true));
                 [$cost, $source] = match (true) {

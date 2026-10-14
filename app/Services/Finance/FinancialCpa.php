@@ -140,7 +140,7 @@ class FinancialCpa
                 SUM(kind = 'normal') AS created, SUM(kind = 'normal' AND outcome = 'delivered') AS delivered,
                 SUM(revenue_main + revenue_upsell - revenue_refunded) AS revenue,
                 SUM(cogs_main + cogs_upsell) AS cogs,
-                SUM(cogs_main + cogs_upsell + delivery_cost + commission_deliverer + commission_seller + commission_upsell + commission_leader) AS variable")
+                SUM(cogs_main + cogs_upsell + logistics_cost + delivery_cost + commission_deliverer + commission_seller + commission_upsell + commission_leader) AS variable")
             ->get();
         foreach ($rows as $r) {
             $k = $cell((int) $r->product_id, (int) $r->city_id);

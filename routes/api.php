@@ -650,6 +650,10 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/payable-payments/{payment}/void', [\App\Http\Controllers\FinanceSupplierController::class, 'voidPayment']);
         Route::get('/payable-payments/{payment}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'paymentReceipt']);
         Route::post('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'uploadPurchaseReceipt']);
+        Route::post('/purchases/{purchase}/correct', [\App\Http\Controllers\FinanceSupplierController::class, 'correctPurchase']);
+        // Finanzas › Inventario (entrega 2e): valor FIFO, lotes, por completar, revisión, ajustes y cuadre
+        Route::get('/inventory', [\App\Http\Controllers\FinanceInventoryController::class, 'index']);
+        Route::put('/lots/{lot}/cost', [\App\Http\Controllers\FinanceInventoryController::class, 'updateCost']);
         Route::get('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'purchaseReceipt']);
         // Viajes de traslado (entrega 2c; §13, §14, §15, R8)
         Route::get('/trips', [\App\Http\Controllers\FinanceTripController::class, 'index']);
