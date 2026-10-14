@@ -34,7 +34,8 @@ use RuntimeException;
  *   - in de una pieza retirada en un cambio: lote "recovered" a $0 y en revisión (decisión nuestra, confirmar con Fran).
  *   - otros in: lote "pending_cost" a cost_usd, que el Admin completa.
  *   - transfer: sale FIFO del origen y llega al destino con el mismo lote y su costo (§12), en una capa nueva.
- *   - adjustment: la diferencia de cada variante es una entrada o una salida; la revisión de una pieza defectuosa
+ *   - adjustment: es una corrección de conteo (Fran, 2026-10-14). La diferencia de cada variante entra a un lote
+ *     "adjustment" al costo del lote más reciente, o sale FIFO; no es merma. La revisión de una pieza defectuosa
  *     ("vuelve a la venta") pasa unidades de revisión a disponible.
  * - Cada movimiento es determinista: replay() lo rehace todo desde el corte con el mismo resultado.
  */
@@ -346,11 +347,12 @@ class LotLedger
                     }
                     return;
                 }
+                // Un ajuste es una corrección de conteo, no una compra ni una pérdida (Fran, 2026-10-14): las unidades entran
+                // o salen de los lotes para que el inventario cuadre con lo físico, y su costo no va al P&L como merma
                 foreach ($this->adjustmentDeltas($m) as [$bucketVariant, $delta]) {
                     if ($delta > 0) {
-                        $this->newLot($m, (int) $m->to_warehouse_id, $bucketVariant, $delta, InventoryLot::KIND_PENDING_COST, InventoryLotLayer::AVAILABLE);
+                        $this->newLot($m, (int) $m->to_warehouse_id, $bucketVariant, $delta, InventoryLot::KIND_ADJUSTMENT, InventoryLotLayer::AVAILABLE);
                     } elseif ($delta < 0) {
-                        // Decisión nuestra (confirmar con Fran): un ajuste hacia abajo es merma; su costo se ve en 2d
                         $this->take($m, (int) $m->to_warehouse_id, $bucketVariant, -$delta, InventoryLotLayer::AVAILABLE);
                     }
                 }
@@ -449,9 +451,11 @@ class LotLedger
             // Una compra (§9): el costo unitario de la compra, igual para cada variante (R7: el lote por variante ya permite
             // que una talla cueste distinto más adelante)
             $purchase = $kind === InventoryLot::KIND_PURCHASE ? InventoryPurchase::with('supplier:id,name')->find($m->reference_id) : null;
+            $latest = $kind === InventoryLot::KIND_ADJUSTMENT ? $this->latestLotCost((int) $m->product_id, $variantId) : null;
             $cost = match (true) {
                 $kind === InventoryLot::KIND_RECOVERED => 0.0,
                 $purchase !== null => round((float) $purchase->unit_cost_usd, 4),
+                $latest !== null => $latest,
                 default => $this->positiveCost(DB::table('products')->where('id', $m->product_id)->value('cost_usd')),
             };
             $lot = InventoryLot::create([
@@ -465,6 +469,7 @@ class LotLedger
                 'cost_source' => match (true) {
                     $kind === InventoryLot::KIND_RECOVERED => 'recovered',
                     $purchase !== null => 'purchase',
+                    $latest !== null => 'last_lot',
                     $cost === null => null,
                     default => 'catalog',
                 },
@@ -473,6 +478,7 @@ class LotLedger
                     $purchase !== null => 'Compra a ' . ($purchase->supplier?->name ?? 'proveedor'),
                     $kind === InventoryLot::KIND_RECOVERED => 'Pieza retirada en un cambio: en revisión, a $0 (su costo ya se contó en la orden)',
                     $kind === InventoryLot::KIND_INITIAL => 'Reingreso de una orden que salió antes del corte: a costo de catálogo',
+                    $kind === InventoryLot::KIND_ADJUSTMENT => 'Corrección de conteo (ajuste): ' . ($latest !== null ? 'al costo del lote más reciente' : 'a costo de catálogo'),
                     default => 'Entró sin costo de compra: costo de catálogo provisional, por completar',
                 },
             ]);
@@ -581,6 +587,20 @@ class LotLedger
         }
 
         return $held;
+    }
+
+    /**
+     * El costo del lote más reciente de ese producto (primero de esa misma variante, o "sin variante"), sin contar las
+     * piezas recuperadas a $0 ni los lotes sin costo. Es el que recibe una corrección de conteo hacia arriba.
+     */
+    private function latestLotCost(int $productId, ?int $variantId): ?float
+    {
+        $query = fn () => InventoryLot::where('product_id', $productId)->where('kind', '<>', InventoryLot::KIND_RECOVERED)
+            ->whereNotNull('unit_cost_usd')->where('unit_cost_usd', '>', 0)->orderByDesc('received_at')->orderByDesc('id');
+        $cost = $query()->where('variant_id', $variantId)->value('unit_cost_usd');
+        $cost ??= $query()->value('unit_cost_usd');
+
+        return $cost !== null ? round((float) $cost, 4) : null;
     }
 
     private function positiveCost($cost): ?float

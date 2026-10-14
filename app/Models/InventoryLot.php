@@ -13,6 +13,8 @@ class InventoryLot extends Model
     public const KIND_PURCHASE = 'purchase';
     public const KIND_PENDING_COST = 'pending_cost';
     public const KIND_RECOVERED = 'recovered';
+    /** Corrección de conteo hacia arriba (Fran, 2026-10-14): al costo del lote más reciente del producto. */
+    public const KIND_ADJUSTMENT = 'adjustment';
 
     protected $fillable = [
         'product_id', 'variant_id', 'kind', 'purchase_id', 'source_movement_id', 'initial_quantity', 'unit_cost_usd', 'cost_source',
