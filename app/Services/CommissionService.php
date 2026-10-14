@@ -43,8 +43,15 @@ class CommissionService
         $currency = 'USD';
         $earningDate = now()->toDateString();
         $amounts = self::amounts();
+        // R11 (Módulo 4): el repartidor propio cobra su monto fijo o su tarifario por distancia. Se calcula una sola vez,
+        // fuera de la transacción (puede consultar Google Routes), y queda en la auditoría con su base.
+        $delivererCost = null;
+        if ($order->deliverer_id && !Earning::where('order_id', $order->id)->where('role_type', 'repartidor')->exists()) {
+            $delivererCost = app(\App\Services\Finance\OwnDelivererCost::class)->forOrder($order);
+            $amounts['deliverer'] = $delivererCost['amount'];
+        }
 
-        DB::transaction(function () use ($order, $rate, $currency, $earningDate, $amounts) {
+        DB::transaction(function () use ($order, $rate, $currency, $earningDate, $amounts, $delivererCost) {
 
             // 1. VENDEDORA
             if ($order->agent_id) {
@@ -62,7 +69,7 @@ class CommissionService
 
             // 2. REPARTIDOR
             if ($order->deliverer_id) {
-                Earning::firstOrCreate([
+                $earning = Earning::firstOrCreate([
                     'order_id'  => $order->id,
                     'user_id'   => $order->deliverer_id,
                     'role_type' => 'repartidor',
@@ -72,6 +79,9 @@ class CommissionService
                     'rate'         => $rate,
                     'earning_date' => $earningDate,
                 ]);
+                if ($delivererCost && $earning->wasRecentlyCreated) {
+                    \App\Services\Finance\OwnDelivererCost::record($order, $delivererCost);
+                }
             }
 
             // 3. GERENTE: ya no hay (Fran, 2026-10-02, se quitó el rol y su comisión de 0,50 USD por orden).

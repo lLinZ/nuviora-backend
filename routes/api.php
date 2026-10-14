@@ -665,6 +665,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         // Caja (entrega 3; §34 a §36, §42, §75, §76, R14): cuentas, saldos y movimientos
         Route::get('/cash', [\App\Http\Controllers\FinanceCashController::class, 'index']);
         Route::get('/cash/dashboard', [\App\Http\Controllers\FinanceCashController::class, 'dashboard']); // §46, §48
+        // Repartidores propios (R11): monto fijo o tarifario por distancia
+        Route::get('/deliverers', [\App\Http\Controllers\FinanceDeliverersController::class, 'index']);
+        Route::put('/deliverers/{user}', [\App\Http\Controllers\FinanceDeliverersController::class, 'update']);
         // Reportes (entrega 4; §53 a §58, §80, R18)
         Route::get('/reports', [\App\Http\Controllers\FinanceReportsController::class, 'index']);
         Route::post('/reports', [\App\Http\Controllers\FinanceReportsController::class, 'store']);

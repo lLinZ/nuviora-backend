@@ -38,6 +38,9 @@ class DeliveryTariffController extends Controller
                 'warehouses' => collect($warehouses->get($a->id, []))->map(fn (Warehouse $w) => $this->presentWarehouse($w, $cityNames))->values(),
             ]),
             'cities' => City::orderBy('name')->get(['id', 'name']),
+            // R11 (Módulo 4): los repartidores propios también pueden tener tarifario (salen del almacén que elige el Admin en Finanzas)
+            'deliverers' => User::whereHas('role', fn ($q) => $q->where('description', 'Repartidor'))->orderBy('names')->get(['id', 'names'])
+                ->map(fn ($u) => ['id' => $u->id, 'name' => $u->names, 'cities' => [], 'warehouses' => []])->values(),
         ]);
     }
 
@@ -148,7 +151,9 @@ class DeliveryTariffController extends Controller
             'ranges.*.price' => 'nullable|numeric|min:0|max:10000',
             'ranges.*.price_per_km' => 'nullable|numeric|min:0|max:1000',
         ]);
-        abort_unless(User::whereKey($data['agency_id'])->whereHas('role', fn ($q) => $q->where('description', 'Agencia'))->exists(), 422, 'Esa no es una agencia.');
+        // R11 (Módulo 4): también el de un repartidor propio
+        abort_unless(User::whereKey($data['agency_id'])->whereHas('role', fn ($q) => $q->whereIn('description', ['Agencia', 'Repartidor']))->exists(), 422,
+            'Esa no es una agencia ni un repartidor.');
         if ($error = TariffBook::rangeErrors($data['ranges'])) {
             return response()->json(['status' => false, 'message' => $error], 422);
         }
