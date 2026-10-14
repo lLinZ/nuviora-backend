@@ -34,6 +34,18 @@ class Supplier extends Model
         return $this->hasMany(PurchaseOrder::class);
     }
 
+    /** Compras de inventario (Módulo 4 de Fran, §9, §10) */
+    public function inventoryPurchases()
+    {
+        return $this->hasMany(InventoryPurchase::class);
+    }
+
+    /** Lo que se le debe (§16, §17, §44) */
+    public function payables()
+    {
+        return $this->hasMany(AccountPayable::class);
+    }
+
     /**
      * Active scope
      */

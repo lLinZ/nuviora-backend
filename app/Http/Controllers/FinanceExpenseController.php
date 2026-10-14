@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\City;
+use App\Models\CompanyAccount;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
 use App\Models\FinancialAuditLog;
+use App\Models\InventoryPurchase;
 use App\Models\Product;
 use App\Models\RecurringExpense;
 use App\Models\RecurringExpenseVersion;
@@ -53,8 +55,11 @@ class FinanceExpenseController extends Controller
             'cities' => City::orderBy('name')->get(['id', 'name']),
             'warehouses' => Warehouse::orderBy('name')->get(['id', 'name']),
             'agencies' => User::whereHas('role', fn ($q) => $q->where('description', 'Agencia'))->orderBy('names')->get(['id', 'names']),
-            'suppliers' => Supplier::orderBy('name')->get(['id', 'name']),
+            'suppliers' => Supplier::orderBy('name')->get(['id', 'name', 'is_active']),
             'currencies' => Expense::CURRENCIES,
+            // Compras y pagos a proveedores (entrega 2b): de qué cuenta salió el pago (opcional hasta la caja, entrega 3)
+            'company_accounts' => CompanyAccount::where('is_active', true)->orderBy('name')->get(['id', 'name', 'currency']),
+            'payment_types' => InventoryPurchase::PAYMENT_TYPES,
             'frequencies' => RecurringExpense::FREQUENCIES,
             'weekdays' => RecurringExpense::WEEKDAYS,
         ]);
@@ -266,7 +271,8 @@ class FinanceExpenseController extends Controller
     /** El historial de un gasto o un recurrente (§82). */
     public function audit(Request $request): JsonResponse
     {
-        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense'])], 'subject_id' => 'required|integer']);
+        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase'])],
+            'subject_id' => 'required|integer']);
 
         return response()->json([
             'entries' => FinancialAuditLog::with('user:id,names')->where('subject_type', $data['subject_type'])

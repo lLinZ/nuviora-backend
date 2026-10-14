@@ -212,6 +212,11 @@ class InventoryMovementController extends Controller
         $checkTo = $this->validateOwnership($request->to_warehouse_id);
         if ($checkTo !== true) return response()->json(['success' => false, 'message' => $checkTo], 403);
 
+        // Módulo 4 de Fran (§9, §16, R6): el ingreso de una compra trae su costo, el proveedor y cómo se paga
+        if ($request->filled('purchase')) {
+            return $this->stockInPurchase($request);
+        }
+
         try {
             $movement = $this->inventoryService->addStock(
                 $request->product_id,
@@ -339,6 +344,58 @@ class InventoryMovementController extends Controller
     private function variantsFrom(Request $request)
     {
         return $request->input('variants') ?: $request->input('sizes');
+    }
+
+    /**
+     * Ingreso con compra (Módulo 4 de Fran, §9, §16, §17, R6): solo el Admin (§81). Entran las unidades, queda la compra
+     * con su costo unitario (§9) y nace la deuda con el proveedor: abierta si es a crédito, pagada si es al contado.
+     */
+    private function stockInPurchase(Request $request)
+    {
+        if (\Illuminate\Support\Facades\Auth::user()?->role?->description !== 'Admin') {
+            return response()->json(['success' => false, 'message' => 'Solo el administrador registra el costo de una compra.'], 403);
+        }
+        $purchase = Validator::make((array) $request->input('purchase'), [
+            'supplier_id' => 'required|integer|exists:suppliers,id',
+            'total_amount' => 'required|numeric|min:0.01|max:9999999999',
+            'currency' => 'required|in:USD,USDT,VES',
+            'rate' => 'nullable|required_if:currency,VES|numeric|min:0.0001',
+            'payment_type' => 'required|in:cash,credit',
+            'due_date' => 'nullable|required_if:payment_type,credit|date|after_or_equal:today',
+            'terms' => 'nullable|string|max:500',
+            'company_account_id' => 'nullable|integer|exists:company_accounts,id',
+        ], [
+            'supplier_id.required' => 'Elige el proveedor de la compra.',
+            'total_amount.required' => 'Escribe cuánto costó la compra en total.',
+            'total_amount.min' => 'El costo total tiene que ser mayor que 0.',
+            'rate.required_if' => 'En bolívares, escribe la tasa (bolívares por dólar) de esta compra.',
+            'payment_type.required' => 'Elige si la compra es al contado o a crédito.',
+            'due_date.required_if' => 'A crédito, elige la fecha de vencimiento.',
+            'due_date.after_or_equal' => 'El vencimiento no puede ser anterior a hoy.',
+        ])->validate();
+
+        try {
+            $created = app(\App\Services\Finance\InventoryPurchases::class)->create($purchase + [
+                'product_id' => (int) $request->product_id,
+                'warehouse_id' => (int) $request->to_warehouse_id,
+                'quantity' => (int) $request->quantity,
+                'variants' => $this->variantsFrom($request),
+                'notes' => $request->notes,
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (Exception $e) {
+            // Lo que rechaza el inventario (por ejemplo, tallas que suman más que la cantidad): no queda nada registrado
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+        $unit = number_format($created->unit_cost_usd, 2, ',', '.');
+
+        return response()->json([
+            'success' => true,
+            'message' => "Compra registrada: {$created->quantity} unidades a \${$unit} cada una"
+                . ($created->payment_type === 'credit' ? '. La deuda queda en Finanzas › Proveedores.' : ', pagada al contado.'),
+            'purchase' => $created->toPayload(),
+        ], 201);
     }
 
     /**

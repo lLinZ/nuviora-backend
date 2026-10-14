@@ -8,6 +8,7 @@ use App\Models\InventoryLot;
 use App\Models\InventoryLotAllocation;
 use App\Models\InventoryLotLayer;
 use App\Models\InventoryMovement;
+use App\Models\InventoryPurchase;
 use App\Models\Order;
 use App\Models\Setting;
 use App\Services\Inventory\OrderStock;
@@ -29,8 +30,9 @@ use RuntimeException;
  *     con variante, primero las de su variante y después las "sin variante", como el stock de hoy. Lo que no alcanza
  *     sale sin lote (el stock quedó en negativo).
  *   - in de una orden (reingreso): vuelven las capas que esa orden tenía, empezando por las últimas que tomó.
+ *   - in de una compra (2b): lote "purchase" con el costo unitario de la compra (§9), uno por variante (R7).
  *   - in de una pieza retirada en un cambio: lote "recovered" a $0 y en revisión (decisión nuestra, confirmar con Fran).
- *   - otros in: lote "pending_cost" a cost_usd, que el Admin completa (2b trae el ingreso con costo).
+ *   - otros in: lote "pending_cost" a cost_usd, que el Admin completa.
  *   - transfer: sale FIFO del origen y llega al destino con el mismo lote y su costo (§12), en una capa nueva.
  *   - adjustment: la diferencia de cada variante es una entrada o una salida; la revisión de una pieza defectuosa
  *     ("vuelve a la venta") pasa unidades de revisión a disponible.
@@ -315,6 +317,8 @@ class LotLedger
                 }
                 if ($m->reference_type === OrderStock::REFERENCE) {
                     $this->returnFromOrder($m, $qty);
+                } elseif ($m->reference_type === InventoryPurchase::REFERENCE && $m->reference_id) {
+                    $this->newLot($m, (int) $m->to_warehouse_id, $variantId, $qty, InventoryLot::KIND_PURCHASE, InventoryLotLayer::AVAILABLE);
                 } elseif ($m->reference_type === OrderStock::DEFECTIVE_REFERENCE) {
                     $this->newLot($m, (int) $m->to_warehouse_id, $variantId, $qty, InventoryLot::KIND_RECOVERED, InventoryLotLayer::REVIEW);
                 } else {
@@ -442,23 +446,33 @@ class LotLedger
         $lot = InventoryLot::where('source_movement_id', $m->id)->where('product_id', $m->product_id)
             ->where('variant_id', $variantId)->where('kind', $kind)->first();
         if (!$lot) {
-            $cost = $kind === InventoryLot::KIND_RECOVERED ? 0.0 : $this->positiveCost(DB::table('products')->where('id', $m->product_id)->value('cost_usd'));
+            // Una compra (§9): el costo unitario de la compra, igual para cada variante (R7: el lote por variante ya permite
+            // que una talla cueste distinto más adelante)
+            $purchase = $kind === InventoryLot::KIND_PURCHASE ? InventoryPurchase::with('supplier:id,name')->find($m->reference_id) : null;
+            $cost = match (true) {
+                $kind === InventoryLot::KIND_RECOVERED => 0.0,
+                $purchase !== null => round((float) $purchase->unit_cost_usd, 4),
+                default => $this->positiveCost(DB::table('products')->where('id', $m->product_id)->value('cost_usd')),
+            };
             $lot = InventoryLot::create([
                 'product_id' => $m->product_id,
                 'variant_id' => $variantId,
                 'kind' => $kind,
+                'purchase_id' => $purchase?->id,
                 'source_movement_id' => $m->id,
                 'initial_quantity' => $qty,
                 'unit_cost_usd' => $cost,
                 'cost_source' => match (true) {
                     $kind === InventoryLot::KIND_RECOVERED => 'recovered',
+                    $purchase !== null => 'purchase',
                     $cost === null => null,
                     default => 'catalog',
                 },
                 'received_at' => $m->created_at ?? now(),
-                'notes' => match ($kind) {
-                    InventoryLot::KIND_RECOVERED => 'Pieza retirada en un cambio: en revisión, a $0 (su costo ya se contó en la orden)',
-                    InventoryLot::KIND_INITIAL => 'Reingreso de una orden que salió antes del corte: a costo de catálogo',
+                'notes' => match (true) {
+                    $purchase !== null => 'Compra a ' . ($purchase->supplier?->name ?? 'proveedor'),
+                    $kind === InventoryLot::KIND_RECOVERED => 'Pieza retirada en un cambio: en revisión, a $0 (su costo ya se contó en la orden)',
+                    $kind === InventoryLot::KIND_INITIAL => 'Reingreso de una orden que salió antes del corte: a costo de catálogo',
                     default => 'Entró sin costo de compra: costo de catálogo provisional, por completar',
                 },
             ]);

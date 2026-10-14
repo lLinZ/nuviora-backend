@@ -15,7 +15,7 @@ class InventoryLot extends Model
     public const KIND_RECOVERED = 'recovered';
 
     protected $fillable = [
-        'product_id', 'variant_id', 'kind', 'source_movement_id', 'initial_quantity', 'unit_cost_usd', 'cost_source',
+        'product_id', 'variant_id', 'kind', 'purchase_id', 'source_movement_id', 'initial_quantity', 'unit_cost_usd', 'cost_source',
         'received_at', 'notes',
     ];
 
@@ -33,6 +33,11 @@ class InventoryLot extends Model
     public function variant(): BelongsTo
     {
         return $this->belongsTo(ProductVariant::class, 'variant_id');
+    }
+
+    public function purchase(): BelongsTo
+    {
+        return $this->belongsTo(InventoryPurchase::class, 'purchase_id');
     }
 
     public function layers(): HasMany

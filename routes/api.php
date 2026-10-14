@@ -639,6 +639,17 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/settings', [\App\Http\Controllers\FinanceCpaController::class, 'settings']);
         Route::put('/settings', [\App\Http\Controllers\FinanceCpaController::class, 'updateSettings']);
         Route::put('/product-margins/{product}', [\App\Http\Controllers\FinanceCpaController::class, 'updateMargin']);
+        // Proveedores, compras y deudas (entrega 2b; §10, §16, §17, §44). La compra nace en el ingreso de inventario
+        Route::get('/suppliers', [\App\Http\Controllers\FinanceSupplierController::class, 'index']);
+        Route::post('/suppliers', [\App\Http\Controllers\FinanceSupplierController::class, 'store']);
+        Route::get('/suppliers/{supplier}', [\App\Http\Controllers\FinanceSupplierController::class, 'show']);
+        Route::put('/suppliers/{supplier}', [\App\Http\Controllers\FinanceSupplierController::class, 'update']);
+        Route::get('/payables', [\App\Http\Controllers\FinanceSupplierController::class, 'payables']);
+        Route::post('/payables/{payable}/payments', [\App\Http\Controllers\FinanceSupplierController::class, 'pay']);
+        Route::post('/payable-payments/{payment}/void', [\App\Http\Controllers\FinanceSupplierController::class, 'voidPayment']);
+        Route::get('/payable-payments/{payment}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'paymentReceipt']);
+        Route::post('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'uploadPurchaseReceipt']);
+        Route::get('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'purchaseReceipt']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno
