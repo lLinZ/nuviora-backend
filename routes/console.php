@@ -57,6 +57,8 @@ try {
     Schedule::command('finance:rebuild --mark-all')->dailyAt('03:30');
     // Libro de lotes (entrega 2): reproduce los movimientos de inventario nuevos con FIFO por lote
     Schedule::command('finance:lots')->everyMinute()->withoutOverlapping(10)->runInBackground();
+    // Caja (entrega 3): los movimientos automáticos se cuadran solos con su origen; cada noche se revisan todos
+    Schedule::command('finance:cash --resync')->dailyAt('03:45')->withoutOverlapping(60);
     // CPA financiero con la ventana madura, los miércoles después del recordatorio de cierres de las 11:00 (§61)
     Schedule::command('finance:cpa')->wednesdays()->at('12:00')->withoutOverlapping();
 

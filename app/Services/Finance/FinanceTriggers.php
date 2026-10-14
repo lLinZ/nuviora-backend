@@ -6,6 +6,7 @@ use App\Constants\OrderStatus;
 use App\Models\AgencyClosureRow;
 use App\Models\AgencyTrip;
 use App\Models\AgencyWeeklyClosure;
+use App\Models\CompanyAccount;
 use App\Models\Earning;
 use App\Models\InventoryLot;
 use App\Models\LeaderCommission;
@@ -14,6 +15,7 @@ use App\Models\OrderDeliveryRoute;
 use App\Models\OrderProduct;
 use App\Models\OrderRefund;
 use App\Models\Product;
+use App\Models\ReconciliationItem;
 use App\Models\Status;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -65,6 +67,16 @@ class FinanceTriggers
                 self::safely(fn () => OrderEconomics::markStaleWhere(DB::table('inventory_lot_allocations as a')
                     ->join('inventory_lot_layers as l', 'l.id', '=', 'a.layer_id')->where('l.lot_id', $lot->id)
                     ->where('a.reference_type', 'Order')->whereNotNull('a.reference_id')->select('a.reference_id')));
+            }
+        });
+
+        // Entrega 3 (§75, §76): un pago digital de la conciliación entra a la caja, o cambia su estado, al momento
+        ReconciliationItem::saved(fn (ReconciliationItem $item) => self::safely(fn () => app(CashLedger::class)->syncReconciliationItem($item)));
+        ReconciliationItem::deleted(fn (ReconciliationItem $item) => self::safely(fn () => app(CashLedger::class)->syncReconciliationItem($item->id, true)));
+        // R14: si una cuenta del Módulo 1 pasa a otra cuenta de la caja (o cambia de método), sus pagos se mueven con ella
+        CompanyAccount::saved(function (CompanyAccount $account) {
+            if ($account->wasChanged(['financial_account_id', 'method', 'is_active'])) {
+                self::safely(fn () => app(CashLedger::class)->syncCompanyAccount($account->id));
             }
         });
 

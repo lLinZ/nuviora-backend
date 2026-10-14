@@ -215,50 +215,22 @@ class EarningsService
                 $costByOrder = $trips->groupBy('order_id')->map(fn ($t) => $t->sum('amount_usd'));
 
                 $details = $agencyOrders->map(function (Order $o) use ($rateBinanceNow, $rateEuroNow, $costByOrder) {
-                    $cashUSD = (float) $o->payments->where('method', 'DOLARES_EFECTIVO')->sum('amount');
-                    
-                    // 1. INGRESOS (Payments in VES) -> Siempre Tasa Binance
-                    $cashVES = (float) $o->payments
-                        ->filter(fn($p) => $p->method === 'BOLIVARES_EFECTIVO')
-                        ->map(fn($p) => (float)$p->amount * ($p->binance_usd_rate ?: $rateBinanceNow))
-                        ->sum();
-                    
-                    // 2. VUELTOS (Change in VES) -> Siempre Tasa Euro
-                    // Solo lo que la agencia pudo dar del efectivo que cobró: si el vuelto ya es 0 o el pago fue
-                    // digital, no se descuenta aunque haya quedado un monto viejo guardado (Fran, 2026-10-03)
-                    $agencyChange = ChangeRules::agencyChange($o, $o->payments);
-                    $changeUSD = ($o->change_method_agency === 'DOLARES_EFECTIVO') ? $agencyChange : 0;
-                    $changeVES_usd_equivalent = ($o->change_method_agency === 'BOLIVARES_EFECTIVO') ? $agencyChange : 0;
-
-                    // Tasa Euro para el vuelto
-                    $rateEuroForChange = $o->payments->firstWhere('eur_rate', '>', 0)?->eur_rate 
-                                        ?: $o->change_rate // fallback to order field if exists
-                                        ?: $rateEuroNow;
-
-                    $changeVES = $changeVES_usd_equivalent * $rateEuroForChange;
-
-                    $amtCompany = (float) $o->change_amount_company;
-                    $methodCompany = $o->change_method_company;
-
-                    if ($o->change_covered_by === 'company' && $amtCompany <= 0) {
-                        $amtCompany = (float) $o->change_amount;
-                        $methodCompany = $o->change_method_company ?: $o->change_method_agency; 
-                    }
+                    $cash = self::orderCash($o, $rateBinanceNow, $rateEuroNow);
 
                     return [
                         'order_id'       => $o->id,
                         'order_name'     => $o->name,
                         'total_price'    => (float) $o->current_total_price,
-                        'collected_usd'  => $cashUSD,
-                        'collected_ves'  => $cashVES,
-                        'change_usd'     => $changeUSD,
-                        'change_ves'     => $changeVES,
-                        'net_usd'        => $cashUSD - $changeUSD,
-                        'net_ves'        => $cashVES - $changeVES,
-                        'rate_binance'   => $o->payments->firstWhere('binance_usd_rate', '>', 0)?->binance_usd_rate ?: $rateBinanceNow,
-                        'rate_euro'      => $rateEuroForChange,
-                        'change_company' => $amtCompany,
-                        'method_company' => $methodCompany ?? 'N/A',
+                        'collected_usd'  => $cash['collected_usd'],
+                        'collected_ves'  => $cash['collected_ves'],
+                        'change_usd'     => $cash['change_usd'],
+                        'change_ves'     => $cash['change_ves'],
+                        'net_usd'        => $cash['net_usd'],
+                        'net_ves'        => $cash['net_ves'],
+                        'rate_binance'   => $cash['rate_binance'],
+                        'rate_euro'      => $cash['rate_euro'],
+                        'change_company' => $cash['change_company'],
+                        'method_company' => $cash['method_company'] ?? 'N/A',
                         'updated_at'     => $o->updated_at->toDateTimeString(),
                         // Lo que se le paga por sus carreras de este período (se liquidan en tripDetails)
                         'delivery_cost'  => (float) ($costByOrder[$o->id] ?? 0),
@@ -300,6 +272,57 @@ class EarningsService
             })
             ->filter()
             ->values();
+    }
+
+    /**
+     * El efectivo de una orden entregada: lo que cobró la agencia menos el vuelto que dio, y el vuelto que dio la empresa.
+     * Lo usan la liquidación de agencias y la caja (Módulo 4, §42), para que digan lo mismo.
+     * - Los Bs cobrados van a la tasa Binance del pago; el vuelto en Bs, a la tasa euro.
+     * - La agencia solo da vuelto del efectivo que cobró: si el vuelto ya es 0 o el pago fue digital, no se descuenta
+     *   aunque haya quedado un monto viejo guardado (Fran, 2026-10-03).
+     */
+    public static function orderCash(Order $o, float $rateBinanceNow, float $rateEuroNow): array
+    {
+        $cashUSD = (float) $o->payments->where('method', 'DOLARES_EFECTIVO')->sum('amount');
+
+        // 1. INGRESOS (Payments in VES) -> Siempre Tasa Binance
+        $vesPayments = $o->payments->filter(fn ($p) => $p->method === 'BOLIVARES_EFECTIVO');
+        $cashVES = (float) $vesPayments->map(fn ($p) => (float) $p->amount * ($p->binance_usd_rate ?: $rateBinanceNow))->sum();
+
+        // 2. VUELTOS (Change in VES) -> Siempre Tasa Euro
+        $agencyChange = ChangeRules::agencyChange($o, $o->payments);
+        $changeUSD = ($o->change_method_agency === 'DOLARES_EFECTIVO') ? $agencyChange : 0;
+        $changeVES_usd_equivalent = ($o->change_method_agency === 'BOLIVARES_EFECTIVO') ? $agencyChange : 0;
+
+        // Tasa Euro para el vuelto
+        $rateEuroForChange = $o->payments->firstWhere('eur_rate', '>', 0)?->eur_rate
+                            ?: $o->change_rate // fallback to order field if exists
+                            ?: $rateEuroNow;
+
+        $changeVES = $changeVES_usd_equivalent * $rateEuroForChange;
+
+        $amtCompany = (float) $o->change_amount_company;
+        $methodCompany = $o->change_method_company;
+
+        if ($o->change_covered_by === 'company' && $amtCompany <= 0) {
+            $amtCompany = (float) $o->change_amount;
+            $methodCompany = $o->change_method_company ?: $o->change_method_agency;
+        }
+
+        return [
+            'collected_usd'     => $cashUSD,
+            'collected_ves'     => $cashVES,
+            'collected_ves_usd' => (float) $vesPayments->sum('amount'),
+            'change_usd'        => $changeUSD,
+            'change_ves'        => $changeVES,
+            'change_ves_usd'    => $changeVES_usd_equivalent,
+            'net_usd'           => $cashUSD - $changeUSD,
+            'net_ves'           => $cashVES - $changeVES,
+            'rate_binance'      => $o->payments->firstWhere('binance_usd_rate', '>', 0)?->binance_usd_rate ?: $rateBinanceNow,
+            'rate_euro'         => $rateEuroForChange,
+            'change_company'    => $amtCompany,
+            'method_company'    => $methodCompany,
+        ];
     }
 
     /**

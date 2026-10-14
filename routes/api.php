@@ -662,6 +662,13 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/trips/{trip}', [\App\Http\Controllers\FinanceTripController::class, 'update']);
         Route::post('/trips/{trip}/void', [\App\Http\Controllers\FinanceTripController::class, 'void']);
         Route::get('/trips/{trip}/receipt', [\App\Http\Controllers\FinanceTripController::class, 'receipt']);
+        // Caja (entrega 3; §34 a §36, §42, §75, §76, R14): cuentas, saldos y movimientos
+        Route::get('/cash', [\App\Http\Controllers\FinanceCashController::class, 'index']);
+        Route::get('/cash/transactions', [\App\Http\Controllers\FinanceCashController::class, 'transactions']);
+        Route::post('/cash/accounts', [\App\Http\Controllers\FinanceCashController::class, 'storeAccount']);
+        Route::put('/cash/accounts/{account}', [\App\Http\Controllers\FinanceCashController::class, 'updateAccount']);
+        Route::put('/cash/opening-balances', [\App\Http\Controllers\FinanceCashController::class, 'openingBalances']);
+        Route::put('/cash/company-accounts/{companyAccount}', [\App\Http\Controllers\FinanceCashController::class, 'linkCompanyAccount']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

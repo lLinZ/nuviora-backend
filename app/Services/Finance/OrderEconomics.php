@@ -142,6 +142,7 @@ class OrderEconomics
         // Una fila marcada desde este momento sigue marcada y se recalcula en la siguiente vuelta
         $startedAt = self::stamp();
         $st = $this->statusIds();
+        $requested = $ids;
 
         $orders = DB::table('orders')->whereIn('id', $ids)->get([
             'id', 'status_id', 'created_at', 'delivered_at', 'updated_at', 'current_total_price', 'refunded_usd', 'city_id',
@@ -149,6 +150,7 @@ class OrderEconomics
         ])->keyBy('id');
         if ($orders->isEmpty()) {
             DB::table('order_financials')->whereIn('order_id', $ids)->delete();
+            $this->syncCash($requested);
             return 0;
         }
         $ids = $orders->keys()->all();
@@ -191,8 +193,22 @@ class OrderEconomics
         DB::table('order_financials')->upsert($rows, ['order_id'], array_values(array_diff(array_keys($rows[0]), ['order_id'])));
         $this->auditMatureChanges($previous, $rows);
         DB::table('order_financials')->whereIn('order_id', $ids)->where('stale_at', '<', $startedAt)->update(['stale_at' => null]);
+        $this->syncCash($requested);
 
         return count($rows);
+    }
+
+    /**
+     * Entrega 3: la caja de estas órdenes (el efectivo en la agencia, el vuelto de la empresa y la tasa de sus pagos
+     * digitales). Un error ahí no frena la economía de las órdenes: queda en el log y la noche lo vuelve a intentar.
+     */
+    private function syncCash(array $ids): void
+    {
+        try {
+            app(CashLedger::class)->syncOrders($ids);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     private function economics(object $o, Collection $lines, Collection $held, Collection $trips, Collection $approved,

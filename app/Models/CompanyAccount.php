@@ -14,6 +14,7 @@ class CompanyAccount extends Model
         'method',
         'currency',
         'statement_source_id',
+        'financial_account_id',
         'details',
         'is_active',
     ];
@@ -43,6 +44,12 @@ class CompanyAccount extends Model
     public function statementSource()
     {
         return $this->belongsTo(StatementSource::class);
+    }
+
+    /** La cuenta de la caja a la que entra lo que llega por este método (Módulo 4, R14 y §75). */
+    public function financialAccount()
+    {
+        return $this->belongsTo(FinancialAccount::class);
     }
 
     public function getStatementSourceNameAttribute(): ?string
