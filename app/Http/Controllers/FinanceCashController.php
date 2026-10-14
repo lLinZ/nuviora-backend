@@ -2,17 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CashMovement;
 use App\Models\CompanyAccount;
 use App\Models\FinancialAccount;
 use App\Models\FinancialAuditLog;
 use App\Models\FinancialTransaction as Tx;
 use App\Models\ReconciliationItem;
 use App\Services\Finance\CashLedger;
+use App\Services\Finance\CashMovements;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use RuntimeException;
 
 /**
  * Finanzas › Caja (Módulo 4 de Fran, entrega 3; §34 a §36, §42, §75, §76, R14). Solo el Admin (§81).
@@ -59,6 +63,7 @@ class FinanceCashController extends Controller
             'currencies' => FinancialAccount::CURRENCIES,
             'transaction_kinds' => Tx::KIND_LABEL,
             'statuses' => Tx::STATUS_LABEL,
+            'movement_kinds' => CashMovement::KIND_LABEL,
         ]);
     }
 
@@ -84,6 +89,7 @@ class FinanceCashController extends Controller
             ->selectRaw('SUM(CASE WHEN amount_usd > 0 THEN amount_usd ELSE 0 END) AS inflow, SUM(CASE WHEN amount_usd < 0 THEN amount_usd ELSE 0 END) AS outflow')
             ->first();
         $page = $query->with(['account:id,name,currency', 'order:id,name'])->orderByDesc('occurred_on')->orderByDesc('id')->paginate(100);
+        $movements = CashMovement::whereIn('id', collect($page->items())->where('source_type', 'cash_movement')->pluck('source_id'))->get()->keyBy('id');
 
         return response()->json([
             'inflow_usd' => round((float) ($sum->inflow ?? 0), 2),
@@ -112,6 +118,10 @@ class FinanceCashController extends Controller
                 'voided_at' => $t->voided_at?->format('Y-m-d H:i'),
                 'void_reason' => $t->void_reason,
                 'created_at' => $t->created_at?->format('Y-m-d H:i'),
+                'movement' => ($m = $t->source_type === 'cash_movement' ? $movements->get($t->source_id) : null) ? [
+                    'id' => $m->id, 'kind' => $m->kind, 'kind_label' => CashMovement::KIND_LABEL[$m->kind] ?? $m->kind, 'reference' => $m->reference,
+                    'has_receipt' => (bool) $m->receipt_path, 'voided' => $m->voided_at !== null,
+                ] : null,
             ])->values(),
         ]);
     }
@@ -199,6 +209,57 @@ class FinanceCashController extends Controller
             ['company_account' => $companyAccount->name, 'financial_account_id' => $target?->id]);
 
         return response()->json(['status' => true, 'message' => $target ? "Lo que llega por {$companyAccount->name} entra a {$target->name}." : 'Quedó sin cuenta de la caja.']);
+    }
+
+    /** §37 a §41 y §83: aporte, retiro, transferencia (con comisión), cambio de moneda o ajuste. Comprobante opcional (§79). */
+    public function storeMovement(Request $request, CashMovements $movements): JsonResponse
+    {
+        $data = $request->validate([
+            'kind' => ['required', Rule::in(array_keys(CashMovement::KIND_LABEL))],
+            'occurred_on' => 'required|date|before_or_equal:today',
+            'from_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'from_amount' => 'nullable|numeric|min:0.01|max:9999999999',
+            'to_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'to_amount' => 'nullable|numeric|min:0.01|max:9999999999',
+            'rate' => 'nullable|numeric|min:0.0001|max:99999999',
+            'fee' => 'nullable|numeric|min:0|max:9999999999',
+            'reference' => 'nullable|string|max:120',
+            'notes' => 'nullable|string|max:500',
+            'receipt' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+        ], ['occurred_on.before_or_equal' => 'La fecha no puede ser futura.']);
+        try {
+            $movement = $movements->create($data, $request->file('receipt'), Auth::id());
+        } catch (RuntimeException $e) {
+            return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+        }
+        $done = [
+            CashMovement::OWNER_CONTRIBUTION => 'Aporte registrado.', CashMovement::OWNER_WITHDRAWAL => 'Retiro registrado.',
+            CashMovement::INTERNAL_TRANSFER => 'Transferencia registrada.', CashMovement::EXCHANGE => 'Cambio de moneda registrado.',
+            CashMovement::ADJUSTMENT => 'Ajuste registrado.',
+        ][$movement->kind];
+
+        return response()->json(['status' => true, 'message' => $movement->fee > 0
+            ? "{$done} La comisión quedó como gasto en \"" . CashMovements::FEE_CATEGORY . '".' : $done, 'movement_id' => $movement->id]);
+    }
+
+    /** §83: anular con el motivo. Sus movimientos de cuenta y su comisión dejan de contar, y quedan a la vista. */
+    public function voidMovement(Request $request, CashMovement $movement, CashMovements $movements): JsonResponse
+    {
+        $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
+        try {
+            $movements->void($movement, trim($data['reason']), Auth::id());
+        } catch (RuntimeException $e) {
+            return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['status' => true, 'message' => 'Movimiento anulado: ya no cuenta, pero queda en el historial.']);
+    }
+
+    public function movementReceipt(CashMovement $movement)
+    {
+        abort_unless($movement->receipt_path && Storage::disk('local')->exists($movement->receipt_path), 404, 'El comprobante ya no está.');
+
+        return Storage::disk('local')->download($movement->receipt_path, "movimiento-{$movement->id}." . pathinfo($movement->receipt_path, PATHINFO_EXTENSION));
     }
 
     private function sameAmount(?float $a, $b): bool

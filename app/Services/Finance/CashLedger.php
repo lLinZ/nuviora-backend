@@ -3,6 +3,7 @@
 namespace App\Services\Finance;
 
 use App\Constants\OrderStatus;
+use App\Models\CashMovement;
 use App\Models\CompanyAccount;
 use App\Models\Currency;
 use App\Models\FinancialAccount;
@@ -271,6 +272,60 @@ class CashLedger
     }
 
     // ---------------------------------------------------------------------------------------------------------------
+    // Movimientos a mano (§37 a §41, §83)
+
+    public function syncCashMovement(CashMovement|int $movement): void
+    {
+        $id = $movement instanceof CashMovement ? $movement->id : $movement;
+        $m = CashMovement::with(['fromAccount', 'toAccount'])->find($id);
+        $reason = !$m ? 'El movimiento ya no existe.' : ($m->voided_at ? "Se anuló el movimiento: {$m->void_reason}" : null);
+        $this->apply('cash_movement', $id, $m && !$m->voided_at ? $this->movementLegs($m) : [], $reason);
+    }
+
+    private function movementLegs(CashMovement $m): array
+    {
+        $date = $m->occurred_on->toDateString();
+        $description = (CashMovement::KIND_LABEL[$m->kind] ?? $m->kind) . ($m->notes ? ": {$m->notes}" : '');
+        $leg = fn (string $leg, FinancialAccount $a, float $amount, string $kind, float $usd) => [
+            'leg' => $leg,
+            'financial_account_id' => $a->id,
+            'occurred_on' => $date,
+            'amount' => round($amount, 2),
+            'currency' => $a->currency,
+            'rate' => in_array($a->currency, ['USD', 'USDT'], true) || abs($usd) < 0.005 ? 1.0 : round(abs($amount / $usd), 4),
+            'amount_usd' => round($usd, 2),
+            'kind' => $kind,
+            'status' => Tx::CONFIRMED,
+            'order_id' => null,
+            'description' => mb_substr($description, 0, 255),
+        ];
+        $usd = (float) $m->amount_usd;
+        $fee = $m->fee > 0 && $m->fromAccount
+            ? $leg('fee', $m->fromAccount, -$m->fee, $m->kind === CashMovement::EXCHANGE ? Tx::EXCHANGE_FEE : Tx::TRANSFER_FEE, -CashMovements::feeUsd($m, $m->fromAccount))
+            : null;
+
+        return array_values(array_filter(match ($m->kind) {
+            CashMovement::OWNER_CONTRIBUTION => [$leg('in', $m->toAccount, $m->to_amount, Tx::OWNER_CONTRIBUTION, $usd)],
+            CashMovement::OWNER_WITHDRAWAL => [$leg('out', $m->fromAccount, -$m->from_amount, Tx::OWNER_WITHDRAWAL, -$usd)],
+            CashMovement::ADJUSTMENT => [$m->toAccount
+                ? $leg('in', $m->toAccount, $m->to_amount, Tx::ADJUSTMENT, $usd)
+                : $leg('out', $m->fromAccount, -$m->from_amount, Tx::ADJUSTMENT, -$usd)],
+            // §39: lo que llega sale de la cuenta de origen; lo que salió de más es la comisión (§40)
+            CashMovement::INTERNAL_TRANSFER => [
+                $leg('out', $m->fromAccount, -$m->to_amount, Tx::TRANSFER_OUT, -$usd),
+                $leg('in', $m->toAccount, $m->to_amount, Tx::TRANSFER_IN, $usd),
+                $fee,
+            ],
+            CashMovement::EXCHANGE => [
+                $leg('out', $m->fromAccount, -$m->from_amount, Tx::EXCHANGE_OUT, -$usd),
+                $leg('in', $m->toAccount, $m->to_amount, Tx::EXCHANGE_IN, $usd),
+                $fee,
+            ],
+            default => [],
+        }));
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
     // Todo de nuevo (cada noche, y al desplegar)
 
     /** @return array{orders: int, items: int} */
@@ -285,7 +340,10 @@ class CashLedger
             ->merge(Tx::whereNull('voided_at')->where('source_type', 'reconciliation_item')->pluck('source_id'))->unique()->values();
         $items->each(fn ($id) => $this->syncReconciliationItem($id, !ReconciliationItem::whereKey($id)->exists()));
 
-        return ['orders' => count($orders), 'items' => $items->count()];
+        $movements = CashMovement::pluck('id');
+        $movements->each(fn ($id) => $this->syncCashMovement($id));
+
+        return ['orders' => count($orders), 'items' => $items->count(), 'movements' => $movements->count()];
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -297,7 +355,10 @@ class CashLedger
      */
     public function balances(?string $date = null): Collection
     {
-        $sums = Tx::whereNull('voided_at')->when($date, fn ($q) => $q->where('occurred_on', '<=', $date))
+        // Solo lo de después del saldo inicial de cada cuenta (lo de antes ya está en ese saldo)
+        $sums = Tx::join('financial_accounts as fa', 'fa.id', '=', 'financial_transactions.financial_account_id')
+            ->whereNull('financial_transactions.voided_at')->whereColumn('financial_transactions.occurred_on', '>', 'fa.opening_date')
+            ->when($date, fn ($q) => $q->where('financial_transactions.occurred_on', '<=', $date))
             ->groupBy('financial_account_id')
             ->selectRaw('financial_account_id,
                 SUM(CASE WHEN status IN (?, ?) THEN amount ELSE 0 END) AS amount,

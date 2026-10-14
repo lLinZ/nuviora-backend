@@ -21,7 +21,7 @@ class FinanceCash extends Command
     {
         if ($this->option('resync')) {
             $done = $ledger->resyncAll();
-            $this->info("Revisadas {$done['orders']} órdenes y {$done['items']} pagos de la conciliación.");
+            $this->info("Revisadas {$done['orders']} órdenes, {$done['items']} pagos de la conciliación y {$done['movements']} movimientos a mano.");
 
             return self::SUCCESS;
         }

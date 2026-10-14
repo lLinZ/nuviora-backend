@@ -669,6 +669,10 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::put('/cash/accounts/{account}', [\App\Http\Controllers\FinanceCashController::class, 'updateAccount']);
         Route::put('/cash/opening-balances', [\App\Http\Controllers\FinanceCashController::class, 'openingBalances']);
         Route::put('/cash/company-accounts/{companyAccount}', [\App\Http\Controllers\FinanceCashController::class, 'linkCompanyAccount']);
+        // Movimientos a mano (entrega 3b; §37 a §41, §79, §83)
+        Route::post('/cash/movements', [\App\Http\Controllers\FinanceCashController::class, 'storeMovement']);
+        Route::post('/cash/movements/{movement}/void', [\App\Http\Controllers\FinanceCashController::class, 'voidMovement']);
+        Route::get('/cash/movements/{movement}/receipt', [\App\Http\Controllers\FinanceCashController::class, 'movementReceipt']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

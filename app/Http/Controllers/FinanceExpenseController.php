@@ -152,6 +152,9 @@ class FinanceExpenseController extends Controller
         if ($expense->inventory_trip_id) {
             return response()->json(['message' => 'Es el gasto de un viaje de traslado: se corrige en el viaje (Inventario › Operaciones).'], 422);
         }
+        if ($expense->cash_movement_id) {
+            return response()->json(['message' => 'Es la comisión de un movimiento de caja: se anula el movimiento y se registra de nuevo (Finanzas › Caja).'], 422);
+        }
         $data = $request->validate($this->expenseRules() + ['reason' => 'required|string|max:500'], self::MESSAGES);
         DB::transaction(function () use ($request, $data, $expense) {
             $before = $expense->snapshot();
@@ -178,6 +181,9 @@ class FinanceExpenseController extends Controller
         }
         if ($expense->inventory_trip_id) {
             return response()->json(['message' => 'Es el gasto de un viaje de traslado: se anula el viaje (Inventario › Operaciones).'], 422);
+        }
+        if ($expense->cash_movement_id) {
+            return response()->json(['message' => 'Es la comisión de un movimiento de caja: se anula el movimiento (Finanzas › Caja).'], 422);
         }
         $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
         $expense->update(['voided_at' => now(), 'voided_by' => Auth::id(), 'void_reason' => $data['reason']]);
@@ -282,7 +288,7 @@ class FinanceExpenseController extends Controller
     /** El historial de un gasto o un recurrente (§82). */
     public function audit(Request $request): JsonResponse
     {
-        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase', 'inventory_trip', 'inventory_lot', 'financial_account'])],
+        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase', 'inventory_trip', 'inventory_lot', 'financial_account', 'cash_movement'])],
             'subject_id' => 'required|integer']);
 
         return response()->json([
