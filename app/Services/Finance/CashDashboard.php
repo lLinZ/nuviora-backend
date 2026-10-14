@@ -12,6 +12,7 @@ use App\Models\RecurringExpense;
  * El tablero de la caja (Módulo 4 de Fran, §46) y la tarjeta de Liquidez del Resumen (§48): caja disponible, dinero
  * pendiente en agencias, cuentas por cobrar, cuentas por pagar, entradas y salidas del período y próximos pagos.
  * - Todo en USD aproximado: los saldos en Bs con la tasa de Binance (Fran, 12/10); las deudas en Bs, a su tasa.
+ * - §110: cuánto se puede destinar a comprar inventario (caja − por pagar − recurrentes de los próximos días).
  * - Entradas y salidas: lo que entró al negocio y lo que salió. Los movimientos entre cuentas de la empresa (transferencias,
  *   cambios de moneda, liquidaciones de efectivo) no son ni una cosa ni la otra (§39, §41, §43), y lo de antes del saldo
  *   inicial de cada cuenta ya está en ese saldo.
@@ -51,6 +52,8 @@ class CashDashboard
             ->map(fn ($f) => ['kind' => $f->kind, 'label' => Tx::KIND_LABEL[$f->kind] ?? $f->kind, 'usd' => round((float) $f->{$field}, 2)])->values();
 
         $upcoming = $this->upcoming($payables);
+        $payable = round($payables->sum(fn (AccountPayable $p) => $p->balanceUsd()), 2);
+        $recurringSoon = round(collect($upcoming)->where('type', 'recurring')->sum('amount_usd'), 2);
 
         return [
             'from' => $from,
@@ -61,7 +64,7 @@ class CashDashboard
             // §45: lo que se cobra es el efectivo que tienen las agencias más las otras cuentas por cobrar
             'receivable_usd' => round($agencies + $otherReceivables, 2),
             'other_receivable_usd' => $otherReceivables,
-            'payable_usd' => round($payables->sum(fn (AccountPayable $p) => $p->balanceUsd()), 2),
+            'payable_usd' => $payable,
             'payable_overdue_usd' => round($payables->filter(fn (AccountPayable $p) => $p->status() === 'overdue')->sum(fn (AccountPayable $p) => $p->balanceUsd()), 2),
             'inflow_usd' => round($flows->sum(fn ($f) => (float) $f->inflow), 2),
             'outflow_usd' => round($flows->sum(fn ($f) => (float) $f->outflow), 2),
@@ -70,6 +73,10 @@ class CashDashboard
             'upcoming' => $upcoming,
             'upcoming_usd' => round(collect($upcoming)->sum('amount_usd'), 2),
             'upcoming_days' => self::UPCOMING_DAYS,
+            // §110 "¿Cuánto puedo destinar a comprar inventario?": la caja menos lo que se debe y los gastos recurrentes que vienen.
+            // El efectivo de las agencias no cuenta: todavía no está en la mano. Decisión nuestra; confirmar con Fran.
+            'inventory_capital_usd' => round($available - $payable - $recurringSoon, 2),
+            'recurring_soon_usd' => $recurringSoon,
         ];
     }
 

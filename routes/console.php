@@ -61,6 +61,10 @@ try {
     Schedule::command('finance:cash --resync')->dailyAt('03:45')->withoutOverlapping(60);
     // CPA financiero con la ventana madura, los miércoles después del recordatorio de cierres de las 11:00 (§61)
     Schedule::command('finance:cpa')->wednesdays()->at('12:00')->withoutOverlapping();
+    // Reportes (entrega 4): los automáticos (diario D-3, semanal, mensual, §53 a §55) se generan solos cuando les toca;
+    // cada noche, después de recalcular las órdenes, los recientes sacan versión nueva si cambiaron sus cifras (§20, §21)
+    Schedule::command('finance:reports')->everyTenMinutes()->withoutOverlapping(30)->runInBackground();
+    Schedule::command('finance:reports --refresh')->dailyAt('04:15')->withoutOverlapping(90);
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

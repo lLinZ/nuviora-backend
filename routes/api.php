@@ -665,6 +665,17 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         // Caja (entrega 3; §34 a §36, §42, §75, §76, R14): cuentas, saldos y movimientos
         Route::get('/cash', [\App\Http\Controllers\FinanceCashController::class, 'index']);
         Route::get('/cash/dashboard', [\App\Http\Controllers\FinanceCashController::class, 'dashboard']); // §46, §48
+        // Reportes (entrega 4; §53 a §58, §80, R18)
+        Route::get('/reports', [\App\Http\Controllers\FinanceReportsController::class, 'index']);
+        Route::post('/reports', [\App\Http\Controllers\FinanceReportsController::class, 'store']);
+        Route::get('/reports-config', [\App\Http\Controllers\FinanceReportsController::class, 'config']);
+        Route::put('/reports-config', [\App\Http\Controllers\FinanceReportsController::class, 'updateConfig']);
+        Route::get('/export/excel', [\App\Http\Controllers\FinanceReportsController::class, 'export']);
+        Route::get('/reports/{report}', [\App\Http\Controllers\FinanceReportsController::class, 'show']);
+        Route::post('/reports/{report}/refresh', [\App\Http\Controllers\FinanceReportsController::class, 'refresh']);
+        Route::get('/reports/{report}/pdf', [\App\Http\Controllers\FinanceReportsController::class, 'pdf']);
+        Route::get('/reports/{report}/excel', [\App\Http\Controllers\FinanceReportsController::class, 'excel']);
+        Route::post('/reports/{report}/whatsapp', [\App\Http\Controllers\FinanceReportsController::class, 'whatsapp']);
         Route::get('/cash/transactions', [\App\Http\Controllers\FinanceCashController::class, 'transactions']);
         Route::post('/cash/accounts', [\App\Http\Controllers\FinanceCashController::class, 'storeAccount']);
         Route::put('/cash/accounts/{account}', [\App\Http\Controllers\FinanceCashController::class, 'updateAccount']);
