@@ -676,6 +676,16 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         // Agencias (entrega 3c; §43, §101 a §104, R16)
         Route::get('/agencies', [\App\Http\Controllers\FinanceCashController::class, 'agencies']);
         Route::post('/agencies/{agency}/settle', [\App\Http\Controllers\FinanceCashController::class, 'settle']);
+        // Los demás pagos (entrega 3d; §28, §44, §45, §77)
+        Route::get('/cash/payables', [\App\Http\Controllers\FinanceCashController::class, 'payables']);
+        Route::get('/receivables', [\App\Http\Controllers\FinanceCashController::class, 'receivables']);
+        Route::post('/receivables', [\App\Http\Controllers\FinanceCashController::class, 'storeReceivable']);
+        Route::post('/receivables/{receivable}/collections', [\App\Http\Controllers\FinanceCashController::class, 'collect']);
+        Route::post('/receivables/{receivable}/void', [\App\Http\Controllers\FinanceCashController::class, 'voidReceivable']);
+        Route::post('/receivable-collections/{collection}/void', [\App\Http\Controllers\FinanceCashController::class, 'voidCollection']);
+        Route::put('/refunds/{refund}/account', [\App\Http\Controllers\FinanceCashController::class, 'refundAccount']);
+        Route::post('/recurring-expenses/{recurring}/payments', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringPay']);
+        Route::post('/recurring-payments/{payment}/void', [\App\Http\Controllers\FinanceExpenseController::class, 'recurringPaymentVoid']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

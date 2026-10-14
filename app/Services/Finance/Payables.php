@@ -94,6 +94,10 @@ class Payables
      */
     private function checkAccount(?int $accountId, string $currency, string $paidAt): void
     {
+        $account = $accountId ? FinancialAccount::find($accountId) : null;
+        if ($account?->isAgencyCash()) {
+            return; // R16: lo que se descuenta del efectivo de una agencia (AgencyCash::settle)
+        }
         if (!$accountId) {
             if ($paidAt > CashLedger::startDate()) {
                 throw ValidationException::withMessages(['financial_account_id' => 'Elige la cuenta de donde salió el pago.']);

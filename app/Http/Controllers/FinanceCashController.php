@@ -9,9 +9,13 @@ use App\Models\CompanyAccount;
 use App\Models\Earning;
 use App\Models\User;
 use App\Services\Finance\AgencyCash;
+use App\Services\Finance\OtherPayments;
+use App\Models\AccountReceivable;
+use App\Models\ReceivableCollection;
 use App\Models\FinancialAccount;
 use App\Models\FinancialAuditLog;
 use App\Models\FinancialTransaction as Tx;
+use App\Models\OrderRefund;
 use App\Models\ReconciliationItem;
 use App\Services\Finance\CashLedger;
 use App\Services\Finance\CashMovements;
@@ -42,6 +46,12 @@ class FinanceCashController extends Controller
         $unlinked = CompanyAccount::where('is_active', true)->whereNotNull('method')->whereNull('financial_account_id')->get(['id', 'name']);
         $withoutAccount = ReconciliationItem::whereNull('company_account_id')->where('status', '!=', ReconciliationItem::NOT_RECEIVED)
             ->whereHas('day', fn ($q) => $q->where('date', '>', $start))->count();
+        // §77: los reembolsos que no salen de ninguna cuenta (en efectivo, "Otro" o sin método): el Admin dice de cuál salieron
+        $refundsWithoutAccount = OrderRefund::with('order:id,name')->where('refunded_at', '>', $start)
+            ->whereNotIn('id', Tx::whereNull('voided_at')->where('source_type', 'refund')->select('source_id'))
+            ->orderBy('refunded_at')->get()
+            ->map(fn (OrderRefund $r) => ['id' => $r->id, 'order_id' => $r->order_id, 'order' => $r->order?->name, 'amount_usd' => $r->amount_usd,
+                'method' => $r->method, 'refunded_at' => $r->refunded_at?->toDateString()])->values();
 
         return response()->json([
             'start_date' => $start,
@@ -63,6 +73,7 @@ class FinanceCashController extends Controller
             'warnings' => [
                 'unlinked' => $unlinked->pluck('name')->values(),
                 'items_without_account' => $withoutAccount,
+                'refunds_without_account' => $refundsWithoutAccount,
             ],
             'kinds' => array_diff_key(FinancialAccount::KINDS, [FinancialAccount::AGENCY_CASH => 1]),
             'currencies' => FinancialAccount::CURRENCIES,
@@ -331,6 +342,110 @@ class FinanceCashController extends Controller
         }
 
         return response()->json(['status' => true, 'message' => 'Liquidación registrada.']);
+    }
+
+    /**
+     * §44: lo que se debe, a quien sea: proveedores, agencias, empleados, herramientas y otras obligaciones, con lo pagado, lo
+     * pendiente y lo vencido.
+     */
+    public function payables(): JsonResponse
+    {
+        $rows = AccountPayable::with(['supplier:id,name', 'agency:id,names'])->whereNull('voided_at')
+            ->orderByRaw('due_date IS NULL')->orderBy('due_date')->orderBy('issued_at')->get()
+            ->filter(fn (AccountPayable $p) => $p->balance() > 0.005)->values();
+
+        return response()->json([
+            'payables' => $rows->map(fn (AccountPayable $p) => $p->toPayload() + ['closure_id' => $p->source_type === AgencyCash::SOURCE_CLOSURE ? $p->source_id : null])->values(),
+            'payee_types' => ['supplier' => 'Proveedor', 'agency' => 'Agencia'] + OtherPayments::PAYEE_TYPES,
+        ]);
+    }
+
+    /** §45: las otras cuentas por cobrar. */
+    public function receivables(Request $request): JsonResponse
+    {
+        $all = (bool) $request->boolean('all');
+        $rows = AccountReceivable::with(['collections.account:id,name'])->whereNull('voided_at')->orderBy('issued_at')->get()
+            ->filter(fn (AccountReceivable $r) => $all || $r->balance() > 0.005)->values();
+
+        return response()->json(['receivables' => $rows->map(fn ($r) => $r->toPayload(true))->values()]);
+    }
+
+    public function storeReceivable(Request $request, OtherPayments $other): JsonResponse
+    {
+        $data = $request->validate([
+            'debtor_name' => 'required|string|max:150',
+            'description' => 'required|string|max:255',
+            'amount' => 'required|numeric|min:0.01|max:9999999999',
+            'currency' => ['required', Rule::in(['USD', 'USDT', 'VES'])],
+            'rate' => 'nullable|required_if:currency,VES|numeric|min:0.0001',
+            'issued_at' => 'nullable|date|before_or_equal:today',
+            'due_date' => 'nullable|date',
+            'notes' => 'nullable|string|max:500',
+        ]);
+        $other->createReceivable($data, Auth::id());
+
+        return response()->json(['message' => 'Cuenta por cobrar registrada.'], 201);
+    }
+
+    public function collect(Request $request, AccountReceivable $receivable, OtherPayments $other): JsonResponse
+    {
+        $data = $request->validate([
+            'amount' => 'required|numeric|min:0.01|max:9999999999',
+            'currency' => ['required', Rule::in(['USD', 'USDT', 'VES'])],
+            'rate' => 'nullable|required_if:currency,VES|numeric|min:0.0001',
+            'collected_at' => 'required|date|before_or_equal:today',
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'notes' => 'nullable|string|max:500',
+            'receipt' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+        ]);
+        $other->collect($receivable, $data, $request->file('receipt'), Auth::id());
+        $left = $receivable->fresh()->balance();
+
+        return response()->json(['message' => $left > 0 ? 'Cobro registrado. Falta cobrar ' . number_format($left, 2, ',', '.') . '.' : 'Cobro registrado: quedó cobrada.'], 201);
+    }
+
+    public function voidCollection(Request $request, ReceivableCollection $collection, OtherPayments $other): JsonResponse
+    {
+        $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
+        $other->voidCollection($collection, $data['reason'], Auth::id());
+
+        return response()->json(['message' => 'Cobro anulado.']);
+    }
+
+    public function voidReceivable(Request $request, AccountReceivable $receivable, OtherPayments $other): JsonResponse
+    {
+        $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
+        $other->voidReceivable($receivable, $data['reason'], Auth::id());
+
+        return response()->json(['message' => 'Cuenta por cobrar anulada.']);
+    }
+
+    /**
+     * §77: de qué cuenta salió un reembolso. La orden lo registra con su método (lo hacen también vendedoras y gerentes, que
+     * no ven las cuentas); si el método no dice la cuenta (efectivo, "Otro"), o salió de otra, aquí la pone el Admin. En
+     * bolívares se puede escribir el monto que salió; si no, se usa la tasa del pago de la orden.
+     */
+    public function refundAccount(Request $request, OrderRefund $refund): JsonResponse
+    {
+        $data = $request->validate([
+            'financial_account_id' => 'required|integer|exists:financial_accounts,id',
+            'amount' => 'nullable|numeric|min:0.01|max:9999999999',
+        ], ['financial_account_id.required' => 'Elige la cuenta de donde salió.']);
+        $account = FinancialAccount::findOrFail($data['financial_account_id']);
+        CashLedger::assertAccount($account->id, $account->currency, $refund->refunded_at->toDateString());
+
+        $before = ['account' => $refund->financial_account_id, 'amount' => $refund->amount, 'currency' => $refund->currency];
+        $bolivares = $account->currency === 'VES' && !empty($data['amount']);
+        $refund->update([
+            'financial_account_id' => $account->id,
+            'amount' => $bolivares ? round((float) $data['amount'], 2) : null,
+            'currency' => $bolivares ? 'VES' : null,
+            'rate' => $bolivares && $refund->amount_usd > 0 ? round((float) $data['amount'] / $refund->amount_usd, 4) : null,
+        ]);
+        FinancialAuditLog::record('refund_account_set', 'order_refund', $refund->id, $before,
+            ['account' => $account->id, 'amount' => $refund->amount, 'currency' => $refund->currency], null, Auth::id());
+
+        return response()->json(['message' => "El reembolso sale de {$account->name}."]);
     }
 
     public function movementReceipt(CashMovement $movement)

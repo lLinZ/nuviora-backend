@@ -29,6 +29,11 @@ class FinancialTransaction extends Model
     public const TRIP_PAYMENT = 'trip_payment';                 // lo pagado de un viaje de traslado (§13)
     public const AGENCY_SETTLEMENT_OUT = 'agency_settlement_out'; // liquidación de efectivo: sale de la agencia (§43)
     public const AGENCY_SETTLEMENT_IN = 'agency_settlement_in';   // …y entra a la cuenta donde se guarda
+    // Los demás pagos (entrega 3d)
+    public const EXPENSE_PAYMENT = 'expense_payment';             // gasto manual pagado (§28)
+    public const RECURRING_PAYMENT = 'recurring_payment';         // pago de un vencimiento de un gasto recurrente (§28)
+    public const CUSTOMER_REFUND = 'customer_refund';             // reembolso a un cliente (§77)
+    public const RECEIVABLE_COLLECTION = 'receivable_collection'; // cobro de una cuenta por cobrar (§45)
 
     public const KIND_LABEL = [
         self::CUSTOMER_PAYMENT => 'Pago de cliente',
@@ -47,6 +52,10 @@ class FinancialTransaction extends Model
         self::TRIP_PAYMENT => 'Viaje de traslado',
         self::AGENCY_SETTLEMENT_OUT => 'Liquidación de efectivo (sale de la agencia)',
         self::AGENCY_SETTLEMENT_IN => 'Liquidación de efectivo (entra)',
+        self::EXPENSE_PAYMENT => 'Gasto pagado',
+        self::RECURRING_PAYMENT => 'Pago de gasto recurrente',
+        self::CUSTOMER_REFUND => 'Reembolso a cliente',
+        self::RECEIVABLE_COLLECTION => 'Cobro de una cuenta por cobrar',
     ];
 
     /** Movimientos entre cuentas de la empresa: no son entradas ni salidas del negocio (§39, §41). */

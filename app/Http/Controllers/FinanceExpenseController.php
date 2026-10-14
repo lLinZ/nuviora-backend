@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\City;
 use App\Models\FinancialAccount;
+use App\Models\RecurringExpensePayment;
+use App\Services\Finance\OtherPayments;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
 use App\Models\FinancialAuditLog;
@@ -63,6 +65,7 @@ class FinanceExpenseController extends Controller
             'financial_accounts' => FinancialAccount::where('is_active', true)->where('kind', '!=', FinancialAccount::AGENCY_CASH)
                 ->orderBy('name')->get(['id', 'name', 'currency', 'kind']),
             'cash_start_date' => \App\Services\Finance\CashLedger::startDate(),
+            'payee_types' => OtherPayments::PAYEE_TYPES,
             'payment_types' => InventoryPurchase::PAYMENT_TYPES,
             // Viajes de traslado (entrega 2c, §15): la regla de desgaste vigente
             'vehicle_wear' => TransferTrips::wearRule() + ['label' => TransferTrips::wearLabel(TransferTrips::wearRule()['mode'], TransferTrips::wearRule()['value'])],
@@ -138,6 +141,7 @@ class FinanceExpenseController extends Controller
                 'receipt_path' => $request->hasFile('receipt') ? $request->file('receipt')->store('expenses', 'local') : null,
                 'created_by' => Auth::id(),
             ]);
+            app(OtherPayments::class)->applyExpensePayment($expense, $data);
             FinancialAuditLog::record('expense_created', 'expense', $expense->id, null, $expense->fresh()->snapshot());
 
             return $expense;
@@ -167,6 +171,7 @@ class FinanceExpenseController extends Controller
                 $expense->receipt_path = $request->file('receipt')->store('expenses', 'local');
             }
             $expense->save();
+            app(OtherPayments::class)->applyExpensePayment($expense->fresh(), $data);
             $after = $expense->fresh()->snapshot();
             if ($after !== $before) {
                 FinancialAuditLog::record('expense_updated', 'expense', $expense->id, $before, $after, $data['reason']);
@@ -189,6 +194,7 @@ class FinanceExpenseController extends Controller
             return response()->json(['message' => 'Es la comisión de un movimiento de caja: se anula el movimiento (Finanzas › Caja).'], 422);
         }
         $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
+        app(OtherPayments::class)->beforeVoidExpense($expense);
         $expense->update(['voided_at' => now(), 'voided_by' => Auth::id(), 'void_reason' => $data['reason']]);
         FinancialAuditLog::record('expense_voided', 'expense', $expense->id, ['voided' => false], ['voided' => true], $data['reason']);
 
@@ -206,12 +212,46 @@ class FinanceExpenseController extends Controller
     {
         $items = RecurringExpense::with(['category:id,name', 'product:id,title', 'city:id,name', 'versions.creator:id,names'])
             ->orderByDesc('is_active')->orderBy('name')->get();
-        $payloads = $items->map->toPayload()->values();
+        $other = app(OtherPayments::class);
+        $until = today()->addDays(30)->toDateString();
+        $payments = RecurringExpensePayment::with('account:id,name')->whereIn('recurring_expense_id', $items->pluck('id'))
+            ->orderByDesc('due_date')->orderByDesc('id')->get()->groupBy('recurring_expense_id');
+        $payloads = $items->map(fn (RecurringExpense $r) => $r->toPayload() + [
+            // §28: cada vencimiento se paga aparte y sale de la caja ese día (desde el arranque de la caja)
+            'due' => $other->dueDates($r, $until),
+            'payments' => ($payments->get($r->id) ?? collect())->take(10)->map->toPayload()->values(),
+        ])->values();
 
         return response()->json([
             'recurring' => $payloads,
             'monthly_total' => round($payloads->where('active_today', true)->sum('monthly_usd'), 2),
         ]);
+    }
+
+    /** §28: el pago de un vencimiento de un gasto recurrente, desde una cuenta de la caja. */
+    public function recurringPay(Request $request, RecurringExpense $recurring, OtherPayments $other): JsonResponse
+    {
+        $data = $request->validate([
+            'due_date' => 'required|date',
+            'paid_at' => 'required|date|before_or_equal:today',
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'amount' => 'required|numeric|min:0.01|max:9999999999',
+            'currency' => ['required', Rule::in(Expense::CURRENCIES)],
+            'rate' => 'nullable|required_if:currency,VES|numeric|min:0.0001',
+            'notes' => 'nullable|string|max:500',
+            'receipt' => 'nullable|file|mimes:jpg,jpeg,png,webp,pdf|max:10240',
+        ], self::MESSAGES);
+        $other->payRecurring($recurring, $data, $request->file('receipt'), Auth::id());
+
+        return response()->json(['message' => 'Pago registrado: sale de la caja ese día. La rentabilidad no cambia (el gasto se reparte en lo que cubre).'], 201);
+    }
+
+    public function recurringPaymentVoid(Request $request, RecurringExpensePayment $payment, OtherPayments $other): JsonResponse
+    {
+        $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
+        $other->voidRecurringPayment($payment, $data['reason'], Auth::id());
+
+        return response()->json(['message' => 'Pago anulado: vuelve a la caja y el vencimiento queda sin pagar.']);
     }
 
     public function recurringStore(Request $request): JsonResponse
@@ -316,6 +356,12 @@ class FinanceExpenseController extends Controller
             'warehouse_id' => 'nullable|integer|exists:warehouses,id',
             'agency_id' => 'nullable|integer|exists:users,id',
             'supplier_id' => 'nullable|integer|exists:suppliers,id',
+            // Entrega 3d (§28, §44): cómo se pagó
+            'payment' => ['nullable', Rule::in(['paid', 'payable', 'none'])],
+            'financial_account_id' => 'nullable|integer|exists:financial_accounts,id',
+            'payee_type' => ['nullable', Rule::in(array_keys(OtherPayments::PAYEE_TYPES))],
+            'payee_name' => 'nullable|string|max:150',
+            'due_date' => 'nullable|date',
         ];
     }
 

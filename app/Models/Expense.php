@@ -14,7 +14,7 @@ class Expense extends Model
 
     protected $fillable = [
         'concept', 'expense_category_id', 'amount', 'currency', 'rate', 'amount_usd', 'expense_date', 'description', 'receipt_path',
-        'product_id', 'city_id', 'warehouse_id', 'agency_id', 'supplier_id', 'recurring_expense_id', 'inventory_trip_id', 'cash_movement_id', 'voided_at', 'voided_by',
+        'product_id', 'city_id', 'warehouse_id', 'agency_id', 'supplier_id', 'recurring_expense_id', 'inventory_trip_id', 'cash_movement_id', 'financial_account_id', 'voided_at', 'voided_by',
         'void_reason', 'created_by',
     ];
 
@@ -54,6 +54,18 @@ class Expense extends Model
     public function supplier()
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    /** La cuenta de la caja de donde se pagó (entrega 3d, §28). */
+    public function account()
+    {
+        return $this->belongsTo(FinancialAccount::class, 'financial_account_id');
+    }
+
+    /** §44: si quedó por pagar, su deuda. */
+    public function payable()
+    {
+        return $this->hasOne(AccountPayable::class, 'source_id')->where('source_type', 'expense');
     }
 
     public function creator()
@@ -126,6 +138,10 @@ class Expense extends Model
             // Gasto de un viaje de traslado (§13): se corrige en el viaje y no cuenta en la rentabilidad del período (§14)
             'inventory_trip_id' => $this->inventory_trip_id,
             'cash_movement_id' => $this->cash_movement_id,
+            'financial_account_id' => $this->financial_account_id,
+            'account' => $this->account?->name,
+            'payable' => ($p = $this->payable) && !$p->voided_at ? ['id' => $p->id, 'payee_type' => $p->payee_type, 'payee' => $p->payee_name,
+                'due_date' => $p->due_date?->toDateString(), 'balance' => $p->balance(), 'status' => $p->status()] : null,
             'voided_at' => $this->voided_at?->format('Y-m-d H:i'),
             'voided_by' => $this->voider?->names,
             'void_reason' => $this->void_reason,

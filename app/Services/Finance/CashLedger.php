@@ -8,9 +8,13 @@ use App\Models\CompanyAccount;
 use App\Models\Currency;
 use App\Models\FinancialAccount;
 use App\Models\FinancialTransaction as Tx;
+use App\Models\Expense;
 use App\Models\InventoryTransferTrip;
 use App\Models\Order;
+use App\Models\OrderRefund;
 use App\Models\PayablePayment;
+use App\Models\ReceivableCollection;
+use App\Models\RecurringExpensePayment;
 use App\Models\ReconciliationItem;
 use App\Models\Setting;
 use App\Models\Status;
@@ -394,6 +398,129 @@ class CashLedger
     }
 
     // ---------------------------------------------------------------------------------------------------------------
+    // Gastos (§28), reembolsos (§77) y cobros (§45)
+
+    /** §28: el gasto manual pagado sale de su cuenta el día del gasto. Los de un viaje o de una comisión salen con su origen. */
+    public function syncExpense(Expense|int $expense): void
+    {
+        $id = $expense instanceof Expense ? $expense->id : $expense;
+        $e = Expense::with('account')->find($id);
+        $reason = !$e ? 'El gasto ya no existe.' : ($e->voided_at ? "Se anuló el gasto: {$e->void_reason}" : null);
+        $legs = [];
+        if ($e && !$e->voided_at && !$e->inventory_trip_id && !$e->cash_movement_id && $e->account && $this->counts($e->account, $e->expense_date->toDateString())) {
+            $legs[] = $this->outLeg($e->account, $e->expense_date->toDateString(), (float) $e->amount, $e->currency, (float) $e->rate, (float) $e->amount_usd,
+                Tx::EXPENSE_PAYMENT, "Gasto: {$e->concept}");
+        }
+        $this->apply('expense', $id, $legs, $reason ?? 'El gasto ya no dice de qué cuenta se pagó.');
+    }
+
+    /** §28: el pago de un vencimiento de un gasto recurrente sale el día que se pagó. */
+    public function syncRecurringPayment(RecurringExpensePayment|int $payment): void
+    {
+        $id = $payment instanceof RecurringExpensePayment ? $payment->id : $payment;
+        $p = RecurringExpensePayment::with(['account', 'recurring:id,name'])->find($id);
+        $reason = !$p ? 'El pago ya no existe.' : ($p->voided_at ? "Se anuló el pago: {$p->void_reason}" : null);
+        $legs = [];
+        if ($p && !$p->voided_at && $p->account && $this->counts($p->account, $p->paid_at->toDateString())) {
+            $legs[] = $this->outLeg($p->account, $p->paid_at->toDateString(), $p->amount, $p->currency, $p->rate, $p->amount_usd,
+                Tx::RECURRING_PAYMENT, ($p->recurring?->name ?? 'Gasto recurrente') . ' (vence el ' . $p->due_date->format('d/m') . ')');
+        }
+        $this->apply('recurring_payment', $id, $legs, $reason);
+    }
+
+    /**
+     * §77: el reembolso sale de la cuenta que dijo el Admin o, si no, de la de su método (pago móvil → Banesco…). En bolívares,
+     * con el monto que se escribió o, si no, el USD a la tasa del pago de la orden (aproximado).
+     */
+    public function syncRefund(OrderRefund|int $refund): void
+    {
+        $id = $refund instanceof OrderRefund ? $refund->id : $refund;
+        $r = OrderRefund::with(['order:id,name', 'order.payments'])->find($id);
+        $legs = [];
+        $account = $r ? ($r->financial_account_id ? FinancialAccount::find($r->financial_account_id)
+            : (($kind = OrderRefund::METHOD_KIND[$r->method ?? ''] ?? null) ? $this->accountOfMethod($kind) : null)) : null;
+        if ($r && $account && $r->refunded_at && $this->counts($account, $r->refunded_at->toDateString())) {
+            $usd = (float) $r->amount_usd;
+            if ($r->amount !== null && $r->currency) {
+                [$amount, $rate] = [(float) $r->amount, (float) ($r->rate ?: 1)];
+                $currency = $r->currency;
+            } elseif ($account->currency === 'VES') {
+                $rate = (float) ($r->order?->payments->filter(fn ($p) => in_array($p->method, ['PAGOMOVIL', 'TRANSFERENCIA_BANCARIA_BOLIVARES'], true))
+                    ->firstWhere('rate', '>', 0)?->rate ?: self::binanceRate());
+                [$amount, $currency] = [round($usd * $rate, 2), 'VES'];
+            } else {
+                [$amount, $rate, $currency] = [$usd, 1.0, $account->currency];
+            }
+            $legs[] = $this->outLeg($account, $r->refunded_at->toDateString(), $amount, $currency, $rate, $usd, Tx::CUSTOMER_REFUND,
+                'Reembolso de ' . ($r->order?->name ?? "la orden {$r->order_id}") . ($r->method ? " por {$r->method}" : ''), $r->order_id);
+        }
+        $this->apply('refund', $id, $legs, !$r ? 'El reembolso ya no existe.' : 'El reembolso ya no dice de qué cuenta salió.');
+    }
+
+    /** §45: un cobro entra a su cuenta el día que se cobró. */
+    public function syncReceivableCollection(ReceivableCollection|int $collection): void
+    {
+        $id = $collection instanceof ReceivableCollection ? $collection->id : $collection;
+        $c = ReceivableCollection::with(['account', 'receivable:id,debtor_name,description'])->find($id);
+        $reason = !$c ? 'El cobro ya no existe.' : ($c->voided_at ? "Se anuló el cobro: {$c->void_reason}" : null);
+        $legs = [];
+        if ($c && !$c->voided_at && $c->account && $this->counts($c->account, $c->collected_at->toDateString())) {
+            $leg = $this->outLeg($c->account, $c->collected_at->toDateString(), $c->amount, $c->currency, $c->rate, $c->amount_usd, Tx::RECEIVABLE_COLLECTION,
+                'Cobro a ' . ($c->receivable?->debtor_name ?? '') . ($c->receivable?->description ? " ({$c->receivable->description})" : ''));
+            $leg['amount'] = -$leg['amount'];
+            $leg['amount_usd'] = -$leg['amount_usd'];
+            $legs[] = $leg;
+        }
+        $this->apply('receivable_collection', $id, $legs, $reason);
+    }
+
+    /** Un movimiento que sale de una cuenta, en su moneda (USD y USDT valen igual; los Bs con su tasa). */
+    private function outLeg(FinancialAccount $account, string $date, float $amount, string $currency, float $rate, float $usd, string $kind,
+        string $description, ?int $orderId = null): array
+    {
+        [$amount, $legRate, $legUsd] = $this->inAccountCurrency($amount, $currency, $account->currency, $currency === 'VES' ? $rate : self::binanceRate());
+
+        return [
+            'leg' => 'main',
+            'financial_account_id' => $account->id,
+            'occurred_on' => $date,
+            'amount' => -$amount,
+            'currency' => $account->currency,
+            'rate' => $legRate,
+            'amount_usd' => -round($usd ?: $legUsd, 2),
+            'kind' => $kind,
+            'status' => Tx::CONFIRMED,
+            'order_id' => $orderId,
+            'description' => mb_substr($description, 0, 255),
+        ];
+    }
+
+    /**
+     * El pago sale de una cuenta de la caja en su misma moneda (USD y USDT valen igual, §33), después de su saldo inicial.
+     * Desde el arranque de la caja la cuenta es obligatoria: si no, el dinero se movió sin que la caja lo sepa.
+     */
+    public static function assertAccount(?int $accountId, string $currency, string $date, string $field = 'financial_account_id'): void
+    {
+        if (!$accountId) {
+            if ($date > self::startDate()) {
+                throw \Illuminate\Validation\ValidationException::withMessages([$field => 'Elige la cuenta de la caja.']);
+            }
+            return;
+        }
+        $account = FinancialAccount::find($accountId);
+        $family = fn (string $c) => in_array($c, ['USD', 'USDT'], true) ? 'USD' : $c;
+        if (!$account || !$account->is_active || $account->isAgencyCash()) {
+            throw \Illuminate\Validation\ValidationException::withMessages([$field => 'Esa cuenta no existe, está inactiva o es el efectivo de una agencia.']);
+        }
+        if ($family($account->currency) !== $family($currency)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([$field => "La cuenta {$account->name} es en {$account->currency}: el monto tiene que ir en esa moneda."]);
+        }
+        if ($date <= $account->opening_date->toDateString()) {
+            throw \Illuminate\Validation\ValidationException::withMessages([$field => "La fecha tiene que ser después del saldo inicial de {$account->name}."]);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
     // Todo de nuevo (cada noche, y al desplegar)
 
     /** @return array{orders: int, items: int} */
@@ -416,8 +543,20 @@ class CashLedger
         $trips = InventoryTransferTrip::where('trip_date', '>', $since)->pluck('id')
             ->merge(Tx::whereNull('voided_at')->where('source_type', 'trip')->pluck('source_id'))->unique();
         $trips->each(fn ($id) => $this->syncTrip($id));
+        $others = 0;
+        foreach ([
+            'expense' => [Expense::class, 'expense_date', 'syncExpense'],
+            'recurring_payment' => [RecurringExpensePayment::class, 'paid_at', 'syncRecurringPayment'],
+            'refund' => [OrderRefund::class, 'refunded_at', 'syncRefund'],
+            'receivable_collection' => [ReceivableCollection::class, 'collected_at', 'syncReceivableCollection'],
+        ] as $type => [$class, $dateColumn, $method]) {
+            $ids = $class::where($dateColumn, '>', $since)->pluck('id')
+                ->merge(Tx::whereNull('voided_at')->where('source_type', $type)->pluck('source_id'))->unique();
+            $ids->each(fn ($id) => $this->{$method}($id));
+            $others += $ids->count();
+        }
 
-        return ['orders' => count($orders), 'items' => $items->count(), 'movements' => $movements->count() + $payments->count() + $trips->count()];
+        return ['orders' => count($orders), 'items' => $items->count(), 'movements' => $movements->count() + $payments->count() + $trips->count() + $others];
     }
 
     // ---------------------------------------------------------------------------------------------------------------

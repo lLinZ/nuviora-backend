@@ -9,7 +9,10 @@ class OrderRefund extends Model
 {
     public const METHODS = ['Pago móvil', 'Transferencia', 'Zelle', 'Binance', 'Efectivo', 'Otro'];
 
-    protected $fillable = ['order_id', 'amount_usd', 'method', 'refunded_at', 'notes', 'receipt_path', 'user_id'];
+    protected $fillable = ['order_id', 'amount_usd', 'method', 'financial_account_id', 'amount', 'currency', 'rate', 'refunded_at', 'notes', 'receipt_path', 'user_id'];
+
+    /** §77: el método del reembolso y el método del Módulo 1 por el que sale (para saber de qué cuenta de la caja). */
+    public const METHOD_KIND = ['Pago móvil' => 'pago_movil', 'Transferencia' => 'transferencia', 'Zelle' => 'zelle', 'Binance' => 'binance'];
 
     protected $casts = [
         'amount_usd' => 'float',

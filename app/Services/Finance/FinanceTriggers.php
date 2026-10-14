@@ -7,6 +7,9 @@ use App\Models\AgencyClosureRow;
 use App\Models\AgencyTrip;
 use App\Models\AgencyWeeklyClosure;
 use App\Models\CompanyAccount;
+use App\Models\Expense;
+use App\Models\ReceivableCollection;
+use App\Models\RecurringExpensePayment;
 use App\Models\Earning;
 use App\Models\InventoryLot;
 use App\Models\InventoryTransferTrip;
@@ -78,6 +81,11 @@ class FinanceTriggers
         // Entrega 3c: los pagos de deudas y los viajes salen de su cuenta de la caja; el cierre aprobado es una deuda (§101)
         PayablePayment::saved(fn (PayablePayment $p) => self::safely(fn () => app(CashLedger::class)->syncPayablePayment($p)));
         InventoryTransferTrip::saved(fn (InventoryTransferTrip $t) => self::safely(fn () => app(CashLedger::class)->syncTrip($t)));
+        // Entrega 3d: gastos pagados (§28), pagos de recurrentes, reembolsos (§77) y cobros (§45)
+        Expense::saved(fn (Expense $e) => self::safely(fn () => app(CashLedger::class)->syncExpense($e)));
+        RecurringExpensePayment::saved(fn (RecurringExpensePayment $p) => self::safely(fn () => app(CashLedger::class)->syncRecurringPayment($p)));
+        OrderRefund::saved(fn (OrderRefund $r) => self::safely(fn () => app(CashLedger::class)->syncRefund($r)));
+        ReceivableCollection::saved(fn (ReceivableCollection $c) => self::safely(fn () => app(CashLedger::class)->syncReceivableCollection($c)));
         AgencyWeeklyClosure::saved(function (AgencyWeeklyClosure $closure) {
             if ($closure->wasChanged(['status', 'final_approved_total']) || $closure->wasRecentlyCreated) {
                 self::safely(fn () => app(AgencyCash::class)->syncClosure($closure));
