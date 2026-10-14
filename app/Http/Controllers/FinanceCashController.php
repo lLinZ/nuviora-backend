@@ -17,6 +17,7 @@ use App\Models\FinancialAuditLog;
 use App\Models\FinancialTransaction as Tx;
 use App\Models\OrderRefund;
 use App\Models\ReconciliationItem;
+use App\Services\Finance\CashDashboard;
 use App\Services\Finance\CashLedger;
 use App\Services\Finance\CashMovements;
 use Illuminate\Http\JsonResponse;
@@ -81,6 +82,14 @@ class FinanceCashController extends Controller
             'statuses' => Tx::STATUS_LABEL,
             'movement_kinds' => array_intersect_key(CashMovement::KIND_LABEL, array_flip(CashMovement::MANUAL)),
         ]);
+    }
+
+    /** §46: el tablero de la caja (y la tarjeta de Liquidez del Resumen, §48), con las entradas y salidas del período. */
+    public function dashboard(Request $request, CashDashboard $dashboard): JsonResponse
+    {
+        $data = $request->validate(['from' => 'required|date', 'to' => 'required|date|after_or_equal:from']);
+
+        return response()->json($dashboard->build($data['from'], $data['to']));
     }
 
     /** Los movimientos, del más nuevo al más viejo, con lo que entró y salió en el filtro. */
