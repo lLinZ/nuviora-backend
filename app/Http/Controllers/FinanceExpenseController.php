@@ -15,6 +15,7 @@ use App\Models\Supplier;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\Finance\ExpenseLedger;
+use App\Services\Finance\TransferTrips;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -60,6 +61,8 @@ class FinanceExpenseController extends Controller
             // Compras y pagos a proveedores (entrega 2b): de qué cuenta salió el pago (opcional hasta la caja, entrega 3)
             'company_accounts' => CompanyAccount::where('is_active', true)->orderBy('name')->get(['id', 'name', 'currency']),
             'payment_types' => InventoryPurchase::PAYMENT_TYPES,
+            // Viajes de traslado (entrega 2c, §15): la regla de desgaste vigente
+            'vehicle_wear' => TransferTrips::wearRule() + ['label' => TransferTrips::wearLabel(TransferTrips::wearRule()['mode'], TransferTrips::wearRule()['value'])],
             'frequencies' => RecurringExpense::FREQUENCIES,
             'weekdays' => RecurringExpense::WEEKDAYS,
         ]);
@@ -117,6 +120,8 @@ class FinanceExpenseController extends Controller
                 'recurring' => round(collect($period['items'])->where('type', 'recurring')->sum('amount_usd'), 2),
                 'general' => $period['general'],
                 'assigned' => $period['assigned'],
+                // §13: el transporte de inventario del período (los viajes). No suma arriba: va en la logística (§14)
+                'trips' => $period['trips'],
                 'by_category' => $byCategory,
             ],
         ]);
@@ -144,6 +149,9 @@ class FinanceExpenseController extends Controller
         if ($expense->voided_at) {
             return response()->json(['message' => 'Un gasto anulado no se edita.'], 422);
         }
+        if ($expense->inventory_trip_id) {
+            return response()->json(['message' => 'Es el gasto de un viaje de traslado: se corrige en el viaje (Inventario › Operaciones).'], 422);
+        }
         $data = $request->validate($this->expenseRules() + ['reason' => 'required|string|max:500'], self::MESSAGES);
         DB::transaction(function () use ($request, $data, $expense) {
             $before = $expense->snapshot();
@@ -167,6 +175,9 @@ class FinanceExpenseController extends Controller
     {
         if ($expense->voided_at) {
             return response()->json(['message' => 'Ese gasto ya estaba anulado.'], 422);
+        }
+        if ($expense->inventory_trip_id) {
+            return response()->json(['message' => 'Es el gasto de un viaje de traslado: se anula el viaje (Inventario › Operaciones).'], 422);
         }
         $data = $request->validate(['reason' => 'required|string|max:500'], ['reason.required' => 'Escribe por qué se anula.']);
         $expense->update(['voided_at' => now(), 'voided_by' => Auth::id(), 'void_reason' => $data['reason']]);
@@ -271,7 +282,7 @@ class FinanceExpenseController extends Controller
     /** El historial de un gasto o un recurrente (§82). */
     public function audit(Request $request): JsonResponse
     {
-        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase'])],
+        $data = $request->validate(['subject_type' => ['required', Rule::in(['expense', 'recurring_expense', 'supplier', 'account_payable', 'inventory_purchase', 'inventory_trip'])],
             'subject_id' => 'required|integer']);
 
         return response()->json([

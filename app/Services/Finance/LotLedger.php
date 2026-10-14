@@ -9,6 +9,7 @@ use App\Models\InventoryLotAllocation;
 use App\Models\InventoryLotLayer;
 use App\Models\InventoryMovement;
 use App\Models\InventoryPurchase;
+use App\Models\InventoryTransferTrip;
 use App\Models\Order;
 use App\Models\Setting;
 use App\Services\Inventory\OrderStock;
@@ -33,7 +34,9 @@ use RuntimeException;
  *   - in de una compra (2b): lote "purchase" con el costo unitario de la compra (§9), uno por variante (R7).
  *   - in de una pieza retirada en un cambio: lote "recovered" a $0 y en revisión (decisión nuestra, confirmar con Fran).
  *   - otros in: lote "pending_cost" a cost_usd, que el Admin completa.
- *   - transfer: sale FIFO del origen y llega al destino con el mismo lote y su costo (§12), en una capa nueva.
+ *   - transfer: sale FIFO del origen y llega al destino con el mismo lote y su costo (§12), en una capa nueva. Si va en
+ *     un viaje (2c), la capa suma a su logística la parte del viaje por unidad (§14, R8); recomputeLanded() la rehace
+ *     cuando el viaje se registra, se corrige o se anula después.
  *   - adjustment: es una corrección de conteo (Fran, 2026-10-14). La diferencia de cada variante entra a un lote
  *     "adjustment" al costo del lote más reciente, o sale FIFO; no es merma. La revisión de una pieza defectuosa
  *     ("vuelve a la venta") pasa unidades de revisión a disponible.
@@ -286,6 +289,38 @@ class LotLedger
         return ['rows' => $rows, 'pending' => $pending];
     }
 
+    /**
+     * Rehace la logística por unidad de las capas (§14), después de registrar, corregir o anular un viaje: cada capa que
+     * llegó por un traslado tiene la logística de su origen más la parte de su viaje. Las capas del corte no cambian.
+     * Recorre las capas por id: el origen siempre es anterior. Devuelve cuántas cambiaron.
+     */
+    public function recomputeLanded(): int
+    {
+        $tripCost = InventoryTransferTrip::whereNull('voided_at')->pluck('unit_cost_usd', 'id');
+        $movementTrip = InventoryMovement::whereNotNull('trip_id')->where('movement_type', 'transfer')->pluck('trip_id', 'id');
+        $landed = [];
+        $changed = 0;
+        InventoryLotLayer::select('id', 'parent_layer_id', 'created_by_movement_id', 'landed_cost_per_unit')
+            ->chunkById(2000, function ($layers) use ($tripCost, $movementTrip, &$landed, &$changed) {
+                foreach ($layers as $layer) {
+                    if (!$layer->created_by_movement_id) {
+                        $landed[$layer->id] = (float) $layer->landed_cost_per_unit;
+                        continue;
+                    }
+                    $trip = $movementTrip[$layer->created_by_movement_id] ?? null;
+                    $value = round(($layer->parent_layer_id ? ($landed[$layer->parent_layer_id] ?? 0.0) : 0.0)
+                        + ($trip !== null ? (float) ($tripCost[$trip] ?? 0) : 0.0), 4);
+                    $landed[$layer->id] = $value;
+                    if (abs($value - (float) $layer->landed_cost_per_unit) > 0.00005) {
+                        DB::table('inventory_lot_layers')->where('id', $layer->id)->update(['landed_cost_per_unit' => $value, 'updated_at' => now()]);
+                        $changed++;
+                    }
+                }
+            });
+
+        return $changed;
+    }
+
     /** Lo que una orden tiene fuera, por capa (las unidades sin lote van con layer_id vacío). */
     public function heldByOrder(int $orderId): Collection
     {
@@ -490,13 +525,16 @@ class LotLedger
         $this->allocate($m, $layer, $warehouseId, $variantId, $qty);
     }
 
-    /** Pone $n unidades de $from (mismo lote y costo) en una capa nueva de ese almacén y estado. */
+    /**
+     * Pone $n unidades de $from (mismo lote y costo) en una capa nueva de ese almacén y estado. Su logística es la del
+     * origen más, si es un traslado de un viaje, la parte del viaje por unidad (§14).
+     */
     private function putInNewLayer(InventoryMovement $m, InventoryLotLayer $from, int $warehouseId, string $state, int $n, ?int $movementVariant = null): void
     {
         $layer = InventoryLotLayer::create([
             'lot_id' => $from->lot_id, 'warehouse_id' => $warehouseId, 'product_id' => $from->product_id,
             'variant_id' => $from->variant_id, 'state' => $state, 'quantity' => $n,
-            'landed_cost_per_unit' => $from->landed_cost_per_unit, 'parent_layer_id' => $from->id,
+            'landed_cost_per_unit' => round($from->landed_cost_per_unit + $this->tripUnitCost($m), 4), 'parent_layer_id' => $from->id,
             'created_by_movement_id' => $m->id,
         ]);
         $this->allocate($m, $layer, $warehouseId, $movementVariant ?? ($m->variant_id ? (int) $m->variant_id : null), $n);
@@ -587,6 +625,16 @@ class LotLedger
         }
 
         return $held;
+    }
+
+    /** La parte por unidad del viaje de un traslado (§14), o 0 si no va en un viaje o el viaje está anulado. */
+    private function tripUnitCost(InventoryMovement $m): float
+    {
+        if ($m->movement_type !== 'transfer' || !$m->trip_id) {
+            return 0.0;
+        }
+
+        return (float) (InventoryTransferTrip::whereKey($m->trip_id)->whereNull('voided_at')->value('unit_cost_usd') ?? 0);
     }
 
     /**

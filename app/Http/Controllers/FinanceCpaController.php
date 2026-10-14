@@ -12,6 +12,7 @@ use App\Services\CommissionService;
 use App\Services\Finance\CohortReport;
 use App\Services\Finance\FinancialCpa;
 use App\Services\Finance\OrderEconomics;
+use App\Services\Finance\TransferTrips;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -81,6 +82,9 @@ class FinanceCpaController extends Controller
             'maturity_lag_days' => (int) Setting::get(OrderEconomics::SETTING_MATURITY_LAG, 4),
             'analysis_window_days' => (int) Setting::get(FinancialCpa::SETTING_WINDOW, 7),
             'commissions' => CommissionService::amounts(),
+            // §15: la regla de desgaste de los viajes de traslado
+            'vehicle_wear' => TransferTrips::wearRule(),
+            'wear_modes' => TransferTrips::WEAR_MODES,
             'target_types' => ProductFinancialSetting::TYPES,
             'products' => Product::orderBy('title')->get(['id', 'title', 'showable_name', 'cost_usd'])->map(fn ($p) => [
                 'id' => $p->id, 'name' => $p->showable_name ?: $p->title, 'cost_usd' => $p->cost_usd !== null ? (float) $p->cost_usd : null,
@@ -98,6 +102,9 @@ class FinanceCpaController extends Controller
             'commission_order' => 'required|numeric|min:0|max:1000',
             'commission_upsell_unit' => 'required|numeric|min:0|max:1000',
             'commission_deliverer' => 'required|numeric|min:0|max:1000',
+            'vehicle_wear_mode' => ['sometimes', Rule::in(array_keys(TransferTrips::WEAR_MODES))],
+            'vehicle_wear_value' => ['sometimes', 'numeric', 'min:0', 'max:100000',
+                fn ($attr, $value, $fail) => $request->input('vehicle_wear_mode') === 'percent' && $value > 100 ? $fail('El porcentaje de desgaste no puede pasar de 100.') : null],
             'reason' => 'nullable|string|max:500',
         ]);
         $before = $this->currentSettings();
@@ -106,6 +113,11 @@ class FinanceCpaController extends Controller
         Setting::set(CommissionService::SETTING_ORDER, round((float) $data['commission_order'], 2));
         Setting::set(CommissionService::SETTING_UPSELL_UNIT, round((float) $data['commission_upsell_unit'], 2));
         Setting::set(CommissionService::SETTING_DELIVERER, round((float) $data['commission_deliverer'], 2));
+        if (isset($data['vehicle_wear_mode'], $data['vehicle_wear_value'])) {
+            // Vale para los viajes que se registren desde ahora; cada viaje guarda la regla con la que se registró
+            Setting::set(TransferTrips::SETTING_WEAR_MODE, $data['vehicle_wear_mode']);
+            Setting::set(TransferTrips::SETTING_WEAR_VALUE, round((float) $data['vehicle_wear_value'], 4));
+        }
         $after = $this->currentSettings();
         if ($after !== $before) {
             FinancialAuditLog::record('finance_settings_updated', 'finance_settings', null, $before, $after, $data['reason'] ?? null);
@@ -138,6 +150,7 @@ class FinanceCpaController extends Controller
         return [
             'maturity_lag_days' => (int) Setting::get(OrderEconomics::SETTING_MATURITY_LAG, 4),
             'analysis_window_days' => (int) Setting::get(FinancialCpa::SETTING_WINDOW, 7),
-        ] + array_map(fn ($v) => round((float) $v, 2), CommissionService::amounts());
+        ] + array_map(fn ($v) => round((float) $v, 2), CommissionService::amounts())
+            + ['vehicle_wear' => TransferTrips::wearLabel(TransferTrips::wearRule()['mode'], TransferTrips::wearRule()['value'])];
     }
 }

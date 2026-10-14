@@ -23,6 +23,7 @@ class InventoryMovement extends Model
         'notes',
         'status',
         'details',
+        'trip_id',
     ];
 
     protected $casts = [
@@ -41,6 +42,12 @@ class InventoryMovement extends Model
     public function variant()
     {
         return $this->belongsTo(ProductVariant::class, 'variant_id');
+    }
+
+    /** El viaje de traslado que lo llevó (Módulo 4 de Fran, §13, R8) */
+    public function trip()
+    {
+        return $this->belongsTo(InventoryTransferTrip::class, 'trip_id');
     }
 
     /**

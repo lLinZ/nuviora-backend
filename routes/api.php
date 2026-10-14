@@ -650,6 +650,13 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/payable-payments/{payment}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'paymentReceipt']);
         Route::post('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'uploadPurchaseReceipt']);
         Route::get('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'purchaseReceipt']);
+        // Viajes de traslado (entrega 2c; §13, §14, §15, R8)
+        Route::get('/trips', [\App\Http\Controllers\FinanceTripController::class, 'index']);
+        Route::get('/trips/candidates', [\App\Http\Controllers\FinanceTripController::class, 'candidates']);
+        Route::post('/trips', [\App\Http\Controllers\FinanceTripController::class, 'store']);
+        Route::post('/trips/{trip}', [\App\Http\Controllers\FinanceTripController::class, 'update']);
+        Route::post('/trips/{trip}/void', [\App\Http\Controllers\FinanceTripController::class, 'void']);
+        Route::get('/trips/{trip}/receipt', [\App\Http\Controllers\FinanceTripController::class, 'receipt']);
     });
 
     // "Cierres / Servicios" de la agencia (§22, §23, §38): sus semanas y subir su archivo, sin nada interno

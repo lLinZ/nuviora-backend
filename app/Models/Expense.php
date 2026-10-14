@@ -14,7 +14,7 @@ class Expense extends Model
 
     protected $fillable = [
         'concept', 'expense_category_id', 'amount', 'currency', 'rate', 'amount_usd', 'expense_date', 'description', 'receipt_path',
-        'product_id', 'city_id', 'warehouse_id', 'agency_id', 'supplier_id', 'recurring_expense_id', 'voided_at', 'voided_by',
+        'product_id', 'city_id', 'warehouse_id', 'agency_id', 'supplier_id', 'recurring_expense_id', 'inventory_trip_id', 'voided_at', 'voided_by',
         'void_reason', 'created_by',
     ];
 
@@ -123,6 +123,8 @@ class Expense extends Model
             'supplier_id' => $this->supplier_id,
             'supplier' => $this->supplier?->name,
             'scope' => $this->product_id || $this->city_id ? 'assigned' : 'general',
+            // Gasto de un viaje de traslado (§13): se corrige en el viaje y no cuenta en la rentabilidad del período (§14)
+            'inventory_trip_id' => $this->inventory_trip_id,
             'voided_at' => $this->voided_at?->format('Y-m-d H:i'),
             'voided_by' => $this->voider?->names,
             'void_reason' => $this->void_reason,

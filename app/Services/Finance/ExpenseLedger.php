@@ -10,20 +10,27 @@ use Carbon\CarbonInterface;
  * Los gastos de un período para la rentabilidad (Módulo 4 de Fran, §24 a §30):
  * - el manual cuenta el día de su fecha; el recurrente se reparte en los días que cubre (§28);
  * - con producto o ciudad es específico de ellos (§30); sin ellos es general y va después del margen de contribución (§29);
- * - los anulados no cuentan (§83: siguen a la vista, pero no suman).
+ * - los anulados no cuentan (§83: siguen a la vista, pero no suman);
+ * - el gasto de un viaje de traslado (§13) tampoco: su costo ya va en la logística de lo que se vende (§14). Se informa
+ *   aparte, en 'trips', para saber cuánto se gastó en transporte de inventario.
  */
 class ExpenseLedger
 {
     /**
-     * @return array{items: array<int, array>, total: float, general: float, assigned: float}
+     * @return array{items: array<int, array>, total: float, general: float, assigned: float, trips: float}
      */
     public function forRange(CarbonInterface $from, CarbonInterface $to): array
     {
         $from = $from->copy()->startOfDay();
         $to = $to->copy()->startOfDay();
         $items = [];
+        $trips = 0.0;
 
         foreach (Expense::with('category:id,name')->whereNull('voided_at')->whereBetween('expense_date', [$from->toDateString(), $to->toDateString()])->get() as $e) {
+            if ($e->inventory_trip_id) {
+                $trips += $e->amount_usd;
+                continue;
+            }
             $items[] = $this->item('manual', $e->id, $e->concept, $e->category?->name, $e->product_id, $e->city_id, $e->amount_usd);
         }
         foreach (RecurringExpense::with(['category:id,name', 'versions'])->get() as $r) {
@@ -40,6 +47,7 @@ class ExpenseLedger
             'total' => round(array_sum(array_column($items, 'amount_usd')), 2),
             'general' => $sum('general'),
             'assigned' => $sum('assigned'),
+            'trips' => round($trips, 2),
         ];
     }
 
