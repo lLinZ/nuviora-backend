@@ -94,27 +94,37 @@ class ClosureMatcher
             }
         }
 
-        // 3. Nombre + fecha (§27.3): el nombre completo del archivo está en el del cliente y es la única carrera libre de
-        // ese día que encaja. Un solo nombre de pila ("jose") no alcanza: queda como posible.
+        // 3. Nombre + fecha (§27.3): el nombre completo del archivo (dos palabras o más) está en el de un solo cliente con
+        // carrera libre ese día; si ese día no hay ninguno, el día antes o el después (las agencias anotan a veces la fecha
+        // de entrega). Varias carreras de esa misma orden son sus intentos, no una duda: se toma la primera. Dos órdenes sí
+        // lo son (caso 10), y también un cliente guardado con un solo nombre que podría ser el mismo; uno con otro apellido
+        // es otra persona. Un solo nombre de pila ("jose") no alcanza: queda como posible.
         foreach ($rows as $row) {
             if ($row->match_status !== AgencyClosureRow::UNMATCHED || $row->client_name_key === null || $row->row_date === null) {
                 continue;
             }
-            $date = $row->row_date->toDateString();
-            $scored = $this->free()->filter(fn (AgencyTrip $t) => $t->trip_date->toDateString() === $date)
-                ->map(fn (AgencyTrip $t) => ['trip' => $t, 'score' => ClosureNormalizer::nameScore($row->client_name_key, self::clientKey($t))])
-                ->filter(fn ($s) => $s['score'] >= 0.5);
+            $scored = $this->byName($row, 0);
+            $when = 'ese día';
+            if ($scored->where('score', '>=', 1.0)->isEmpty() && ($nearby = $this->byName($row, 1))->where('score', '>=', 1.0)->isNotEmpty()) {
+                $scored = $nearby;
+                $when = 'entre el día antes y el después';
+            }
             if ($scored->isEmpty()) {
                 continue;
             }
             $full = $scored->filter(fn ($s) => $s['score'] >= 1.0);
+            $orders = $full->pluck('trip.order_id')->unique();
+            $rivals = $scored->filter(fn ($s) => $s['score'] < 1.0 && count(ClosureNormalizer::nameTokens(self::clientKey($s['trip']))) < 2);
             $tokens = count(ClosureNormalizer::nameTokens($row->client_name_key));
-            if ($full->count() === 1 && $scored->count() === 1 && $tokens >= 2) {
+            if ($tokens >= 2 && $orders->count() === 1 && $rivals->isEmpty()) {
                 $this->link($row, $full->first()['trip'], 'name_date', AgencyClosureRow::MATCHED);
             } else {
-                $this->possible($row, $scored->pluck('trip.id'), $scored->count() > 1
-                    ? 'Hay ' . $scored->count() . ' clientes con ese nombre ese día.'
-                    : 'Solo coincide en parte el nombre (' . $row->client_name . ').');
+                $this->possible($row, $scored->pluck('trip.id'), match (true) {
+                    $orders->count() > 1 => 'Hay ' . $orders->count() . " órdenes de clientes con ese nombre {$when}.",
+                    $full->isEmpty() => 'Solo coincide en parte el nombre (' . $row->client_name . ').',
+                    $tokens < 2 => 'El archivo trae solo un nombre (' . $row->client_name . ').',
+                    default => 'También podría ser un cliente guardado solo con el nombre de pila.',
+                });
             }
         }
 
@@ -252,6 +262,18 @@ class ClosureMatcher
                 $this->possible($row, collect([$tripId])->merge($row->candidate_trip_ids ?? []), $reason . ' (confianza ' . $p['confianza'] . ')');
             }
         }
+    }
+
+    /** Las carreras libres de hasta $days días de la fila cuyo cliente se parece al nombre del archivo, con su puntaje. */
+    private function byName(AgencyClosureRow $row, int $days): Collection
+    {
+        $date = $row->row_date->toDateString();
+
+        return $this->free()
+            ->filter(fn (AgencyTrip $t) => ClosureNormalizer::daysApart($date, $t->trip_date->toDateString()) <= $days)
+            ->map(fn (AgencyTrip $t) => ['trip' => $t, 'score' => ClosureNormalizer::nameScore($row->client_name_key, self::clientKey($t))])
+            ->filter(fn ($s) => $s['score'] >= 0.5)
+            ->values();
     }
 
     /** @return Collection<int, AgencyTrip> */
