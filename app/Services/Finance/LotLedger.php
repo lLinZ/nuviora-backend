@@ -39,7 +39,9 @@ use RuntimeException;
  *     cuando el viaje se registra, se corrige o se anula después.
  *   - adjustment: es una corrección de conteo (Fran, 2026-10-14). La diferencia de cada variante entra a un lote
  *     "adjustment" al costo del lote más reciente, o sale FIFO; no es merma. La revisión de una pieza defectuosa
- *     ("vuelve a la venta") pasa unidades de revisión a disponible.
+ *     ("vuelve a la venta") pasa unidades de revisión a disponible, y "Pasar a revisión" (R8, 2d) de disponible a
+ *     revisión, siempre con su lote y su costo.
+ *   - out de una pieza en revisión ("Dar de baja"): sale de las capas en revisión; su costo es merma (Shrinkage).
  * - Cada movimiento es determinista: replay() lo rehace todo desde el corte con el mismo resultado.
  */
 class LotLedger
@@ -379,6 +381,13 @@ class LotLedger
                     // "Vuelve a la venta": de revisión a disponible, en el mismo almacén y con el mismo lote
                     foreach ($this->take($m, (int) $m->to_warehouse_id, $variantId, $qty, InventoryLotLayer::REVIEW) as [$layer, $n]) {
                         $this->putInNewLayer($m, $layer, (int) $m->to_warehouse_id, InventoryLotLayer::AVAILABLE, $n);
+                    }
+                    return;
+                }
+                if ($m->reference_type === DefectiveStockController::INTAKE_REFERENCE) {
+                    // R8: dañada o perdida, pasa a revisión con su lote y su costo (FIFO); si se da de baja, es merma
+                    foreach ($this->take($m, (int) $m->to_warehouse_id, $variantId, $qty, InventoryLotLayer::AVAILABLE) as [$layer, $n]) {
+                        $this->putInNewLayer($m, $layer, (int) $m->to_warehouse_id, InventoryLotLayer::REVIEW, $n);
                     }
                     return;
                 }

@@ -299,6 +299,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/inventory/by-city', [\App\Http\Controllers\CityStockController::class, 'index']); // por ciudad, sin agencias (Fran 30-sep)
     Route::put('/inventory/{product}/adjust', [InventoryController::class, 'adjust']); // IN/OUT
     Route::post('/inventory/defective/resolve', [\App\Http\Controllers\DefectiveStockController::class, 'resolve']); // piezas defectuosas: vuelven a la venta o se dan de baja (Fran 2-oct)
+    Route::post('/inventory/defective/intake', [\App\Http\Controllers\DefectiveStockController::class, 'intake']); // dañada o perdida: pasa a revisión (Módulo 4, R8)
 
     Route::get('/deliverer/stock/today', [DelivererStockController::class, 'mineToday']); // para repartidor
     Route::post('/deliverer/stock/assign', [DelivererStockController::class, 'assign']);

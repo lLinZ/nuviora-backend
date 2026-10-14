@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\DB;
  * - Publicidad: el gasto de Meta por producto y ciudad (§62); el de campañas sin clasificar va aparte, solo en la empresa.
  * - Gastos: los de un producto o una ciudad son "otros variables atribuibles" (§30); los generales van después del
  *   margen (§29), sin repartirlos entre productos.
+ * - Merma (entrega 2d, R8): lo que se da de baja después de revisarlo, al costo de su lote, también es "otros
+ *   variables atribuibles" del producto y la ciudad del almacén, en la fecha de la baja (Shrinkage).
  * - Logística atribuible: el transporte de inventario llega con los lotes (entrega 2); por ahora 0.
  * Por producto, ciudad o producto + ciudad (§50 a §52); lo que no es de ninguno queda en una fila "sin asignar".
  */
@@ -31,7 +33,7 @@ class ProfitAndLoss
         'delivery_trips', 'delivery_final_trips', 'delivery_missing_trips',
     ];
 
-    public function __construct(private ExpenseLedger $expenses, private MetaAdsData $meta)
+    public function __construct(private ExpenseLedger $expenses, private MetaAdsData $meta, private Shrinkage $shrinkage)
     {
     }
 
@@ -95,7 +97,8 @@ class ProfitAndLoss
         $cell = function (?int $product, ?int $city) use (&$cells): string {
             $key = ($product ?? '-') . '|' . ($city ?? '-');
             $cells[$key] ??= ['product_id' => $product, 'city_id' => $city, 'orders_delivered' => 0, 'orders_not_delivered' => 0,
-                'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0] + array_fill_keys(self::ORDER_SUMS, 0.0);
+                'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0, 'shrinkage' => 0.0, 'shrinkage_provisional' => 0]
+                + array_fill_keys(self::ORDER_SUMS, 0.0);
 
             return $key;
         };
@@ -121,14 +124,19 @@ class ProfitAndLoss
                 $cells[$cell($i['product_id'], $i['city_id'])]['other_variable'] += $i['amount_usd'];
             }
         }
+        foreach ($this->shrinkage->forRange($from, $to)['items'] as $i) {
+            $k = $cell($i['product_id'], $i['city_id']);
+            $cells[$k]['shrinkage'] += $i['amount_usd'];
+            $cells[$k]['shrinkage_provisional'] += $i['provisional_units'];
+        }
 
         return $cells;
     }
 
     private function add(array $cells): array
     {
-        $sum = ['orders_delivered' => 0, 'orders_not_delivered' => 0, 'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0]
-            + array_fill_keys(self::ORDER_SUMS, 0.0);
+        $sum = ['orders_delivered' => 0, 'orders_not_delivered' => 0, 'advertising' => 0.0, 'other_variable' => 0.0, 'purchases' => 0.0,
+            'shrinkage' => 0.0, 'shrinkage_provisional' => 0] + array_fill_keys(self::ORDER_SUMS, 0.0);
         foreach ($cells as $c) {
             foreach ($sum as $k => $v) {
                 $sum[$k] += $c[$k];
@@ -147,7 +155,9 @@ class ProfitAndLoss
         $sellers = round($s['commission_seller'] + $s['commission_upsell'], 2);
         $leaders = round($s['commission_leader'], 2);
         $advertising = round($s['advertising'], 2);
-        $other = round($s['other_variable'], 2);
+        // Otros variables atribuibles: los gastos de un producto o una ciudad, más la merma
+        $shrinkage = round($s['shrinkage'], 2);
+        $other = round($s['other_variable'] + $s['shrinkage'], 2);
         $contribution = round($revenue - $cogs - $delivery - $sellers - $leaders - $advertising - $other, 2);
 
         return [
@@ -163,6 +173,7 @@ class ProfitAndLoss
             'commission_leaders' => $leaders,
             'advertising' => $advertising,
             'other_variable' => $other,
+            'shrinkage' => $shrinkage,
             'contribution' => $contribution,
             'margin_pct' => $this->pct($contribution, $revenue),
             'orders_delivered' => (int) $s['orders_delivered'],
@@ -180,6 +191,7 @@ class ProfitAndLoss
                 'delivery_final_trips' => (int) $s['delivery_final_trips'],
                 'delivery_missing_trips' => (int) $s['delivery_missing_trips'],
                 'delivery_estimated_trips' => max(0, (int) ($s['delivery_trips'] - $s['delivery_final_trips'] - $s['delivery_missing_trips'])),
+                'shrinkage_provisional_units' => (int) $s['shrinkage_provisional'],
             ],
         ];
     }
@@ -251,6 +263,9 @@ class ProfitAndLoss
         $w = ['El costo de los productos es provisional (products.cost_usd) hasta que haya lotes de inventario.'];
         if ($n = $company['checks']['cogs_missing_lines']) {
             $w[] = "{$n} líneas entregadas son de productos sin costo cargado: su ganancia sale más alta de lo real.";
+        }
+        if ($n = $company['checks']['shrinkage_provisional_units']) {
+            $w[] = "{$n} pieza(s) dadas de baja no tenían costo de lote: su merma se calculó con el costo de catálogo.";
         }
         if ($company['delivery_legacy'] > 0) {
             $w[] = 'Antes del 03/10/2026 no había registro de carreras: el delivery de esas órdenes es lo que se le pagaba a la agencia por orden.';

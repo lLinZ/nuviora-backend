@@ -26,7 +26,7 @@ class FinancialCpa
 {
     public const SETTING_WINDOW = 'finance.analysis_window_days';
 
-    public function __construct(private MetaAdsData $meta, private ExpenseLedger $expenses)
+    public function __construct(private MetaAdsData $meta, private ExpenseLedger $expenses, private Shrinkage $shrinkage)
     {
     }
 
@@ -158,6 +158,12 @@ class FinancialCpa
                 $cells[$cell($i['product_id'], $i['city_id'])]['other_variable'] += $i['amount_usd'];
             }
         }
+        // §64: "otros costes variables" incluye la merma de ese producto en esa ciudad (2d)
+        foreach ($this->shrinkage->forRange($from, $to)['items'] as $i) {
+            if ($i['city_id']) {
+                $cells[$cell($i['product_id'], $i['city_id'])]['other_variable'] += $i['amount_usd'];
+            }
+        }
 
         return $cells;
     }
@@ -167,6 +173,12 @@ class FinancialCpa
         $out = [];
         foreach ($this->expenses->forRange($from, $to)['items'] as $i) {
             if ($i['product_id'] && !$i['city_id']) {
+                $out[$i['product_id']] = ($out[$i['product_id']] ?? 0) + $i['amount_usd'];
+            }
+        }
+        // La merma de un almacén sin ciudad es solo del producto
+        foreach ($this->shrinkage->forRange($from, $to)['items'] as $i) {
+            if (!$i['city_id']) {
                 $out[$i['product_id']] = ($out[$i['product_id']] ?? 0) + $i['amount_usd'];
             }
         }

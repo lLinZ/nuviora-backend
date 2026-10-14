@@ -363,6 +363,15 @@ class InventoryService
     }
 
     /**
+     * Después de cambiar lo vendible sin mover el total (piezas que pasan a revisión o vuelven a la venta, Módulo 4 R8):
+     * si bajó, las órdenes de esa agencia que ya no alcanzan pasan a "Sin Stock"; si subió, las que estaban ahí siguen.
+     */
+    public function recheckStock(int $productId, int $warehouseId, bool $wentDown): void
+    {
+        $wentDown ? $this->checkAndHandleStockShortage($productId, $warehouseId) : $this->checkAndHandleStockRecovery($productId, $warehouseId);
+    }
+
+    /**
      * Get product stock across all warehouses or specific warehouse
      */
     public function getProductStock(int $productId, ?int $warehouseId = null)
