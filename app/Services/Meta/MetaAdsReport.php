@@ -515,7 +515,7 @@ class MetaAdsReport
 
     /**
      * §26: la evolución de una métrica día por día, para lo que diga el filtro. Con el Target CPA y el Break-even de
-     * cada día (§34, §49) si hay un solo producto.
+     * cada día (§34, §49) si hay un solo producto: el CPA financiero vigente ese día (R12 del Módulo 4) o, antes, el manual.
      */
     public function series(string $metric, bool $compare): array
     {
@@ -538,6 +538,18 @@ class MetaAdsReport
             $productId = MetaCampaign::where('meta_id', $this->filters['campaign'])->value('product_id');
         }
         $targetRows = $productId ? ProductAdTarget::where('product_id', $productId)->orderBy('valid_from')->orderBy('id')->get() : collect();
+        // R12 (Módulo 4): la línea principal es el CPA financiero que estaba vigente ese día (el de producto + ciudad si se
+        // filtró una ciudad; si no, el del producto). Antes del primer cálculo, el manual. El manual va aparte, de referencia.
+        $cityId = $this->filters['city_id'] ?? null;
+        $versions = $productId ? DB::table('target_cpa_versions')->where('product_id', $productId)->whereNotNull('target')
+            ->where(fn ($q) => $cityId ? $q->where('city_id', $cityId)->orWhereNull('city_id') : $q->whereNull('city_id'))
+            ->orderBy('computed_at')->get(['city_id', 'target', 'break_even', 'computed_at']) : collect();
+        $financialOn = function (string $day) use ($versions, $cityId) {
+            $until = $day . ' 23:59:59';
+            $valid = $versions->filter(fn ($v) => $v->computed_at <= $until);
+
+            return ($cityId ? $valid->where('city_id', (int) $cityId)->last() : null) ?? $valid->whereNull('city_id')->last();
+        };
 
         $points = [];
         $offset = 0;
@@ -547,13 +559,18 @@ class MetaAdsReport
             $value = $this->metricValue($metric, $totals);
             $prevDay = Carbon::parse($this->prevFrom)->addDays($offset)->toDateString();
             $target = ProductAdTarget::effective($targetRows, $day);
+            $manualTarget = $target?->target_cpa !== null ? (float) $target->target_cpa : null;
+            $financial = $financialOn($day);
             $points[] = [
                 'date' => $day,
                 'value' => $value,
                 'previous' => $compare ? $this->metricValue($metric, MetaMetrics::sum($prev->has($prevDay) ? [$prev->get($prevDay)] : [])) : null,
                 'previous_date' => $compare ? $prevDay : null,
-                'target_cpa' => $target?->target_cpa !== null ? (float) $target->target_cpa : null,
-                'break_even_cpa' => $target?->break_even_cpa !== null ? (float) $target->break_even_cpa : null,
+                'target_cpa' => $financial ? (float) $financial->target : $manualTarget,
+                'break_even_cpa' => $financial ? ($financial->break_even !== null ? (float) $financial->break_even : null)
+                    : ($target?->break_even_cpa !== null ? (float) $target->break_even_cpa : null),
+                'target_source' => $financial ? 'financial' : ($manualTarget !== null ? 'manual' : null),
+                'manual_target_cpa' => $manualTarget,
             ];
         }
         return ['metric' => $metric, 'level' => $level, 'product_id' => $productId, 'points' => $points];
