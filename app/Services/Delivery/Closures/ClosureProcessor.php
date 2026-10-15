@@ -105,6 +105,8 @@ class ClosureProcessor
                 'expected_total' => null,
                 'reported_total' => null,
                 'final_approved_total' => null,
+                'manual_total' => null,
+                'manual_reason' => null,
                 'approved_at' => null,
                 'approved_by' => null,
                 'summary' => null,
@@ -125,7 +127,8 @@ class ClosureProcessor
         if (!$file || $closure->status === AgencyWeeklyClosure::PAID) {
             return;
         }
-        $closure->update(['status' => AgencyWeeklyClosure::PROCESSING, 'processing_error' => null]);
+        // Volver a procesar empareja todo otra vez: el otro monto que se había aprobado para el cierre deja de valer
+        $closure->update(['status' => AgencyWeeklyClosure::PROCESSING, 'processing_error' => null, 'manual_total' => null, 'manual_reason' => null]);
         $setting = AgencyClosureSetting::for($closure->agency_id);
 
         try {

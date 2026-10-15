@@ -100,6 +100,13 @@ class AgencyClosureController extends Controller
                     ->whereIn('currency', ['USD', 'USDT', 'VES'])->orderBy('name')->get(['id', 'name', 'currency']),
                 'cash_start_date' => \App\Services\Finance\CashLedger::startDate(),
                 'binance_rate' => \App\Services\Finance\CashLedger::binanceRate(),
+                // Aprobar el cierre completo (Fran, 15/10/2026): cuántos casos siguen abiertos y en cuánto quedaría el cierre
+                // si se aprueba lo que cobra la agencia
+                'approve_all' => [
+                    'cases' => ($open = $rows->filter(fn (AgencyClosureRow $r) => $r->discrepancy?->status === 'open'))->count(),
+                    'reported' => round($open->sum(fn (AgencyClosureRow $r) => (float) $r->reported_cost), 2),
+                    'total' => round($rows->sum(fn (AgencyClosureRow $r) => (float) ($r->discrepancy?->status === 'open' ? $r->reported_cost : $r->approved_cost)), 2),
+                ],
             ],
             'rows' => $rows->map(fn (AgencyClosureRow $r) => $this->presentRow($r)),
             'files' => $closure->files()->with('uploader:id,names')->get()->map(fn (AgencyClosureFile $f) => [
@@ -157,6 +164,26 @@ class AgencyClosureController extends Controller
         }
 
         return response()->json(['status' => true, 'message' => 'Caso resuelto.']);
+    }
+
+    /**
+     * Aprobar el cierre completo con un botón (Fran, 15/10/2026): con lo que cobra la agencia, o con otro monto y su motivo.
+     */
+    public function approve(Request $request, AgencyWeeklyClosure $closure, ClosureReview $review)
+    {
+        $data = $request->validate([
+            'option' => 'required|in:agency,manual',
+            'amount' => 'required_if:option,manual|nullable|numeric|min:0|max:1000000',
+            'reason' => 'required_if:option,manual|nullable|string|max:500',
+        ], ['amount.required_if' => 'Escribe el monto del cierre.', 'reason.required_if' => 'Escribe el motivo del otro monto.']);
+        try {
+            $closure = $review->approveAll($closure, $data['option'] === 'manual' ? (float) $data['amount'] : null,
+                $data['option'] === 'manual' ? $data['reason'] : null, Auth::id());
+        } catch (RuntimeException $e) {
+            return response()->json(['status' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['status' => true, 'message' => 'Cierre aprobado por $' . number_format((float) $closure->final_approved_total, 2, ',', '.') . '. Queda listo para pago.']);
     }
 
     public function reopen(AgencyClosureDiscrepancy $discrepancy, ClosureReview $review)
@@ -352,6 +379,8 @@ class AgencyClosureController extends Controller
             'reported_total' => $c->reported_total,
             'difference' => $c->expected_total !== null && $c->reported_total !== null ? round($c->reported_total - $c->expected_total, 2) : null,
             'final_approved_total' => $c->final_approved_total,
+            'manual_total' => $c->manual_total,
+            'manual_reason' => $c->manual_reason,
             'summary' => $c->summary,
             'processing_error' => $c->processing_error,
             'uploaded_at' => $c->uploaded_at?->toDateTimeString(),

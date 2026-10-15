@@ -130,8 +130,12 @@ class ClosureReview
             'expected_total' => round($rows->reject(fn ($r) => in_array($r->id, $duplicateRows, true))->filter(fn ($r) => $r->matched_trip_id !== null && $r->match_status !== AgencyClosureRow::POSSIBLE)->sum(fn ($r) => (float) $r->expected_cost), 2),
             'summary' => $summary,
             'status' => $ready ? AgencyWeeklyClosure::READY : AgencyWeeklyClosure::PENDING_REVIEW,
-            'final_approved_total' => $ready ? round($rows->sum(fn ($r) => (float) $r->approved_cost), 2) : null,
+            // El otro monto que eligió Fran para el cierre completo (approveAll) manda mientras el cierre siga listo
+            'final_approved_total' => $ready ? ($closure->manual_total ?? round($rows->sum(fn ($r) => (float) $r->approved_cost), 2)) : null,
         ]);
+        if (!$ready) {
+            $closure->fill(['manual_total' => null, 'manual_reason' => null]);
+        }
         if ($ready && $before['status'] !== AgencyWeeklyClosure::READY) {
             // §40: quién aprobó. Si todo cuadró solo, nadie (lo aprobó el sistema por el §32)
             $closure->fill(['approved_at' => now(), 'approved_by' => $userId]);
@@ -196,6 +200,64 @@ class ClosureReview
         });
 
         return $d->fresh();
+    }
+
+    /**
+     * Aprobar el cierre completo con un botón (Fran, 15/10/2026: "que yo pueda aprobar el monto de la agencia y le dé a un
+     * botón, o que pueda elegir otro monto y le dé a un botón"). Los casos que siguen abiertos se aprueban con lo que cobra la
+     * agencia (sin monto, $0). Con otro monto ($total), ese es el monto final del cierre, con su motivo. Los casos que el
+     * Admin ya resolvió uno por uno no se tocan. Deja el cierre "Listo para pago".
+     */
+    public function approveAll(AgencyWeeklyClosure $closure, ?float $total, ?string $reason, int $userId): AgencyWeeklyClosure
+    {
+        $this->assertEditable($closure);
+        if ($total !== null && trim((string) $reason) === '') {
+            throw new RuntimeException('Escribe el motivo del otro monto.');
+        }
+        if ($total !== null && $total < 0) {
+            throw new RuntimeException('El monto no puede ser negativo.');
+        }
+
+        DB::transaction(function () use ($closure, $total, $reason, $userId) {
+            $closure = AgencyWeeklyClosure::whereKey($closure->id)->lockForUpdate()->first();
+            $this->assertEditable($closure);
+            if ($closure->rows()->doesntExist()) {
+                throw new RuntimeException('El archivo no tiene filas.');
+            }
+            $before = $closure->only(['status', 'final_approved_total', 'manual_total']);
+            $why = $total === null ? 'Aprobado con el cierre completo: lo que cobra la agencia.'
+                : 'Aprobado con el cierre completo, por otro monto: ' . trim((string) $reason);
+            $cases = [];
+            foreach ($closure->discrepancies()->where('status', 'open')->with('row')->get() as $d) {
+                $amount = round((float) ($d->reported_cost ?? 0), 2);
+                $d->update([
+                    'status' => 'resolved',
+                    'resolution' => $d->reported_cost !== null ? 'agency' : 'manual',
+                    'approved_cost' => $amount,
+                    'reason' => mb_substr($d->reported_cost !== null ? $why : 'La agencia no puso monto en esta fila. ' . $why, 0, 500),
+                    'resolved_by' => $userId,
+                    'resolved_at' => now(),
+                ]);
+                $d->row->update(['approved_cost' => $amount]);
+                $cases[$d->id] = $amount;
+            }
+            $closure->fill([
+                'manual_total' => $total !== null ? round($total, 2) : null,
+                'manual_reason' => $total !== null ? mb_substr(trim((string) $reason), 0, 500) : null,
+            ])->save();
+            $this->refreshTotals($closure, $userId);
+            // Quien aprueba es quien tocó el botón, aunque el cierre ya estuviera listo
+            $closure->update(['approved_at' => now(), 'approved_by' => $userId]);
+            // §40: un solo registro con los casos que aprobó el botón (cada caso guarda además quién, cuándo y el motivo)
+            DeliveryAuditLog::record('closure_bulk_approved', 'agency_weekly_closure', $closure->id, $before, [
+                'option' => $total === null ? 'agency' : 'manual',
+                'final_approved_total' => $closure->final_approved_total,
+                'reason' => $closure->manual_reason,
+                'cases' => $cases,
+            ], $userId);
+        });
+
+        return $closure->fresh();
     }
 
     /** Deshacer una resolución equivocada (mientras el cierre no esté pagado). */

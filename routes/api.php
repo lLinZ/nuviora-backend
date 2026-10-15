@@ -603,6 +603,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/closures/{closure}/upload', [\App\Http\Controllers\AgencyClosureController::class, 'upload']);
         Route::post('/closures/{closure}/reprocess', [\App\Http\Controllers\AgencyClosureController::class, 'reprocess']);
         Route::get('/closures/{closure}/trips', [\App\Http\Controllers\AgencyClosureController::class, 'trips']);
+        Route::post('/closures/{closure}/approve', [\App\Http\Controllers\AgencyClosureController::class, 'approve']);
         Route::post('/closures/{closure}/pay', [\App\Http\Controllers\AgencyClosureController::class, 'pay']);
         Route::get('/closures/{closure}/receipt', [\App\Http\Controllers\AgencyClosureController::class, 'receipt']);
         Route::get('/closure-files/{file}', [\App\Http\Controllers\AgencyClosureController::class, 'download']);

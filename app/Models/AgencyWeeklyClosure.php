@@ -40,7 +40,7 @@ class AgencyWeeklyClosure extends Model
 
     protected $fillable = [
         'agency_id', 'period_start', 'period_end', 'status', 'trips_count', 'expected_total', 'reported_total',
-        'final_approved_total', 'summary', 'processing_error', 'uploaded_at', 'processed_at', 'approved_at', 'approved_by',
+        'final_approved_total', 'manual_total', 'manual_reason', 'summary', 'processing_error', 'uploaded_at', 'processed_at', 'approved_at', 'approved_by',
         'paid_at', 'paid_by', 'payment_amount', 'payment_date', 'payment_method', 'payment_reference', 'payment_receipt_path',
     ];
 
@@ -50,6 +50,7 @@ class AgencyWeeklyClosure extends Model
         'expected_total' => 'float',
         'reported_total' => 'float',
         'final_approved_total' => 'float',
+        'manual_total' => 'float',
         'payment_amount' => 'float',
         'payment_date' => 'date:Y-m-d',
         'summary' => 'array',
