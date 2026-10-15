@@ -59,6 +59,16 @@ class BusinessService
         // 3. 🔥 CLIENT REQUEST: Detectar órdenes programadas para hoy
         $this->processScheduledOrders($shopId);
 
+        // Las que recuperaron stock con la tienda cerrada salen ahora de "Sin Stock" (Fran, 15/10/2026)
+        try {
+            $released = app(\App\Services\InventoryService::class)->releaseWaitingForOpening($shopId);
+            if ($released) {
+                Log::info("Shop $shopId: {$released} órdenes salieron de 'Sin Stock' al abrir (recuperaron stock de noche).");
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
         $assigned = 0;
         if ($assignBacklog) {
             // 🔥 FIX: Usar el inicio del día actual como límite inferior.
@@ -200,6 +210,7 @@ class BusinessService
                         'reset_count'  => 0,
                     ]);
                     $this->logClose($toCancel, fn ($o) => "Cancelada automáticamente al cierre de la jornada: era la segunda vez que llegaba al cierre sin resolverse (estaba en '{$this->statusName($o->status_id)}'" . $this->withSeller($o) . ').', 'closing_cancelled', $canceladoId);
+                    $this->syncStock($toCancel);
                     Log::info("Shop $shopId: Canceladas {$toCancel->count()} órdenes por reincidencia.");
                 }
 
@@ -210,6 +221,7 @@ class BusinessService
                         'reset_count' => 1,
                     ]);
                     $this->logClose($toReset, fn ($o) => "Volvió a 'Nuevo' sin vendedora al cierre de la jornada: no se resolvió hoy (estaba en '{$this->statusName($o->status_id)}'" . $this->withSeller($o) . '). Mañana se reparte de nuevo; si vuelve a llegar al cierre sin resolverse, se cancela.', 'closing_reset', $nuevoId);
+                    $this->syncStock($toReset);
                     Log::info("Shop $shopId: Reseteadas {$toReset->count()} órdenes a 'Nuevo' (primera vez).");
                 }
             }
@@ -255,6 +267,21 @@ class BusinessService
         } finally {
             // 🔊 Reactivar webhooks para el funcionamiento normal
             \App\Observers\OrderObserver::$muteWebhooks = false;
+        }
+    }
+
+    /**
+     * El cierre cambia estados en bloque, sin observers. Una "Programado para más tarde" que todavía guardaba su pieza en
+     * la agencia y pasa a "Nuevo" o "Cancelado" la devuelve aquí (OrderStock).
+     */
+    private function syncStock(\Illuminate\Support\Collection $orders): void
+    {
+        foreach (Order::whereIn('id', $orders->pluck('id'))->get() as $order) {
+            try {
+                app(\App\Services\Inventory\OrderStock::class)->sync($order);
+            } catch (\Throwable $e) {
+                report($e);
+            }
         }
     }
 

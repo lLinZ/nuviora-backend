@@ -66,9 +66,9 @@ class OrderStatus
         self::LLAMADO_2,
         self::LLAMADO_3,
         self::ESPERANDO_UBICACION,
-        self::PROGRAMADO_MAS_TARDE,
-        self::PROGRAMADO_OTRO_DIA,
-        self::REPROGRAMADO_HOY,
+        // "Programado para más tarde", "Programado para otro día" y "Reprogramado para hoy" no devuelven: la agencia
+        // le sigue guardando la pieza a ese cliente (Fran, 15/10/2026). Desde el 03/10 sí la devolvían, la daban por
+        // libre y otra orden la tomaba: "el sistema dice que quedan y la agencia dice que no hay".
         self::CAMBIO_UBICACION,
         self::POR_APROBAR_UBICACION,
         self::POR_APROBAR_RECHAZO,

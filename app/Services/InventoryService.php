@@ -541,21 +541,22 @@ class InventoryService
 
         if (!$order->hasStock()) return false; // Still missing stock, skip
 
+        // Fran (15/10/2026): con la tienda cerrada se queda en "Sin Stock", porque cada cambio de estado le escribe al
+        // cliente. Queda anotada y sale al abrir (BusinessService::openShop → releaseWaitingForOpening).
+        if ($order->shop_id && !app(\App\Services\Assignment\AssignOrderService::class)->isBusinessOpen($order->shop_id)) {
+            $this->waitForOpening($order);
+            return false;
+        }
+
+        // Sin sesión (al abrir la tienda) la actividad queda a nombre del sistema y no se escribe nota en la orden
+        $userId = auth()->id();
+
         // ⭐ CASO 1: Tiene status anterior guardado → restaurarlo directamente
         if ($order->previous_status_id) {
             $restoredStatus = \App\Models\Status::find($order->previous_status_id);
 
             // Safety: don't restore to a terminal status (edge case)
             if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
-                // Con la tienda cerrada, la orden queda como la habría dejado el cierre (BusinessService): sin
-                // vendedora, y en "Nuevo" si era de las que vuelven a "Nuevo". Al abrir, se reparte. Antes volvía a
-                // "Llamado 1" con su vendedora de madrugada (Fran, 15/10/2026: 28 órdenes a las 4:28, con la tienda cerrada).
-                $closedAs = $this->closedShopStatus($order, $restoredStatus);
-                $before = $restoredStatus->description;
-                if ($closedAs) {
-                    $restoredStatus = $closedAs;
-                    $order->agent_id = null;
-                }
                 $order->status_id          = $restoredStatus->id;
                 $order->previous_status_id = null; // Limpiar después de restaurar
                 // 🔥 FIX: Solo liberar a la especialista si la orden originalmente venía del pool general (Nuevo)
@@ -564,14 +565,11 @@ class InventoryService
                 }
                 $order->save();
 
-                $what = $closedAs
-                    ? "Stock recuperado con la tienda cerrada: la orden pasa a '{$restoredStatus->description}' sin vendedora (estaba en '{$before}'). Al abrir se reparte."
-                    : "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.";
                 \App\Models\OrderActivityLog::create([
                     'order_id'    => $order->id,
-                    'user_id'     => auth()->id() ?? 1,
+                    'user_id'     => $userId,
                     'action'      => 'status_changed',
-                    'description' => $what,
+                    'description' => "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.",
                     'properties'  => [
                         'old_status' => $sinStockStatus->id,
                         'new_status' => $restoredStatus->id,
@@ -579,13 +577,13 @@ class InventoryService
                     ]
                 ]);
 
-                \App\Models\OrderUpdate::create([
-                    'order_id' => $order->id,
-                    'user_id'  => auth()->id() ?? 1,
-                    'message'  => $closedAs
-                        ? "✅ AUTOMÁTICO: {$what}"
-                        : "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
-                ]);
+                if ($userId) {
+                    \App\Models\OrderUpdate::create([
+                        'order_id' => $order->id,
+                        'user_id'  => $userId,
+                        'message'  => "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
+                    ]);
+                }
 
                 $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
                 event(new \App\Events\OrderUpdated($order));
@@ -606,7 +604,7 @@ class InventoryService
 
             \App\Models\OrderActivityLog::create([
                 'order_id'    => $order->id,
-                'user_id'     => auth()->id() ?? 1,
+                'user_id'     => $userId,
                 'action'      => 'status_changed',
                 'description' => "Stock recuperado. Orden asignada automáticamente a {$agent->names}.",
                 'properties'  => [
@@ -624,7 +622,7 @@ class InventoryService
 
             \App\Models\OrderActivityLog::create([
                 'order_id'    => $order->id,
-                'user_id'     => auth()->id() ?? 1,
+                'user_id'     => $userId,
                 'action'      => 'status_changed',
                 'description' => "Stock recuperado. Orden movida a 'Nuevo' (sin agente disponible).",
                 'properties'  => [
@@ -639,20 +637,56 @@ class InventoryService
         return true;
     }
 
-    /**
-     * Si la tienda de la orden está cerrada, el estado en que la habría dejado el cierre: "Nuevo" para las que vuelven
-     * a "Nuevo" y el mismo estado para las programadas (las dos, sin vendedora). Null si está abierta o no aplica.
-     */
-    private function closedShopStatus(\App\Models\Order $order, \App\Models\Status $status): ?\App\Models\Status
-    {
-        $name = mb_strtolower($status->description);
-        $reset = in_array($name, array_map('mb_strtolower', \App\Services\Business\BusinessService::RESET_AT_CLOSE), true);
-        $released = in_array($name, array_map('mb_strtolower', [...\App\Services\Business\BusinessService::RELEASED_AT_CLOSE, 'Reprogramado para hoy']), true);
-        if ((!$reset && !$released) || !$order->shop_id
-            || app(\App\Services\Assignment\AssignOrderService::class)->isBusinessOpen($order->shop_id)) {
-            return null;
-        }
+    /** Setting con las órdenes que recuperaron stock con su tienda cerrada y esperan la apertura (ids). */
+    public const SETTING_WAITING_OPEN = 'inventory.sin_stock_waiting_open';
 
-        return $reset ? \App\Models\Status::where('description', 'Nuevo')->first() : $status;
+    /** Anota la orden para sacarla de "Sin Stock" cuando abra su tienda. Una sola vez, con una línea en su actividad. */
+    private function waitForOpening(\App\Models\Order $order): void
+    {
+        DB::transaction(function () use ($order) {
+            $row = \App\Models\Setting::where('key', self::SETTING_WAITING_OPEN)->lockForUpdate()->first();
+            $ids = $row ? (json_decode($row->value, true) ?: []) : [];
+            if (in_array($order->id, $ids, true)) {
+                return;
+            }
+            $ids[] = $order->id;
+            \App\Models\Setting::set(self::SETTING_WAITING_OPEN, $ids);
+            \App\Models\OrderActivityLog::create([
+                'order_id'    => $order->id,
+                'user_id'     => auth()->id(),
+                'action'      => 'stock_waiting_open',
+                'description' => 'Ya hay stock, pero la tienda está cerrada: sigue en "Sin Stock" y sale al abrir.',
+            ]);
+        });
+    }
+
+    /**
+     * Al abrir una tienda, saca de "Sin Stock" sus órdenes que recuperaron stock mientras estaba cerrada (solo esas; las
+     * demás en "Sin Stock" no se tocan). Devuelve cuántas salieron.
+     */
+    public function releaseWaitingForOpening(int $shopId): int
+    {
+        $ids = \App\Models\Setting::get(self::SETTING_WAITING_OPEN, []);
+        if (!is_array($ids) || !$ids) {
+            return 0;
+        }
+        $mine = \App\Models\Order::whereIn('id', $ids)->where('shop_id', $shopId)->pluck('id')->all();
+        $released = 0;
+        foreach ($mine as $id) {
+            try {
+                if ($this->recoverFromSinStock(\App\Models\Order::find($id))) {
+                    $released++;
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+        DB::transaction(function () use ($mine) {
+            $row = \App\Models\Setting::where('key', self::SETTING_WAITING_OPEN)->lockForUpdate()->first();
+            $left = array_values(array_diff($row ? (json_decode($row->value, true) ?: []) : [], $mine));
+            \App\Models\Setting::set(self::SETTING_WAITING_OPEN, $left);
+        });
+
+        return $released;
     }
 }
