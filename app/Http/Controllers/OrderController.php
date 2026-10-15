@@ -14,8 +14,10 @@ use App\Models\City;
 use App\Models\PaymentReceipt;
 use App\Services\CommissionService;
 use App\Services\ShopifyService;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use App\Models\InventoryMovement;
 use App\Models\Warehouse;
@@ -260,7 +262,42 @@ class OrderController extends Controller
             ]
         ]);
     }
-        public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
+    /**
+     * Un doble toque en "Confirmar entrega" o "En ruta" manda dos solicitudes iguales en el mismo segundo: las dos leían
+     * el estado viejo y cada una abría su carrera de agencia (14/10/2026: 9 carreras de más). Los cambios de estado de
+     * una orden se atienden de a uno; si mientras esperaba otra solicitud ya dejó la orden en ese estado, esta no repite
+     * nada y responde lo mismo.
+     */
+    public function updateStatus(Request $request, Order $order, CommissionService $commissionService)
+    {
+        $statusBefore = (int) $order->status_id;
+        $lock = Cache::lock("order-status:{$order->id}", 60);
+        try {
+            $lock->block(20);
+        } catch (LockTimeoutException $e) {
+            return response()->json(['status' => false, 'message' => 'La orden se está actualizando. Intenta de nuevo en unos segundos.'], 409);
+        }
+
+        try {
+            $order->refresh();
+            $targetId = $request->has('status')
+                ? (int) Status::where('description', (string) $request->input('status'))->value('id')
+                : (int) $request->input('status_id');
+            if ($targetId && (int) $order->status_id === $targetId && $statusBefore !== $targetId) {
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Estado actualizado',
+                    'order' => $order->fresh(['status', 'client', 'agent', 'agency', 'deliverer']),
+                ]);
+            }
+
+            return $this->applyStatus($request, $order, $commissionService);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function applyStatus(Request $request, Order $order, CommissionService $commissionService)
     {
         try {
             // Permitir busqueda por nombre ('status') o ID ('status_id')
