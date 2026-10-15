@@ -25,12 +25,15 @@ class WhatsappMessage extends Model
         'is_from_client',
         'message_type',
         'status',
+        'error_code',
+        'error_reason',
         'media',
         'sent_at'
     ];
 
     protected $casts = [
         'is_from_client' => 'boolean',
+        'error_code' => 'integer',
         'media' => 'array',
         'sent_at' => 'datetime'
     ];

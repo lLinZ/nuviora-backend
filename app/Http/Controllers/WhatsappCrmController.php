@@ -480,7 +480,7 @@ class WhatsappCrmController extends Controller
         if ($result && isset($result['messages'][0]['id'])) {
             $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
         } else {
-            $message->update(['status' => 'failed']);
+            $message->update(['status' => 'failed'] + \App\Services\WhatsAppService::failureFields($result));
             Log::error('WHATSAPP_CRM_SEND_ERROR: ' . json_encode($result));
         }
 

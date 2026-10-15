@@ -36,6 +36,13 @@ class WhatsAppWebhookController extends Controller
             $payload = $request->all();
             \Illuminate\Support\Facades\Log::info('WhatsApp Webhook Payload Received: ' . json_encode($payload));
 
+            // Lo que Meta contesta de los mensajes que salen: entregado, leído o rechazado con su motivo (15/10/2026)
+            try {
+                \App\Services\WhatsAppDeliveryStatus::handlePayload($payload);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::error('WA_HOOK_STATUS_ERROR: ' . $e->getMessage());
+            }
+
             if (!isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
                 return response()->json(['status' => 'no_messages']);
             }

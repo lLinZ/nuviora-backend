@@ -132,7 +132,7 @@ class ExternalWhatsAppController extends Controller
                     event(new \App\Events\WhatsappMessageReceived($msgModel->fresh()->load('client', 'order')));
                     $mediaResults[] = ['url' => $url, 'success' => true, 'id' => $res['messages'][0]['id']];
                 } else {
-                    $msgModel->update(['status' => 'failed']);
+                    $msgModel->update(['status' => 'failed'] + WhatsAppService::failureFields($res));
                     Log::error("EXTERNAL_MEDIA_FAIL: " . json_encode($res));
                     $mediaResults[] = ['url' => $url, 'success' => false];
                 }
@@ -256,7 +256,7 @@ class ExternalWhatsAppController extends Controller
                 ], 201);
             }
 
-            $message->update(['status' => 'failed']);
+            $message->update(['status' => 'failed'] + WhatsAppService::failureFields($result));
             return response()->json([
                 'success' => false,
                 'error' => $result,

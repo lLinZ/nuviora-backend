@@ -141,7 +141,7 @@ class WhatsappMessageController extends Controller
             if ($result && isset($result['messages'][0]['id'])) {
                 $message->update(['message_id' => $result['messages'][0]['id'], 'status' => 'sent']);
             } else {
-                $message->update(['status' => 'failed']);
+                $message->update(['status' => 'failed'] + WhatsAppService::failureFields($result));
             }
         }
 

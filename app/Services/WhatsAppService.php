@@ -208,10 +208,18 @@ class WhatsAppService
 
         $reason = match (true) {
             $code === 190 => 'el acceso de la empresa a WhatsApp venció o no es válido. Avisa al administrador.',
+            $code === 131042 => 'la cuenta de WhatsApp Business de la empresa tiene pagos pendientes con Meta. Avisa al administrador.',
             $code === 131053 => 'no pudo procesar el archivo (formato o tamaño no válido).',
             $code === 131052 => 'no pudo descargar el archivo.',
             $code === 131047 => 'pasaron más de 24 horas desde el último mensaje del cliente; solo se le puede escribir con una plantilla.',
-            $code === 131026 => 'no se pudo entregar: el número no tiene WhatsApp o no puede recibir este mensaje.',
+            $code === 131026 => 'el número no tiene WhatsApp o no puede recibir este mensaje.',
+            $code === 131049 => 'Meta lo frenó para no saturar al cliente con mensajes de empresas. Prueba más tarde.',
+            $code === 131050 => 'el cliente pidió no recibir mensajes de marketing de la empresa.',
+            $code === 130472 => 'el número del cliente está en una prueba de Meta que frena los mensajes de marketing.',
+            $code === 132000 => 'la plantilla no tiene la cantidad de variables correcta.',
+            $code === 132001 => 'la plantilla no existe o no está aprobada en ese idioma.',
+            $code === 132005 => 'el texto de la plantilla con las variables pasa del largo permitido.',
+            $code === 131008 && str_contains($detail, 'parameter of type text') => 'falta llenar una variable de la plantilla.',
             $code === 131051 => 'no admite este tipo de mensaje.',
             $code === 131056 => 'demasiados mensajes seguidos a este número. Espera un momento y reintenta.',
             in_array($code, [4, 80007, 130429, 131048], true) => 'está limitando los envíos. Intenta de nuevo en unos minutos.',
@@ -224,6 +232,23 @@ class WhatsAppService
         };
 
         return $reason ?? ($text !== '' ? $text : (string) $fallback);
+    }
+
+    /**
+     * Código y motivo de un envío que Meta no aceptó, para guardarlos en el mensaje (error_code, error_reason).
+     * $result es lo que devuelven sendMessage, sendTemplate y sendMedia*: la respuesta de Meta con su "error",
+     * o ['error' => texto] cuando no hubo respuesta.
+     */
+    public static function failureFields($result): array
+    {
+        $error = is_array($result) ? ($result['error'] ?? null) : null;
+
+        if (is_array($error)) {
+            // El texto de Meta, si no se conoce el código, puede pasar de los 500 de la columna
+            return ['error_code' => isset($error['code']) ? (int) $error['code'] : null, 'error_reason' => mb_substr(self::explainError($error, 'Meta no dio el motivo.'), 0, 500)];
+        }
+
+        return ['error_code' => null, 'error_reason' => 'no respondió. Intenta de nuevo.'];
     }
 
     /**
