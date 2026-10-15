@@ -547,6 +547,15 @@ class InventoryService
 
             // Safety: don't restore to a terminal status (edge case)
             if ($restoredStatus && !in_array($restoredStatus->description, $terminalStatuses)) {
+                // Con la tienda cerrada, la orden queda como la habría dejado el cierre (BusinessService): sin
+                // vendedora, y en "Nuevo" si era de las que vuelven a "Nuevo". Al abrir, se reparte. Antes volvía a
+                // "Llamado 1" con su vendedora de madrugada (Fran, 15/10/2026: 28 órdenes a las 4:28, con la tienda cerrada).
+                $closedAs = $this->closedShopStatus($order, $restoredStatus);
+                $before = $restoredStatus->description;
+                if ($closedAs) {
+                    $restoredStatus = $closedAs;
+                    $order->agent_id = null;
+                }
                 $order->status_id          = $restoredStatus->id;
                 $order->previous_status_id = null; // Limpiar después de restaurar
                 // 🔥 FIX: Solo liberar a la especialista si la orden originalmente venía del pool general (Nuevo)
@@ -555,11 +564,14 @@ class InventoryService
                 }
                 $order->save();
 
+                $what = $closedAs
+                    ? "Stock recuperado con la tienda cerrada: la orden pasa a '{$restoredStatus->description}' sin vendedora (estaba en '{$before}'). Al abrir se reparte."
+                    : "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.";
                 \App\Models\OrderActivityLog::create([
                     'order_id'    => $order->id,
                     'user_id'     => auth()->id() ?? 1,
                     'action'      => 'status_changed',
-                    'description' => "Stock recuperado. Orden restaurada a su status anterior: '{$restoredStatus->description}'.",
+                    'description' => $what,
                     'properties'  => [
                         'old_status' => $sinStockStatus->id,
                         'new_status' => $restoredStatus->id,
@@ -570,7 +582,9 @@ class InventoryService
                 \App\Models\OrderUpdate::create([
                     'order_id' => $order->id,
                     'user_id'  => auth()->id() ?? 1,
-                    'message'  => "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
+                    'message'  => $closedAs
+                        ? "✅ AUTOMÁTICO: {$what}"
+                        : "✅ AUTOMÁTICO: Stock recuperado. La orden volvió a su status anterior: '{$restoredStatus->description}'."
                 ]);
 
                 $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
@@ -623,5 +637,22 @@ class InventoryService
         $order->load(['status', 'client', 'agent', 'agency', 'deliverer']);
         event(new \App\Events\OrderUpdated($order));
         return true;
+    }
+
+    /**
+     * Si la tienda de la orden está cerrada, el estado en que la habría dejado el cierre: "Nuevo" para las que vuelven
+     * a "Nuevo" y el mismo estado para las programadas (las dos, sin vendedora). Null si está abierta o no aplica.
+     */
+    private function closedShopStatus(\App\Models\Order $order, \App\Models\Status $status): ?\App\Models\Status
+    {
+        $name = mb_strtolower($status->description);
+        $reset = in_array($name, array_map('mb_strtolower', \App\Services\Business\BusinessService::RESET_AT_CLOSE), true);
+        $released = in_array($name, array_map('mb_strtolower', [...\App\Services\Business\BusinessService::RELEASED_AT_CLOSE, 'Reprogramado para hoy']), true);
+        if ((!$reset && !$released) || !$order->shop_id
+            || app(\App\Services\Assignment\AssignOrderService::class)->isBusinessOpen($order->shop_id)) {
+            return null;
+        }
+
+        return $reset ? \App\Models\Status::where('description', 'Nuevo')->first() : $status;
     }
 }

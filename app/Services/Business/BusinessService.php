@@ -14,6 +14,19 @@ use Illuminate\Support\Facades\Log;
 
 class BusinessService
 {
+    /** Al cierre vuelven a "Nuevo" sin vendedora (o se cancelan si ya habían llegado así a otro cierre). */
+    public const RESET_AT_CLOSE = [
+        'Asignado a vendedor',
+        'Llamado 1',
+        'Llamado 2',
+        'Llamado 3',
+        'Esperando Ubicacion',
+        'Programado para mas tarde',
+    ];
+
+    /** Al cierre conservan su estado, pero pierden la vendedora hasta el día programado. */
+    public const RELEASED_AT_CLOSE = ['Programado para otro dia', 'Reprogramado'];
+
     public function openShop(int $shopId, bool $assignBacklog = false, ?int $openedByUserId = null): array
     {
         $today = now()->toDateString();
@@ -167,15 +180,7 @@ class BusinessService
             // ─────────────────────────────────────────────────────────
             // 2. "Asignado a vendedor" y "Llamados" (Lógica de Reset/Cancelación)
             // ─────────────────────────────────────────────────────────
-            $statusesToReset = [
-                'Asignado a vendedor',
-                'Llamado 1',
-                'Llamado 2',
-                'Llamado 3',
-                'Esperando Ubicacion',
-                'Programado para mas tarde',
-            ];
-            $resetStatusIds = Status::whereIn('description', $statusesToReset)->pluck('id');
+            $resetStatusIds = Status::whereIn('description', self::RESET_AT_CLOSE)->pluck('id');
 
             if ($resetStatusIds->isNotEmpty()) {
                 // Obtenemos órdenes para separar las que se cancelan de las que se resetean
@@ -230,8 +235,7 @@ class BusinessService
             // ─────────────────────────────────────────────────────────
             // 4. Estatus que mantienen su estado pero pierden el vendedor
             // ─────────────────────────────────────────────────────────
-            $keepStatusNames = ['Programado para otro dia', 'Reprogramado'];
-            $keepIds = Status::whereIn('description', $keepStatusNames)->pluck('id');
+            $keepIds = Status::whereIn('description', self::RELEASED_AT_CLOSE)->pluck('id');
 
             if ($keepIds->isNotEmpty()) {
                 // Solo las que todavía tenían vendedora: así el historial lo dice una vez, no cada noche
