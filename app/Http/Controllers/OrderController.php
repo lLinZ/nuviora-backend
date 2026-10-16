@@ -2649,6 +2649,12 @@ class OrderController extends Controller
             return response()->json(['status' => false, 'message' => 'Recibo no encontrado'], 404);
         }
 
+        // Las otras órdenes que este comprobante dejó marcadas como duplicado se vuelven a revisar al borrarlo; si no, la
+        // marca queda pegada (2026-10-16: #8333 y otras 5 entregadas seguían en "No cuadra" por una copia ya borrada)
+        $markedOrders = $receipt->check
+            ? \App\Models\ReceiptCheck::where('duplicate_of_check_id', $receipt->check->id)->where('order_id', '!=', $order->id)->pluck('order_id')->unique()
+            : collect();
+
         // Eliminar del storage
         if (\Illuminate\Support\Facades\Storage::disk('public')->exists($receipt->path)) {
             \Illuminate\Support\Facades\Storage::disk('public')->delete($receipt->path);
@@ -2667,6 +2673,9 @@ class OrderController extends Controller
         $order->save();
         // Sin ese comprobante cambia lo que suman los demás y lo recibido (documento de Fran, §9 y §10)
         app(\App\Services\Payments\ReceiptChecker::class)->evaluateOrder($order);
+        foreach (Order::whereIn('id', $markedOrders)->get() as $other) {
+            app(\App\Services\Payments\ReceiptChecker::class)->evaluateOrder($other);
+        }
 
         $freshOrder = $order->fresh(['paymentReceipts.check', 'status', 'client', 'agent', 'agency', 'payments', 'shop']);
         $orderArray = $freshOrder->toArray();
