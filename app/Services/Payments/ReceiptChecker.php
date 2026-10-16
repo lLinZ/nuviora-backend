@@ -26,7 +26,7 @@ use Illuminate\Support\Facades\DB;
  *   (duplicate_reason).
  * Si no cuadra el monto o el destino, la IA lee otra vez esos datos dígito por dígito (needsReread) y vale la
  * lectura que cuadre: leyó "3.705" donde decía 33.705. Si las dos dicen lo mismo, el pago no cuadra de verdad.
- * En modo "enforce" no se entrega la orden si algo de esto falla (deliveryBlockMessage).
+ * En modo "enforce" no se entrega la orden si algo de esto falla, ni si el monto queda en duda (deliveryBlockMessage).
  */
 class ReceiptChecker
 {
@@ -60,6 +60,9 @@ class ReceiptChecker
     private const OVER_PERCENT = 5;
 
     private const MAX_AGE_DAYS = 3;
+
+    /** Lo que se antepone a una falla de monto o destino cuando la IA dice que no ve bien la imagen (ver evaluate). */
+    private const DOUBTFUL_READING = 'Lectura dudosa (la imagen no se ve del todo bien): ';
 
     /** Con dos lecturas de un dato de destino vale la mejor (que una coincida exacto con la empresa no es casualidad). */
     private const GRADE_RANK = ['different' => 0, 'unknown' => 1, 'near' => 2, 'exact' => 3];
@@ -290,11 +293,12 @@ class ReceiptChecker
 
         foreach ($checks as $check) {
             $list = $issues[$check->id] ?? [];
-            // Si la IA dice que no ve bien la imagen, lo del monto y el destino queda para revisar, sin bloquear
-            // (2026-10-03: en una foto chiquita y de lado leyó "2.214" donde decía 22.149,00)
+            // Si la IA dice que no ve bien la imagen, lo del monto y el destino queda como aviso ("Revisar", no "No cuadra")
+            // (2026-10-03: en una foto chiquita y de lado leyó "2.214" donde decía 22.149,00), pero igual no deja
+            // entregar hasta que se suba una foto clara o lo apruebe administración (Fran, 2026-10-16: deliveryBlockMessage)
             if (($check->extracted['confianza'] ?? 'alta') !== 'alta') {
                 $list = array_map(fn ($i) => $i['level'] === 'fail' && in_array($i['code'] ?? null, ['destination', 'amount'], true)
-                    ? ['level' => 'warning', 'text' => 'Lectura dudosa (la imagen no se ve del todo bien): ' . lcfirst($i['text']), 'code' => $i['code']]
+                    ? ['level' => 'warning', 'text' => self::DOUBTFUL_READING . lcfirst($i['text']), 'code' => $i['code']]
                     : $i, $list);
             }
             // Fran (2026-10-09): si tampoco el modelo de respaldo lo lee con seguridad, revisión manual (sin inventar)
@@ -568,6 +572,15 @@ class ReceiptChecker
             return "No se puede entregar: {$reason} Borra ese comprobante y sube el correcto, o pide a administración que lo apruebe.";
         }
 
+        // Fran (2026-10-16, #8885 de Meloon): con una lectura dudosa la revisión dice "Revisar", pero si el monto no se
+        // confirma (lo leído no alcanza, dos lecturas que no cuadran o no se lee) o el pago fue a otra cuenta, tampoco
+        // se entrega. Pasó con un pago móvil de Bs. 34.510 y un comprobante de Bs. 23.345 en una foto poco nítida.
+        $doubt = $checks->filter(fn ($c) => $c->status === ReceiptCheck::WARNING && !$c->isApproved())
+            ->map(fn ($c) => self::blockingDoubt($c))->filter()->first();
+        if ($doubt) {
+            return "No se puede entregar: {$doubt['text']} Borra ese comprobante y sube una foto clara, o pide a administración que lo apruebe.";
+        }
+
         // Cada método digital tiene que tener al menos un comprobante de ese tipo (o uno aprobado a mano, ver
         // abajo). Si hay comprobantes sin revisar (subidos antes de esta función o con error de la IA), no se exige.
         if ($receipts->contains(fn ($r) => !$r->check || in_array($r->check->status, [ReceiptCheck::PENDING, ReceiptCheck::ERROR], true))) {
@@ -593,6 +606,18 @@ class ReceiptChecker
         }
 
         return null;
+    }
+
+    /**
+     * El aviso por el que un comprobante en "Revisar" no deja entregar (ver deliveryBlockMessage): cualquier duda del
+     * monto (código amount) y un pago a otra cuenta leído con dudas. Lo demás sigue sin bloquear: el destino que no se
+     * ve o se parece al de la empresa, el banco, la fecha, el posible duplicado, la revisión manual con el monto
+     * bien y el pago de más (§8).
+     */
+    private static function blockingDoubt(ReceiptCheck $check): ?array
+    {
+        return collect($check->issues ?? [])->first(fn ($i) => ($i['code'] ?? null) === 'amount'
+            || (($i['code'] ?? null) === 'destination' && str_starts_with($i['text'] ?? '', self::DOUBTFUL_READING)));
     }
 
     // --- Revisiones ---
