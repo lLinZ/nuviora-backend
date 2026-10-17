@@ -173,8 +173,17 @@ class MetaHierarchySync
             ->update(['missing_since' => $now]);
     }
 
+    /**
+     * Una fecha de Meta en la hora de la app. Una campaña sin fecha de inicio o de fin llega como el segundo -1 de la
+     * época en la zona de la cuenta ("1969-12-31T19:59:59-0400"), que las columnas timestamp no admiten: una fecha
+     * vacía o anterior a 1971 se guarda vacía (2026-10-17: frenaba toda la sincronización de la cuenta).
+     */
     private function time(?string $value): ?string
     {
-        return $value ? \Illuminate\Support\Carbon::parse($value)->setTimezone(config('app.timezone'))->toDateTimeString() : null;
+        if (!$value) {
+            return null;
+        }
+        $date = \Illuminate\Support\Carbon::parse($value);
+        return $date->copy()->utc()->year < 1971 ? null : $date->setTimezone(config('app.timezone'))->toDateTimeString();
     }
 }
