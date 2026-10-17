@@ -60,10 +60,16 @@ class AgencyRouter
         return null;
     }
 
-    /** @return Collection<int, User>  agencias activas de la ciudad, con ->pivot->weight. */
+    /**
+     * @return Collection<int, User>  agencias activas de la ciudad, con ->pivot->weight. Sin las apagadas o fuera de
+     *         horario (Fran, 2026-10-17, WorkingHours).
+     */
     public function cityAgencies(City $city): Collection
     {
-        return $city->agencies()->wherePivot('is_active', true)->orderBy('users.id')->get();
+        $hours = app(WorkingHours::class);
+
+        return $city->agencies()->wherePivot('is_active', true)->orderBy('users.id')->get()
+            ->filter(fn (User $a) => $hours->agencyWorks($a))->values();
     }
 
     /**

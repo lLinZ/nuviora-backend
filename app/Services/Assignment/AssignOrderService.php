@@ -55,6 +55,11 @@ class AssignOrderService
             return null; // fuera de jornada, no auto-asigna
         }
 
+        // Fran (2026-10-17): si su ciudad está apagada o fuera de horario, no pasa a vendedora (WorkingHours)
+        if (app(\App\Services\Agencies\WorkingHours::class)->holdIfStopped($order)) {
+            return null;
+        }
+
         // 🛑 VALIDACIÓN DE STOCK: No asignar si no hay existencias.
         // Segunda línea de defensa (la primera es el webhook).
         // Cargamos los productos si no están cargados aún.
@@ -234,6 +239,18 @@ class AssignOrderService
     }
 
     /**
+     * Reparte una sola orden como en el reparto de la mañana (la que esperaba que su ciudad volviera a trabajar,
+     * WorkingHours::release). Devuelve true si quedó con vendedora.
+     */
+    public function assignWaiting(Order $order): bool
+    {
+        $assignmentStatusId = (int) Status::firstOrCreate(['description' => OrderStatus::ASIGNADO_VENDEDOR])->id;
+        $novedadStatusId = Status::where('description', OrderStatus::NOVEDADES)->value('id');
+
+        return \App\Support\DbRetry::onConflict(fn () => $this->backlogOne($order, null, now()->toDateString(), $assignmentStatusId, $novedadStatusId ? (int) $novedadStatusId : null));
+    }
+
+    /**
      * Reparte una orden del backlog. Devuelve true si quedó con vendedora. Se puede repetir: lee la orden
      * de nuevo con bloqueo antes de escribir.
      */
@@ -254,6 +271,14 @@ class AssignOrderService
 
         // 🛑 CHECK BUSINESS HOURS: Solo asignar si la tienda está abierta en este momento.
         if (!$this->isBusinessOpen($targetShopId)) {
+            return false;
+        }
+
+        // Fran (2026-10-17): si su ciudad está apagada o fuera de horario, espera sin vendedora (WorkingHours). Las
+        // programadas para otro día todavía no se reparten: no se anotan.
+        $scheduledLater = in_array($ordModel->status?->description, [OrderStatus::PROGRAMADO_OTRO_DIA, OrderStatus::REPROGRAMADO_HOY], true)
+            && $ordModel->scheduled_for && $ordModel->scheduled_for->toDateString() > now()->toDateString();
+        if (!$scheduledLater && app(\App\Services\Agencies\WorkingHours::class)->holdIfStopped($ordModel)) {
             return false;
         }
 

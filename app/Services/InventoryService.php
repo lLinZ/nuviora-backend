@@ -548,6 +548,12 @@ class InventoryService
             return false;
         }
 
+        // Fran (2026-10-17): con su ciudad apagada o fuera de horario tampoco sale; queda anotada y sale cuando vuelva a
+        // trabajar (WorkingHours::release)
+        if (app(\App\Services\Agencies\WorkingHours::class)->holdIfStopped($order)) {
+            return false;
+        }
+
         // Sin sesión (al abrir la tienda) la actividad queda a nombre del sistema y no se escribe nota en la orden
         $userId = auth()->id();
 

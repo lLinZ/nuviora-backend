@@ -11,10 +11,12 @@ use App\Models\Status;
 use App\Models\User;
 use App\Notifications\OrderAssignedNotification;
 use App\Services\Agencies\AgencyRouter;
+use App\Services\Agencies\WorkingHours;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -27,7 +29,7 @@ class AgencyRoutingController extends Controller
     /** Estados que se pueden pasar de una agencia a otra: todavía no salieron a la calle. */
     private const MOVABLE = [OrderStatus::ASIGNAR_A_AGENCIA, OrderStatus::ASIGNAR_REPARTIDOR, OrderStatus::ASIGNADO_A_REPARTIDOR];
 
-    public function __construct(private AgencyRouter $router) {}
+    public function __construct(private AgencyRouter $router, private WorkingHours $hours) {}
 
     /** GET /agency-routing */
     public function index(): JsonResponse
@@ -90,6 +92,60 @@ class AgencyRoutingController extends Controller
         });
 
         return response()->json(['status' => true, 'message' => "Agencias de {$city->name} guardadas", 'data' => $this->payload()]);
+    }
+
+    /**
+     * PUT /agency-routing/cities/{city}/hours { is_working, works_from, works_until } (Fran, 2026-10-17). Apagada o
+     * fuera de horario, sus órdenes no pasan a vendedora; al volver, las que esperaban se reparten en el próximo minuto.
+     */
+    public function updateCityHours(Request $request, City $city): JsonResponse
+    {
+        $data = $this->validateHours($request);
+        $city->forceFill(['is_working' => $data['is_working'], 'works_from' => $data['works_from'], 'works_until' => $data['works_until']])->save();
+        Log::info('Ciudad ' . $city->name . ': ' . ($data['is_working'] ? 'encendida' : 'apagada') . ', horario ' . WorkingHours::hoursLabel($data['works_from'], $data['works_until']) . ' (por ' . Auth::user()?->names . ').');
+
+        return response()->json(['status' => true, 'message' => $this->hoursMessage($city->name, $data, $this->hours->cityStop($city)), 'data' => $this->payload()]);
+    }
+
+    /** PUT /agency-routing/agencies/{agency}/hours { is_working, works_from, works_until } (Fran, 2026-10-17). */
+    public function updateAgencyHours(Request $request, User $agency): JsonResponse
+    {
+        $this->ensureAgency($agency);
+        $data = $this->validateHours($request);
+        $agency->forceFill(['agency_is_working' => $data['is_working'], 'agency_works_from' => $data['works_from'], 'agency_works_until' => $data['works_until']])->save();
+        Log::info('Agencia ' . $agency->names . ': ' . ($data['is_working'] ? 'encendida' : 'apagada') . ', horario ' . WorkingHours::hoursLabel($data['works_from'], $data['works_until']) . ' (por ' . Auth::user()?->names . ').');
+        $stop = $this->hours->agencyStop($agency);
+
+        return response()->json(['status' => true, 'message' => $this->hoursMessage($agency->names, $data, $stop ? "{$agency->names} {$stop}" : null), 'data' => $this->payload()]);
+    }
+
+    /** @return array{is_working: bool, works_from: ?string, works_until: ?string} */
+    private function validateHours(Request $request): array
+    {
+        $data = $request->validate([
+            'is_working' => 'required|boolean',
+            'works_from' => 'nullable|date_format:H:i',
+            'works_until' => 'nullable|date_format:H:i',
+        ], ['works_from.date_format' => 'La hora de inicio tiene que ser HH:MM.', 'works_until.date_format' => 'La hora de cierre tiene que ser HH:MM.']);
+        $from = ($data['works_from'] ?? null) ?: null;
+        $until = ($data['works_until'] ?? null) ?: null;
+        if ($from && $until && $from === $until) {
+            throw ValidationException::withMessages(['works_until' => 'La hora de cierre no puede ser igual a la de inicio.']);
+        }
+
+        return ['is_working' => (bool) $data['is_working'], 'works_from' => $from, 'works_until' => $until];
+    }
+
+    private function hoursMessage(string $name, array $data, ?string $stop): string
+    {
+        if (!$data['is_working']) {
+            return "{$name} apagada: sus órdenes no pasan a vendedora hasta que la enciendas.";
+        }
+        $hours = $data['works_from'] || $data['works_until'] ? ', horario ' . WorkingHours::hoursLabel($data['works_from'], $data['works_until']) : '';
+
+        return $stop
+            ? "{$name} guardada{$hours}. Ahora no trabaja ({$stop}): sus órdenes esperan sin vendedora."
+            : "{$name} trabajando{$hours}. Las órdenes que esperaban se reparten en el próximo minuto.";
     }
 
     /** GET /agency-routing/agencies/{agency}/reassign — cuántas órdenes tiene por estado y a quién pueden ir. */
@@ -178,7 +234,8 @@ class AgencyRoutingController extends Controller
     private function payload(): array
     {
         $agencies = User::whereHas('role', fn ($q) => $q->where('description', 'Agencia'))
-            ->orderBy('names')->get(['id', 'names', 'color', 'delivery_cost', 'max_active_orders']);
+            ->orderBy('names')->get(['id', 'names', 'color', 'delivery_cost', 'max_active_orders', 'agency_is_working', 'agency_works_from', 'agency_works_until']);
+        $waiting = $this->hours->waitingByCity();
         $active = $this->router->activeCounts($agencies->pluck('id')->all());
         $pendingId = Status::where('description', OrderStatus::PENDIENTE_AGENCIA)->value('id');
         $pending = $pendingId
@@ -202,8 +259,12 @@ class AgencyRoutingController extends Controller
                 'active' => $active[$a->id] ?? 0,
                 'full' => $a->max_active_orders !== null && ($active[$a->id] ?? 0) >= $a->max_active_orders,
                 'cities' => $citiesByAgency[$a->id] ?? [],
+                'is_working' => $a->agency_is_working !== false,
+                'works_from' => $a->agency_works_from ? substr($a->agency_works_from, 0, 5) : null,
+                'works_until' => $a->agency_works_until ? substr($a->agency_works_until, 0, 5) : null,
+                'stop_reason' => $this->hours->agencyStop($a),
             ])->values(),
-            'cities' => $cities->map(function (City $city) use ($active, $pending) {
+            'cities' => $cities->map(function (City $city) use ($active, $pending, $waiting) {
                 $activeAgencies = $city->agencies->filter(fn ($a) => $a->pivot->is_active);
                 $weights = $this->router->weights($activeAgencies);
                 $total = array_sum($weights);
@@ -213,6 +274,11 @@ class AgencyRoutingController extends Controller
                     'name' => $city->name,
                     'delivery_cost_usd' => (float) $city->delivery_cost_usd,
                     'pending' => (int) ($pending[$city->id] ?? 0),
+                    'is_working' => $city->is_working !== false,
+                    'works_from' => $city->works_from ? substr($city->works_from, 0, 5) : null,
+                    'works_until' => $city->works_until ? substr($city->works_until, 0, 5) : null,
+                    'stop_reason' => $this->hours->cityStop($city),
+                    'waiting' => (int) ($waiting[$city->id] ?? 0),
                     'agencies' => $city->agencies->map(fn ($a) => [
                         'id' => $a->id,
                         'names' => $a->names,

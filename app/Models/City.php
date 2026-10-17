@@ -13,6 +13,13 @@ class City extends Model
         'name',
         'delivery_cost_usd',
         'agency_id',
+        'is_working',
+        'works_from',
+        'works_until',
+    ];
+
+    protected $casts = [
+        'is_working' => 'boolean',
     ];
 
     /** Agencia principal (la primera del reparto). El reparto usa agencies(). */

@@ -131,7 +131,10 @@ class User extends Authenticatable
         'is_lite_view',
         'is_active_crm',
         'can_handle_no_stock',
-        'max_active_orders'
+        'max_active_orders',
+        'agency_is_working',
+        'agency_works_from',
+        'agency_works_until',
     ];
 
     /** Membresía vigente en un grupo de ventas (una sola a la vez). */
@@ -185,6 +188,7 @@ class User extends Authenticatable
             'is_active_crm' => 'boolean',
             'can_handle_no_stock' => 'boolean',
             'max_active_orders' => 'integer',
+            'agency_is_working' => 'boolean',
         ];
     }
 }
