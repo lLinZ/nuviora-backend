@@ -14,8 +14,6 @@ class City extends Model
         'delivery_cost_usd',
         'agency_id',
         'is_working',
-        'works_from',
-        'works_until',
     ];
 
     protected $casts = [

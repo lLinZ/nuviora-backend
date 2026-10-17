@@ -95,19 +95,24 @@ class AgencyRoutingController extends Controller
     }
 
     /**
-     * PUT /agency-routing/cities/{city}/hours { is_working, works_from, works_until } (Fran, 2026-10-17). Apagada o
-     * fuera de horario, sus órdenes no pasan a vendedora; al volver, las que esperaban se reparten en el próximo minuto.
+     * PUT /agency-routing/cities/{city}/working { is_working } (Fran, 2026-10-17). Apagada, sus órdenes no pasan a
+     * vendedora; al encenderla, las que esperaban se reparten en el próximo minuto. La ciudad no tiene horario: el
+     * horario es de cada agencia (Fran, 10:54).
      */
-    public function updateCityHours(Request $request, City $city): JsonResponse
+    public function updateCityWorking(Request $request, City $city): JsonResponse
     {
-        $data = $this->validateHours($request);
-        $city->forceFill(['is_working' => $data['is_working'], 'works_from' => $data['works_from'], 'works_until' => $data['works_until']])->save();
-        Log::info('Ciudad ' . $city->name . ': ' . ($data['is_working'] ? 'encendida' : 'apagada') . ', horario ' . WorkingHours::hoursLabel($data['works_from'], $data['works_until']) . ' (por ' . Auth::user()?->names . ').');
+        $data = $request->validate(['is_working' => 'required|boolean']);
+        $data = ['is_working' => (bool) $data['is_working'], 'works_from' => null, 'works_until' => null];
+        $city->forceFill(['is_working' => $data['is_working']])->save();
+        Log::info('Ciudad ' . $city->name . ': ' . ($data['is_working'] ? 'encendida' : 'apagada') . ' (por ' . Auth::user()?->names . ').');
 
         return response()->json(['status' => true, 'message' => $this->hoursMessage($city->name, $data, $this->hours->cityStop($city)), 'data' => $this->payload()]);
     }
 
-    /** PUT /agency-routing/agencies/{agency}/hours { is_working, works_from, works_until } (Fran, 2026-10-17). */
+    /**
+     * PUT /agency-routing/agencies/{agency}/hours { is_working, works_from, works_until } (Fran, 2026-10-17: "los
+     * horarios deberían ser por agencia").
+     */
     public function updateAgencyHours(Request $request, User $agency): JsonResponse
     {
         $this->ensureAgency($agency);
@@ -275,8 +280,6 @@ class AgencyRoutingController extends Controller
                     'delivery_cost_usd' => (float) $city->delivery_cost_usd,
                     'pending' => (int) ($pending[$city->id] ?? 0),
                     'is_working' => $city->is_working !== false,
-                    'works_from' => $city->works_from ? substr($city->works_from, 0, 5) : null,
-                    'works_until' => $city->works_until ? substr($city->works_until, 0, 5) : null,
                     'stop_reason' => $this->hours->cityStop($city),
                     'waiting' => (int) ($waiting[$city->id] ?? 0),
                     'agencies' => $city->agencies->map(fn ($a) => [

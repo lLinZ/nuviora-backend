@@ -15,12 +15,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Ciudades y agencias que se apagan o tienen horario (Fran, 2026-10-17: "Valencia no puede trabajar y entonces
- * necesito que sus órdenes no pasen a asignado a vendedora"; "Maracay todos los días cierra a las 5 de la tarde").
+ * Ciudades y agencias que se apagan, y el horario de cada agencia (Fran, 2026-10-17: "Valencia no puede trabajar y
+ * entonces necesito que sus órdenes no pasen a asignado a vendedora"; "Maracay todos los días cierra a las 5 de la
+ * tarde"; 10:54: "los horarios deberían ser por agencia, porque cada agencia puede tener un horario distinto").
  *  - Una agencia trabaja si está encendida y, si tiene horario, está dentro de él. Una que no trabaja no recibe órdenes
  *    en el reparto de su ciudad (AgencyRouter::cityAgencies).
- *  - Una ciudad trabaja si está encendida, está dentro de su horario (si tiene) y, si tiene agencias activas en el
- *    reparto, al menos una de ellas trabaja.
+ *  - Una ciudad no tiene horario: trabaja si está encendida y, si tiene agencias activas en el reparto, al menos una de
+ *    ellas trabaja.
  *  - La orden de una ciudad que no trabaja no pasa a vendedora: se queda donde está, sin vendedora, y queda anotada
  *    (Setting SETTING_WAITING). Cuando la ciudad vuelve a trabajar (al encenderla o al llegar su hora) se reparte como
  *    siempre (release, cada minuto). Una en "Sin Stock" que recupera stock tampoco sale mientras tanto.
@@ -53,15 +54,15 @@ class WorkingHours
             ? null : 'trabaja ' . self::hoursLabel($agency->agency_works_from, $agency->agency_works_until);
     }
 
-    /** Por qué la ciudad no trabaja ahora, en una frase ("Carabobo está apagada"), o null si trabaja. */
+    /**
+     * Por qué la ciudad no trabaja ahora, en una frase ("Carabobo está apagada", "Dalgo, la agencia de Aragua, trabaja
+     * hasta las 17:00"), o null si trabaja.
+     */
     public function cityStop(City $city, ?Carbon $at = null): ?string
     {
         $at ??= now();
         if ($city->is_working === false) {
             return "{$city->name} está apagada";
-        }
-        if (!self::inHours($at, $city->works_from, $city->works_until)) {
-            return "{$city->name} trabaja " . self::hoursLabel($city->works_from, $city->works_until);
         }
         $agencies = $city->agencies()->wherePivot('is_active', true)->get();
         if ($agencies->isNotEmpty() && !$agencies->contains(fn (User $a) => $this->agencyWorks($a, $at))) {

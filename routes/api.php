@@ -517,7 +517,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('agency-routing', [\App\Http\Controllers\AgencyRoutingController::class, 'index'])->middleware('role:Admin,Gerente,Master');
     Route::put('agency-routing/agencies/{agency}', [\App\Http\Controllers\AgencyRoutingController::class, 'updateAgency'])->middleware('role:Admin,Master');
     Route::put('agency-routing/cities/{city}', [\App\Http\Controllers\AgencyRoutingController::class, 'updateCity'])->middleware('role:Admin,Master');
-    Route::put('agency-routing/cities/{city}/hours', [\App\Http\Controllers\AgencyRoutingController::class, 'updateCityHours'])->middleware('role:Admin,Master');
+    Route::put('agency-routing/cities/{city}/working', [\App\Http\Controllers\AgencyRoutingController::class, 'updateCityWorking'])->middleware('role:Admin,Master');
     Route::put('agency-routing/agencies/{agency}/hours', [\App\Http\Controllers\AgencyRoutingController::class, 'updateAgencyHours'])->middleware('role:Admin,Master');
     Route::get('agency-routing/agencies/{agency}/reassign', [\App\Http\Controllers\AgencyRoutingController::class, 'reassignPreview'])->middleware('role:Admin,Gerente,Master');
     Route::post('agency-routing/agencies/{agency}/reassign', [\App\Http\Controllers\AgencyRoutingController::class, 'reassign'])->middleware('role:Admin,Gerente,Master');
