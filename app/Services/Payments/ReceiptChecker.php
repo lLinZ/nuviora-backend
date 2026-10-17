@@ -21,12 +21,13 @@ use Illuminate\Support\Facades\DB;
  * - Un pago no puede servir para dos órdenes. El duplicado lo decide el código, por capas (pedido de Fran del
  *   2026-10-09, después de un falso positivo): el mismo archivo exacto (SHA-256) o el mismo pago (referencia, monto,
  *   fecha y, en bolívares, banco) bloquean; si la referencia coincide pero algún dato no se puede comparar, o la imagen
- *   se parece mucho a otra y no hay referencia con qué comparar, es "Posible duplicado — requiere revisión" y no
- *   bloquea. La misma referencia con otro monto, otra fecha u otro banco es otro pago. Queda el motivo
- *   (duplicate_reason).
+ *   se parece mucho a otra y no hay referencia con qué comparar, es "Posible duplicado — requiere revisión" (desde el
+ *   2026-10-17 tampoco deja entregar hasta que administración lo apruebe: "por nada del mundo"). La misma referencia
+ *   con otro monto, otra fecha u otro banco es otro pago. Queda el motivo (duplicate_reason).
  * Si no cuadra el monto o el destino, la IA lee otra vez esos datos dígito por dígito (needsReread) y vale la
  * lectura que cuadre: leyó "3.705" donde decía 33.705. Si las dos dicen lo mismo, el pago no cuadra de verdad.
- * En modo "enforce" no se entrega la orden si algo de esto falla, ni si el monto queda en duda (deliveryBlockMessage).
+ * En modo "enforce" no se entrega la orden si algo de esto falla, si el monto queda en duda, si la imagen no se ve bien
+ * o si el pago puede estar en otra orden (deliveryBlockMessage).
  */
 class ReceiptChecker
 {
@@ -305,6 +306,12 @@ class ReceiptChecker
             if (isset($check->extracted['escalado']) && $this->lowConfidence($check->extracted)) {
                 $list[] = $this->warn('Ni con la segunda IA se lee con seguridad (' . $this->doubtfulFields($check->extracted) . '): requiere revisión manual.', 'review');
             }
+            // Fran (2026-10-17): "no puede dejar entregar ninguna orden en la que no se vea bien el comprobante". Aunque el
+            // monto cuadre, queda en "Revisar" (y en la lista de Fran) y no deja entregar (deliveryBlockMessage)
+            if (!in_array($check->kind, ['ilegible', 'otro'], true) && ($check->extracted['confianza'] ?? 'alta') !== 'alta'
+                && !in_array('review', array_column($list, 'code'), true)) {
+                $list[] = $this->warn('La imagen no se ve del todo bien. Pide al cliente una foto o un capture más claro.', 'blurry');
+            }
             $levels = array_column($list, 'level');
             $status = $check->kind === 'ilegible' ? ReceiptCheck::UNREADABLE
                 : (in_array('fail', $levels, true) ? ReceiptCheck::FAIL
@@ -339,10 +346,10 @@ class ReceiptChecker
      *  1. exact_file_hash: el mismo archivo exacto → bloquea.
      *  2. same_transaction_reference: la misma referencia, el mismo monto, la misma fecha y, en bolívares, el mismo
      *     banco → bloquea. possible_same_reference: la misma referencia, pero algún dato falta, o uno solo es distinto
-     *     y no se lee con seguridad → "Posible duplicado — requiere revisión", no bloquea. Con un dato distinto leído
-     *     con seguridad, o con dos distintos, es otro pago: no se marca.
+     *     y no se lee con seguridad → "Posible duplicado — requiere revisión" (no deja entregar sin aprobación,
+     *     Fran 2026-10-17). Con un dato distinto leído con seguridad, o con dos distintos, es otro pago: no se marca.
      *  3. perceptual_similarity_only: la imagen es casi igual a la de otra orden y no hay dos referencias que comparar
-     *     → posible duplicado, no bloquea.
+     *     → posible duplicado (igual: sin aprobación no se entrega).
      * @return array{issue: array, reason: string, others: Collection}|null
      */
     private function otherOrderDuplicate(ReceiptCheck $check, Order $order, string $kind): ?array
@@ -581,9 +588,25 @@ class ReceiptChecker
             return "No se puede entregar: {$doubt['text']} Borra ese comprobante y sube una foto clara, o pide a administración que lo apruebe.";
         }
 
+        // Fran (2026-10-17, "por nada del mundo"): tampoco se entrega si un comprobante no se ve bien, aunque el monto
+        // cuadre, ni si el pago puede estar ya en otra orden (el posible duplicado; el seguro ya bloquea arriba). Solo
+        // administración lo libera, aprobándolo.
+        if ($checks->contains(fn ($c) => !$c->isApproved() && self::unclear($c))) {
+            return 'No se puede entregar: el comprobante no se ve bien. Borra ese comprobante y sube una foto o un capture claro, o pide a administración que lo apruebe.';
+        }
+        $possibleDuplicate = $checks->filter(fn ($c) => !$c->isApproved())->flatMap(fn ($c) => $c->issues ?? [])
+            ->first(fn ($i) => ($i['code'] ?? null) === 'duplicate' && str_starts_with($i['text'] ?? '', 'Posible duplicado'));
+        if ($possibleDuplicate) {
+            return "No se puede entregar: {$possibleDuplicate['text']} Un pago no puede servir para dos órdenes: si es otro pago, pide a administración que lo apruebe.";
+        }
+        // Un comprobante que no se pudo revisar tampoco: no se sabe si se ve bien (se puede revisar otra vez o aprobar)
+        if ($checks->contains(fn ($c) => !$c->isApproved() && in_array($c->status, [ReceiptCheck::PENDING, ReceiptCheck::ERROR], true))) {
+            return 'No se puede entregar: el comprobante no se pudo revisar. Vuelve a revisarlo o pide a administración que lo apruebe.';
+        }
+
         // Cada método digital tiene que tener al menos un comprobante de ese tipo (o uno aprobado a mano, ver
-        // abajo). Si hay comprobantes sin revisar (subidos antes de esta función o con error de la IA), no se exige.
-        if ($receipts->contains(fn ($r) => !$r->check || in_array($r->check->status, [ReceiptCheck::PENDING, ReceiptCheck::ERROR], true))) {
+        // abajo). Si hay comprobantes subidos antes de esta función (sin revisión), no se exige.
+        if ($receipts->contains(fn ($r) => !$r->check)) {
             return null;
         }
         $paymentKinds = $order->payments()->pluck('method')->map(fn ($m) => self::METHOD_KIND[$m] ?? null)->filter();
@@ -609,10 +632,25 @@ class ReceiptChecker
     }
 
     /**
-     * El aviso por el que un comprobante en "Revisar" no deja entregar (ver deliveryBlockMessage): cualquier duda del
-     * monto (código amount) y un pago a otra cuenta leído con dudas. Lo demás sigue sin bloquear: el destino que no se
-     * ve o se parece al de la empresa, el banco, la fecha, el posible duplicado, la revisión manual con el monto
-     * bien y el pago de más (§8).
+     * El comprobante no se ve bien (Fran, 2026-10-17): la última lectura no es de confianza alta o ni la segunda IA lo
+     * lee con seguridad. El ilegible y lo que no es un comprobante ya tienen su propio estado.
+     */
+    public static function unclear(ReceiptCheck $check): bool
+    {
+        if (in_array($check->kind, ['ilegible', 'otro', null], true)) {
+            return false;
+        }
+
+        return ($check->extracted['confianza'] ?? 'alta') !== 'alta'
+            || in_array('review', array_column($check->issues ?? [], 'code'), true);
+    }
+
+    /**
+     * El aviso de monto o destino por el que un comprobante en "Revisar" no deja entregar (ver deliveryBlockMessage):
+     * cualquier duda del monto (código amount) y un pago a otra cuenta leído con dudas. Desde el 2026-10-17 tampoco
+     * entregan la imagen que no se ve bien ni el posible duplicado (unclear y deliveryBlockMessage). Siguen sin
+     * bloquear: el destino que no se ve o se parece al de la empresa con la imagen nítida, el banco, la fecha y el
+     * pago de más (§8).
      */
     private static function blockingDoubt(ReceiptCheck $check): ?array
     {
