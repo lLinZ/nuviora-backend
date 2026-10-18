@@ -666,6 +666,16 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/payable-payments/{payment}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'paymentReceipt']);
         Route::post('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'uploadPurchaseReceipt']);
         Route::post('/purchases/{purchase}/correct', [\App\Http\Controllers\FinanceSupplierController::class, 'correctPurchase']);
+        // Módulo 5, entrega 2: configuración del plan de inventario (§5, §6, §12, §13, §17–20, §24, §60–65, §95, §128)
+        Route::get('/replenishment/config', [\App\Http\Controllers\ReplenishmentConfigController::class, 'index']);
+        Route::put('/replenishment/settings', [\App\Http\Controllers\ReplenishmentConfigController::class, 'updateSettings']);
+        Route::put('/replenishment/products/{product}', [\App\Http\Controllers\ReplenishmentConfigController::class, 'updateProduct']);
+        Route::put('/replenishment/products/{product}/cities/{city}', [\App\Http\Controllers\ReplenishmentConfigController::class, 'setAvailability']);
+        Route::post('/replenishment/supplier-products', [\App\Http\Controllers\ReplenishmentConfigController::class, 'storeSupplierProduct']);
+        Route::put('/replenishment/supplier-products/{supplierProduct}', [\App\Http\Controllers\ReplenishmentConfigController::class, 'updateSupplierProduct']);
+        Route::post('/replenishment/routes', [\App\Http\Controllers\ReplenishmentConfigController::class, 'storeRoute']);
+        Route::put('/replenishment/routes/{route}', [\App\Http\Controllers\ReplenishmentConfigController::class, 'updateRoute']);
+        Route::get('/replenishment/audit', [\App\Http\Controllers\ReplenishmentConfigController::class, 'audit']);
         // Compras por recibir (Módulo 5, entrega 1; §16, §90, §91, R3)
         Route::get('/purchases', [\App\Http\Controllers\FinancePurchaseController::class, 'index']);
         Route::post('/purchases', [\App\Http\Controllers\FinancePurchaseController::class, 'store']);
