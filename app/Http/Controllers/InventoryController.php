@@ -38,6 +38,9 @@ class InventoryController extends Controller
         }
 
         $rawInventory = $query->get();
+        // Módulo 5 (§15): "En tránsito" solo aparece cuando de verdad hay algo en camino
+        $transitId = \App\Models\Warehouse::transitId();
+        $rawInventory = $rawInventory->reject(fn ($inv) => (int) $inv->warehouse_id === $transitId && (int) $inv->quantity === 0)->values();
 
         if ($request->has('overview') && $request->overview === 'true') {
             $allProducts = \App\Models\Product::with('variants')->get();

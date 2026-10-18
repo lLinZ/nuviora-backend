@@ -24,11 +24,14 @@ class FinancePurchaseController extends Controller
     {
         $data = $request->validate(['status' => ['nullable', Rule::in([...array_keys(InventoryPurchase::STATUSES), 'all'])]]);
         $status = $data['status'] ?? InventoryPurchase::PENDING;
-        $rows = InventoryPurchase::with(['supplier:id,name', 'product:id,title', 'warehouse:id,name', 'creator:id,names'])
+        $rows = InventoryPurchase::with(['supplier:id,name', 'product:id,title', 'product.variants:id,product_id,title,is_active', 'warehouse:id,name', 'creator:id,names'])
             ->when($status !== 'all', fn ($q) => $q->where('status', $status))
             ->orderByRaw('expected_at IS NULL')->orderBy('expected_at')->orderByDesc('id')->limit(300)->get();
 
-        return response()->json(['purchases' => $rows->map->toPayload()->values()]);
+        // Con las tallas del producto, para repartir lo recibido (tarea 4)
+        return response()->json(['purchases' => $rows->map(fn (InventoryPurchase $p) => $p->toPayload() + [
+            'product_variants' => $p->product?->variants->map(fn ($v) => ['id' => $v->id, 'title' => $v->title, 'is_active' => (bool) $v->is_active])->values() ?? [],
+        ])->values()]);
     }
 
     public function store(Request $request): JsonResponse
