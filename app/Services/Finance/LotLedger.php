@@ -386,7 +386,18 @@ class LotLedger
                 if (!$m->from_warehouse_id || !$m->to_warehouse_id || $qty <= 0) {
                     return;
                 }
-                foreach ($this->take($m, (int) $m->from_warehouse_id, $variantId, $qty, InventoryLotLayer::AVAILABLE) as [$layer, $n]) {
+                // Módulo 5 (§126): al recibir un traslado, salen de "En tránsito" exactamente las capas que creó su salida, así
+                // dos traslados del mismo producto en camino no se cruzan los lotes. Lo que falte, FIFO como siempre.
+                $taken = [];
+                $dispatch = (int) ($m->details['dispatch_movement_id'] ?? 0);
+                if ($dispatch) {
+                    $taken = $this->take($m, (int) $m->from_warehouse_id, $variantId, $qty, InventoryLotLayer::AVAILABLE, $dispatch);
+                }
+                $rest = $qty - array_sum(array_column($taken, 1));
+                if ($rest > 0) {
+                    $taken = array_merge($taken, $this->take($m, (int) $m->from_warehouse_id, $variantId, $rest, InventoryLotLayer::AVAILABLE));
+                }
+                foreach ($taken as [$layer, $n]) {
                     $this->putInNewLayer($m, $layer, (int) $m->to_warehouse_id, InventoryLotLayer::AVAILABLE, $n);
                 }
                 return;
@@ -425,10 +436,11 @@ class LotLedger
     /**
      * Saca $qty unidades FIFO de las capas de ese almacén + producto + variante en ese estado. Con variante, primero las
      * de su variante y después las "sin variante". Lo que no alcanza queda como salida sin lote. Devuelve [capa, n].
+     * Con $createdBy, solo de las capas que creó ese movimiento, y lo que no alcanza no se registra (lo saca quien llama).
      *
      * @return array<int, array{0: InventoryLotLayer, 1: int}>
      */
-    private function take(InventoryMovement $m, int $warehouseId, ?int $variantId, int $qty, string $state): array
+    private function take(InventoryMovement $m, int $warehouseId, ?int $variantId, int $qty, string $state, ?int $createdBy = null): array
     {
         $taken = [];
         $groups = $variantId ? [$variantId, null] : [null];
@@ -442,6 +454,7 @@ class LotLedger
                 ->where('inventory_lot_layers.product_id', $m->product_id)
                 ->where('inventory_lot_layers.state', $state)
                 ->where('inventory_lot_layers.quantity', '>', 0)
+                ->when($createdBy, fn ($q) => $q->where('inventory_lot_layers.created_by_movement_id', $createdBy))
                 ->when($variant, fn ($q) => $q->where('inventory_lot_layers.variant_id', $variant), fn ($q) => $q->whereNull('inventory_lot_layers.variant_id'))
                 ->orderBy('inventory_lots.received_at')->orderBy('inventory_lots.id')->orderBy('inventory_lot_layers.id')
                 ->select('inventory_lot_layers.*')
@@ -457,7 +470,7 @@ class LotLedger
                 }
             }
         }
-        if ($qty > 0) {
+        if ($qty > 0 && !$createdBy) {
             $this->allocate($m, null, $warehouseId, $variantId, -$qty);
         }
 

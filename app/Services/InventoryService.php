@@ -35,43 +35,78 @@ class InventoryService
         ?string $notes = null,
         $variants = null
     ) {
-        return DB::transaction(function () use ($productId, $fromWarehouseId, $toWarehouseId, $quantity, $userId, $notes, $variants) {
-            // Validate warehouses exist and are active
-            Warehouse::active()->findOrFail($fromWarehouseId);
-            Warehouse::active()->findOrFail($toWarehouseId);
+        return DB::transaction(fn () => $this->move($productId, $fromWarehouseId, $toWarehouseId, $quantity, $userId, $notes, $variants));
+    }
 
-            $split = $this->split($productId, $variants, $quantity);
+    /**
+     * Un paso de un traslado del Módulo 5 (§15, R2): del origen a "En tránsito" al salir, o de "En tránsito" al destino
+     * al recibir (o de vuelta al origen al cancelar). Uno de los dos lados tiene que ser el almacén virtual. $extra va al
+     * movimiento (la referencia al traslado y, al recibir, la salida de la que vienen las capas, §126).
+     */
+    public function transitMove(int $productId, int $fromWarehouseId, int $toWarehouseId, int $quantity, ?int $variantId, ?int $userId, ?string $notes, array $extra): InventoryMovement
+    {
+        $transit = Warehouse::transitId();
+        if ($fromWarehouseId !== $transit && $toWarehouseId !== $transit) {
+            throw new Exception('Un paso de traslado sale de "En tránsito" o llega a "En tránsito".');
+        }
 
-            $fromInventory = $this->lockedInventory($fromWarehouseId, $productId, false);
-            if (!$fromInventory || $fromInventory->quantity < $quantity) {
-                throw new Exception('Stock insuficiente en el almacén de origen');
+        return DB::transaction(fn () => $this->move($productId, $fromWarehouseId, $toWarehouseId, $quantity, $userId, $notes,
+            $variantId ? [$variantId => $quantity] : null, $extra));
+    }
+
+    /** El desglose por variante de una cantidad, validado, sin mover nada (para una compra por recibir). */
+    public function variantSplit(int $productId, $variants, int $quantity): array
+    {
+        return $this->split($productId, $variants, $quantity);
+    }
+
+    /**
+     * Mueve stock entre dos almacenes en la transacción que ya está abierta. El almacén "En tránsito" está inactivo a
+     * propósito (nunca recibe órdenes): no se le pide estar activo, ni se revisan sus órdenes.
+     */
+    private function move(int $productId, int $fromWarehouseId, int $toWarehouseId, int $quantity, ?int $userId, ?string $notes, $variants, array $extra = []): InventoryMovement
+    {
+        $transit = Warehouse::transitId();
+        foreach ([$fromWarehouseId, $toWarehouseId] as $warehouseId) {
+            if ($warehouseId !== $transit) {
+                Warehouse::active()->findOrFail($warehouseId);
             }
-            $this->takeFromVariants($fromInventory, $split, $quantity);
-            foreach ($split as $variantId => $qty) {
-                $this->variants->add($toWarehouseId, $productId, $variantId, $qty);
-            }
+        }
 
-            DB::table('inventories')->where('id', $fromInventory->id)->update(['quantity' => $fromInventory->quantity - $quantity, 'updated_at' => now()]);
-            $toInventory = $this->lockedInventory($toWarehouseId, $productId);
-            DB::table('inventories')->where('id', $toInventory->id)->update(['quantity' => $toInventory->quantity + $quantity, 'updated_at' => now()]);
+        $split = $this->split($productId, $variants, $quantity);
 
-            // Traslado inmediato (sin confirmación en dos pasos)
-            $movement = $this->record($productId, $quantity, $split, [
-                'from_warehouse_id' => $fromWarehouseId,
-                'to_warehouse_id'   => $toWarehouseId,
-                'movement_type'     => 'transfer',
-                'status'            => 'completed',
-                'user_id'           => $userId,
-                'notes'             => $notes,
-            ]);
+        $fromInventory = $this->lockedInventory($fromWarehouseId, $productId, false);
+        if (!$fromInventory || $fromInventory->quantity < $quantity) {
+            throw new Exception('Stock insuficiente en el almacén de origen');
+        }
+        $this->takeFromVariants($fromInventory, $split, $quantity);
+        foreach ($split as $variantId => $qty) {
+            $this->variants->add($toWarehouseId, $productId, $variantId, $qty);
+        }
 
-            // Check for orders affected by the stock change at source
+        DB::table('inventories')->where('id', $fromInventory->id)->update(['quantity' => $fromInventory->quantity - $quantity, 'updated_at' => now()]);
+        $toInventory = $this->lockedInventory($toWarehouseId, $productId);
+        DB::table('inventories')->where('id', $toInventory->id)->update(['quantity' => $toInventory->quantity + $quantity, 'updated_at' => now()]);
+
+        $movement = $this->record($productId, $quantity, $split, $extra + [
+            'from_warehouse_id' => $fromWarehouseId,
+            'to_warehouse_id'   => $toWarehouseId,
+            'movement_type'     => 'transfer',
+            'status'            => 'completed',
+            'user_id'           => $userId,
+            'notes'             => $notes,
+        ]);
+
+        // Check for orders affected by the stock change at source
+        if ($fromWarehouseId !== $transit) {
             $this->checkAndHandleStockShortage($productId, $fromWarehouseId);
-            // Check for orders that can now be fulfilled at destination
+        }
+        // Check for orders that can now be fulfilled at destination
+        if ($toWarehouseId !== $transit) {
             $this->checkAndHandleStockRecovery($productId, $toWarehouseId);
+        }
 
-            return $movement;
-        });
+        return $movement;
     }
 
     /**
@@ -187,9 +222,10 @@ class InventoryService
         ?string $notes = null,
         ?string $referenceType = null,
         ?int $referenceId = null,
-        $variants = null
+        $variants = null,
+        array $extra = []
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $variants) {
+        return DB::transaction(function () use ($productId, $warehouseId, $quantity, $userId, $notes, $referenceType, $referenceId, $variants, $extra) {
             // Validate warehouse exists and is active
             Warehouse::active()->findOrFail($warehouseId);
 
@@ -202,7 +238,7 @@ class InventoryService
             $this->takeFromVariants($inventory, $split, $quantity);
             DB::table('inventories')->where('id', $inventory->id)->update(['quantity' => $inventory->quantity - $quantity, 'updated_at' => now()]);
 
-            $movement = $this->record($productId, $quantity, $split, [
+            $movement = $this->record($productId, $quantity, $split, $extra + [
                 'from_warehouse_id' => $warehouseId,
                 'to_warehouse_id' => null,
                 'movement_type' => 'out',
@@ -229,9 +265,10 @@ class InventoryService
         int $newQuantity,
         ?int $userId = null,
         ?string $notes = null,
-        $variants = null
+        $variants = null,
+        ?string $reason = null
     ) {
-        return DB::transaction(function () use ($productId, $warehouseId, $newQuantity, $userId, $notes, $variants) {
+        return DB::transaction(function () use ($productId, $warehouseId, $newQuantity, $userId, $notes, $variants, $reason) {
             // Validate warehouse exists and is active
             Warehouse::active()->findOrFail($warehouseId);
 
@@ -273,6 +310,7 @@ class InventoryService
                 'quantity' => abs($difference),
                 'movement_type' => 'adjustment',
                 'user_id' => $userId,
+                'reason' => $reason, // Módulo 5, §94: error de conteo, corrección administrativa u otro
                 'notes' => $notes . " (Old: {$oldQuantity}, New: {$newQuantity})" . $detail,
                 // Para el libro de lotes: el total y cada variante, antes y después
                 'details' => ['old' => $oldQuantity, 'new' => $newQuantity, 'variants' => $changes ?: (object) []],

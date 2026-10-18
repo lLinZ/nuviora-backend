@@ -24,7 +24,28 @@ class InventoryMovement extends Model
         'status',
         'details',
         'trip_id',
+        'reason',
     ];
+
+    /**
+     * Tipos de ajuste y de salida interna (Módulo 5 de Fran, §94, R4). Los de conteo fijan la cantidad, como hasta ahora
+     * (Fran, 2026-10-14). Muestra, regalo y uso interno son salidas cuyo costo cuenta como gasto, igual que la merma.
+     * Dañado y perdido no son un ajuste: van a "en revisión".
+     */
+    public const COUNT_REASONS = [
+        'count_error' => 'Error de conteo',
+        'admin_correction' => 'Corrección administrativa',
+        'other' => 'Otro',
+    ];
+
+    public const WRITE_OFF_REASONS = [
+        'sample' => 'Muestra',
+        'gift' => 'Regalo',
+        'internal_use' => 'Uso interno',
+    ];
+
+    /** Referencia de las salidas por muestra, regalo o uso interno */
+    public const WRITE_OFF_REFERENCE = 'InventoryWriteOff';
 
     protected $casts = [
         'quantity' => 'integer',

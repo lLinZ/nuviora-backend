@@ -6,8 +6,10 @@ use App\Models\Expense;
 use App\Models\ExpenseCategory;
 use App\Models\FinancialAuditLog;
 use App\Models\InventoryMovement;
+use App\Models\InventoryTransfer;
 use App\Models\InventoryTransferTrip;
 use App\Models\Setting;
+use App\Models\Warehouse;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -87,13 +89,29 @@ class TransferTrips
     public function candidates(?InventoryTransferTrip $trip = null): Collection
     {
         $cutoff = (int) Setting::get(LotLedger::CUTOFF_KEY, 0);
+        // Módulo 5 (§15): un traslado con tránsito tiene dos pasos. El viaje va en la salida (origen → En tránsito), así su
+        // costo cuenta una sola vez y la capa recibida lo hereda. La recepción y la vuelta de un cancelado no son candidatas.
+        $transit = Warehouse::transitId();
 
-        return InventoryMovement::with(['product:id,title,showable_name', 'variant:id,title', 'fromWarehouse:id,name', 'toWarehouse:id,name'])
+        $movements = InventoryMovement::with(['product:id,title,showable_name', 'variant:id,title', 'fromWarehouse:id,name', 'toWarehouse:id,name'])
             ->where('movement_type', 'transfer')->where('status', 'completed')->where('quantity', '>', 0)
             ->where('id', '>', $cutoff)
+            ->where('from_warehouse_id', '<>', $transit)
             ->where('created_at', '>=', now()->subDays(self::CANDIDATE_DAYS))
             ->where(fn ($q) => $q->whereNull('trip_id')->when($trip, fn ($w) => $w->orWhere('trip_id', $trip->id)))
             ->orderByDesc('id')->get();
+
+        // Para la salida de un traslado, el destino es el del traslado, no "En tránsito"
+        $destinations = InventoryTransfer::with('toWarehouse:id,name')
+            ->whereIn('id', $movements->where('to_warehouse_id', $transit)->where('reference_type', InventoryTransfer::REFERENCE)->pluck('reference_id')->unique())
+            ->get()->keyBy('id');
+        foreach ($movements as $m) {
+            if ((int) $m->to_warehouse_id === $transit && ($t = $destinations[$m->reference_id] ?? null)) {
+                $m->setRelation('toWarehouse', $t->toWarehouse);
+            }
+        }
+
+        return $movements;
     }
 
     /**

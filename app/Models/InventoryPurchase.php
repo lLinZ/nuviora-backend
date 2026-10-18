@@ -16,9 +16,20 @@ class InventoryPurchase extends Model
     public const REFERENCE = 'InventoryPurchase';
     public const PAYMENT_TYPES = ['cash' => 'Al contado', 'credit' => 'A crédito'];
 
+    /**
+     * Módulo 5 (§16, §90, R3): una compra puede quedar "por recibir", con la fecha en que debería llegar, sin sumar stock
+     * ni crear lote, deuda o pago. Al recibirla, con la cantidad y el costo reales, pasa lo de siempre.
+     */
+    public const PENDING = 'pending';
+    public const RECEIVED = 'received';
+    public const CANCELLED = 'cancelled';
+    public const STATUSES = [self::PENDING => 'Por recibir', self::RECEIVED => 'Recibida', self::CANCELLED => 'Cancelada'];
+
     protected $fillable = [
         'supplier_id', 'product_id', 'warehouse_id', 'quantity', 'total_amount', 'currency', 'rate', 'total_usd', 'unit_cost_usd',
         'payment_type', 'purchased_at', 'due_date', 'terms', 'receipt_path', 'notes', 'created_by',
+        'status', 'expected_at', 'received_at', 'expected_quantity', 'expected_total_amount', 'expected_variants',
+        'cancelled_at', 'cancelled_by', 'cancel_reason',
     ];
 
     protected $casts = [
@@ -29,7 +40,18 @@ class InventoryPurchase extends Model
         'unit_cost_usd' => 'float',
         'purchased_at' => 'datetime',
         'due_date' => 'date:Y-m-d',
+        'expected_at' => 'date:Y-m-d',
+        'received_at' => 'datetime',
+        'expected_quantity' => 'integer',
+        'expected_total_amount' => 'float',
+        'expected_variants' => 'array',
+        'cancelled_at' => 'datetime',
     ];
+
+    public function isPending(): bool
+    {
+        return $this->status === self::PENDING;
+    }
 
     public function supplier(): BelongsTo
     {
@@ -78,6 +100,10 @@ class InventoryPurchase extends Model
             'due_date' => $this->due_date?->format('Y-m-d'),
             'terms' => $this->terms,
             'has_receipt' => $this->receipt_path !== null,
+            'status' => $this->status,
+            'expected_at' => $this->expected_at?->format('Y-m-d'),
+            'expected_quantity' => $this->expected_quantity,
+            'expected_total_amount' => $this->expected_total_amount,
         ];
     }
 
@@ -105,6 +131,14 @@ class InventoryPurchase extends Model
             'notes' => $this->notes,
             'has_receipt' => $this->receipt_path !== null,
             'created_by' => $this->creator?->names,
+            'status' => $this->status,
+            'status_label' => self::STATUSES[$this->status] ?? $this->status,
+            'expected_at' => $this->expected_at?->format('Y-m-d'),
+            'received_at' => $this->received_at?->format('Y-m-d H:i'),
+            'expected_quantity' => $this->expected_quantity,
+            'expected_total_amount' => $this->expected_total_amount,
+            'expected_variants' => $this->expected_variants,
+            'cancel_reason' => $this->cancel_reason,
         ];
     }
 }

@@ -253,6 +253,17 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
     Route::get('/settings/business-hours', [SettingsController::class, 'getBusinessHours']);
     Route::put('/settings/business-hours', [SettingsController::class, 'updateBusinessHours']);
 
+    // ── Módulo 5, entrega 1: stock real y traslados con tránsito (§14, §15, §92, R1, R2) ──
+    // Crear y ver traslados: como el traslado de siempre (la agencia, desde su almacén y viendo los suyos)
+    Route::get('/inventory-transfers', [\App\Http\Controllers\InventoryTransferController::class, 'index']);
+    Route::post('/inventory-transfers', [\App\Http\Controllers\InventoryTransferController::class, 'store']);
+    Route::middleware('role:Admin,Gerente,Master')->group(function () {
+        Route::get('/inventory/stock-status', [\App\Http\Controllers\InventoryStockController::class, 'index']);
+        Route::post('/inventory-transfers/{transfer}/send', [\App\Http\Controllers\InventoryTransferController::class, 'send']);
+        Route::post('/inventory-transfers/{transfer}/receive', [\App\Http\Controllers\InventoryTransferController::class, 'receive']);
+        Route::post('/inventory-transfers/{transfer}/cancel', [\App\Http\Controllers\InventoryTransferController::class, 'cancel']);
+    });
+
     // ── Reparto de órdenes por grupos (fase 4) ────────────────────────────────
     Route::middleware('role:Admin,Gerente,Master')->group(function () {
         Route::get('/assignment/overview',          [AssignmentController::class, 'overview']);
@@ -486,6 +497,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/in', [InventoryMovementController::class, 'stockIn']);
         Route::post('/out', [InventoryMovementController::class, 'stockOut']);
         Route::post('/adjust', [InventoryMovementController::class, 'adjust']);
+        Route::post('/write-off', [InventoryMovementController::class, 'writeOff']); // Módulo 5, §94: muestra, regalo, uso interno
         Route::post('/{id}/confirm', [InventoryMovementController::class, 'confirm']);
         Route::post('/{id}/reject', [InventoryMovementController::class, 'reject']);
     });
@@ -654,6 +666,11 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/payable-payments/{payment}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'paymentReceipt']);
         Route::post('/purchases/{purchase}/receipt', [\App\Http\Controllers\FinanceSupplierController::class, 'uploadPurchaseReceipt']);
         Route::post('/purchases/{purchase}/correct', [\App\Http\Controllers\FinanceSupplierController::class, 'correctPurchase']);
+        // Compras por recibir (Módulo 5, entrega 1; §16, §90, §91, R3)
+        Route::get('/purchases', [\App\Http\Controllers\FinancePurchaseController::class, 'index']);
+        Route::post('/purchases', [\App\Http\Controllers\FinancePurchaseController::class, 'store']);
+        Route::post('/purchases/{purchase}/receive', [\App\Http\Controllers\FinancePurchaseController::class, 'receive']);
+        Route::post('/purchases/{purchase}/cancel', [\App\Http\Controllers\FinancePurchaseController::class, 'cancel']);
         // Finanzas › Inventario (entrega 2e): valor FIFO, lotes, por completar, revisión, ajustes y cuadre
         Route::get('/inventory', [\App\Http\Controllers\FinanceInventoryController::class, 'index']);
         Route::put('/lots/{lot}/cost', [\App\Http\Controllers\FinanceInventoryController::class, 'updateCost']);

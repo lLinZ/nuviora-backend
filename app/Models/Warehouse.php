@@ -9,6 +9,11 @@ class Warehouse extends Model
 {
     use HasFactory;
 
+    /** Almacén virtual de lo que va en camino entre almacenes (Módulo 5, §15). Inactivo y sin usuario: nunca recibe órdenes. */
+    public const TRANSIT_CODE = 'TRANSIT';
+
+    private static ?int $transitId = null;
+
     protected $fillable = [
         'warehouse_type_id',
         'user_id',
@@ -88,6 +93,24 @@ class Warehouse extends Model
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
+    }
+
+    /** El id del almacén "En tránsito" (lo crea la migración del Módulo 5). */
+    public static function transitId(): int
+    {
+        return self::$transitId ??= (int) self::where('code', self::TRANSIT_CODE)->value('id')
+            ?: throw new \RuntimeException('Falta el almacén "En tránsito": corre las migraciones.');
+    }
+
+    public function isTransit(): bool
+    {
+        return $this->code === self::TRANSIT_CODE;
+    }
+
+    /** Los almacenes de verdad: sin el virtual de tránsito. */
+    public function scopePhysical($query)
+    {
+        return $query->where('code', '!=', self::TRANSIT_CODE);
     }
 
     /**
