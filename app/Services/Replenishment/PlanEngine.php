@@ -232,7 +232,7 @@ class PlanEngine
                 $l = $lines[$k];
                 $goal = $l['allowed'] ? $l['goal'] : 0.0;
                 $surplus[$k] = max(0, (int) floor(min($l['stock']['available'], $l['projected'] - $goal)));
-                $deficit[$k] = $l['allowed'] ? max(0, (int) ceil($goal - $l['projected'] - 1e-9)) : 0;
+                $deficit[$k] = $l['allowed'] ? max(0, (int) round($goal - $l['projected'])) : 0;
             }
             $order = array_keys(array_filter($deficit));
             usort($order, fn ($a, $b) => ($lines[$a]['coverage'] ?? 0) <=> ($lines[$b]['coverage'] ?? 0));
@@ -289,11 +289,11 @@ class PlanEngine
                     $notes['dying'] = 'Demanda cayendo con campañas pausadas o CPA negativo: no reponer, evaluar liquidación (§75)';
                 } elseif ($g['cpa']['health'] === 'negative') {
                     $conservative = min($l['forecast'], $l['base']) * (float) ($prod['coverage_days'] ?? $coverage);
-                    $rec = max(0, min($need, (int) ceil($conservative - $l['projected'] - 1e-9)));
+                    $rec = max(0, min($need, (int) round($conservative - $l['projected'])));
                     $notes['negative'] = 'CPA sobre el Break-even: compra prudente, sin días de seguridad ni tendencia al alza (§43)';
                 } elseif ($g['cpa']['health'] === 'warning') {
                     $noSafety = $l['forecast'] * (float) ($prod['coverage_days'] ?? $coverage);
-                    $rec = max(0, min($need, (int) ceil($noSafety - $l['projected'] - 1e-9)));
+                    $rec = max(0, min($need, (int) round($noSafety - $l['projected'])));
                     $notes['warning'] = 'CPA cerca del Break-even: compra sin días de seguridad (§42)';
                 }
                 $ideal += $need;
@@ -399,7 +399,9 @@ class PlanEngine
             $l['lead_days'] = $lead;
             $l['stockout_date'] = $l['days_left'] !== null ? date('Y-m-d', strtotime($this->in['today'] . ' +' . (int) floor($l['days_left']) . ' days')) : null;
             $leadEff = $lead ?? 1.0;
-            $l['buy_today'] = $l['forecast'] > 0 && $l['allowed'] && $l['days_left'] !== null && $l['days_left'] <= $leadEff + (float) ($prod['safety_days'] ?? $safetyGlobal);
+            // Demanda despreciable: en todo el horizonte no llega a media unidad (decisión nuestra: no es urgente ni se compra)
+            $relevant = $l['allowed'] && $l['forecast'] * $l['target_days'] >= 0.5;
+            $l['buy_today'] = $relevant && $l['days_left'] !== null && $l['days_left'] <= $leadEff + (float) ($prod['safety_days'] ?? $safetyGlobal);
             $daysSince = $this->in['days_since_delivery'][$k] ?? null;
             $l['dead'] = $l['stock']['physical'] > 0 && ($daysSince === null || $daysSince >= $deadDays);
             $l['cpa'] = $g['cpa'];
@@ -409,7 +411,7 @@ class PlanEngine
             // Semáforo (§78)
             if (in_array($prod['status'], ['liquidation', 'discontinued'], true) || $g['dying']) {
                 $l['light'] = 'black';
-            } elseif (!$l['allowed'] || $l['forecast'] <= 0) {
+            } elseif (!$relevant) {
                 $l['light'] = $l['stock']['physical'] > 0 ? 'black' : 'green';
             } elseif ($l['stock']['available'] <= 0 || $l['days_left'] <= $leadEff) {
                 $l['light'] = 'red';
@@ -431,7 +433,7 @@ class PlanEngine
                 'economics' => ['healthy' => 1.0, 'unknown' => 0.5, 'warning' => 0.5, 'negative' => 0.0][$g['cpa']['health']],
                 'confidence' => ['high' => 1.0, 'medium' => 0.6, 'low' => 0.3][$l['confidence']],
             ];
-            $l['score'] = $l['forecast'] > 0 && $l['allowed'] ? (int) round(array_sum(array_map(fn ($c, $key) => $c * (float) $w[$key], $comp, array_keys($comp)))) : 0;
+            $l['score'] = $relevant ? (int) round(array_sum(array_map(fn ($c, $key) => $c * (float) $w[$key], $comp, array_keys($comp)))) : 0;
             $l['score_parts'] = $comp;
         }
         unset($l);
@@ -714,7 +716,7 @@ class PlanEngine
 
     private function num(float $v): string
     {
-        return number_format($v, 1, ',', '.');
+        return number_format($v, abs($v) < 1 && $v != 0 ? 2 : 1, ',', '.');
     }
 
     private function money(?float $v): string
