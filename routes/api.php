@@ -676,6 +676,10 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/replenishment/routes', [\App\Http\Controllers\ReplenishmentConfigController::class, 'storeRoute']);
         Route::put('/replenishment/routes/{route}', [\App\Http\Controllers\ReplenishmentConfigController::class, 'updateRoute']);
         Route::get('/replenishment/audit', [\App\Http\Controllers\ReplenishmentConfigController::class, 'audit']);
+        // Entrega 3: el plan (§4, §96)
+        Route::get('/replenishment/plans', [\App\Http\Controllers\ReplenishmentPlanController::class, 'index']);
+        Route::post('/replenishment/plans', [\App\Http\Controllers\ReplenishmentPlanController::class, 'store']);
+        Route::get('/replenishment/plans/{forecast}', [\App\Http\Controllers\ReplenishmentPlanController::class, 'show'])->whereNumber('forecast');
         // Compras por recibir (Módulo 5, entrega 1; §16, §90, §91, R3)
         Route::get('/purchases', [\App\Http\Controllers\FinancePurchaseController::class, 'index']);
         Route::post('/purchases', [\App\Http\Controllers\FinancePurchaseController::class, 'store']);
