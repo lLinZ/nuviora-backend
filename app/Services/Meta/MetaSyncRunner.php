@@ -93,6 +93,19 @@ class MetaSyncRunner
                         ]);
                         $steps = array_values(array_filter($steps, fn ($s) => ($s['account'] ?? null) !== $accountId));
                     }
+                } catch (\Throwable $e) {
+                    // §54 también con un error que no es de Meta (la base, un dato inesperado): queda en esa cuenta, se
+                    // saltan sus pasos y las demás siguen (2026-10-17: un 1292 de la cuenta #13 cortaba toda la conexión).
+                    report($e);
+                    $accountId = $step['account'] ?? null;
+                    $message = mb_substr($e->getMessage(), 0, 500);
+                    $details['errors'][] = ['account' => $accountId, 'step' => $step['type'], 'kind' => MetaApiException::META, 'message' => $message];
+                    if ($accountId) {
+                        MetaAdAccount::whereKey($accountId)->update([
+                            'last_error_kind' => MetaApiException::META, 'last_error' => $message, 'last_error_at' => now(),
+                        ]);
+                        $steps = array_values(array_filter($steps, fn ($s) => ($s['account'] ?? null) !== $accountId));
+                    }
                 }
             }
         } catch (MetaApiException $e) {
