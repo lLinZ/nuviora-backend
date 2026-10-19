@@ -36,7 +36,7 @@ namespace App\Services\Replenishment;
  */
 class PlanEngine
 {
-    public const VERSION = 'm5-plan-1';
+    public const VERSION = 'm5-plan-2'; // 2: azul contra la cobertura pedida, sin seguridad (R8 aprobado)
 
     private array $in;
     private array $s;
@@ -408,7 +408,9 @@ class PlanEngine
             $l['trend'] = $g['trend'];
             $l['meta'] = ['all_paused' => $g['all_paused'], 'spend_change' => $g['spend_change'], 'confirms' => $g['meta_confirms']];
             $l['confidence'] = $l['limited'] ? 'low' : (($prod['history_days'] ?? 0) < 30 || $l['delivered30'] < 20 ? 'medium' : 'high');
-            // Semáforo (§78)
+            // Semáforo (§78). R8, aprobado por Fran: azul = "más del doble de lo que pediste: pides 7 días y una agencia
+            // tiene para 15", así que el exceso se mide contra la cobertura pedida, sin los días de seguridad.
+            $requested = (float) ($prod['coverage_days'] ?? $coverage);
             if (in_array($prod['status'], ['liquidation', 'discontinued'], true) || $g['dying']) {
                 $l['light'] = 'black';
             } elseif (!$relevant) {
@@ -417,12 +419,12 @@ class PlanEngine
                 $l['light'] = 'red';
             } elseif ($l['coverage'] < $l['target_days']) {
                 $l['light'] = 'orange';
-            } elseif ($l['coverage'] > $l['target_days'] * $excessMult) {
+            } elseif ($l['coverage'] > $requested * $excessMult) {
                 $l['light'] = 'blue';
             } else {
                 $l['light'] = 'green';
             }
-            $l['excess_units'] = $l['forecast'] > 0 ? max(0, (int) floor($l['projected'] - $l['target_days'] * $excessMult * $l['forecast'])) : 0;
+            $l['excess_units'] = $l['forecast'] > 0 ? max(0, (int) floor($l['projected'] - $requested * $excessMult * $l['forecast'])) : 0;
             // Score de prioridad (§80–§83): ordena, no decide cantidades
             $w = $this->s['score_weights'];
             $comp = [

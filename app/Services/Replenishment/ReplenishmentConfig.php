@@ -21,8 +21,9 @@ use Illuminate\Validation\ValidationException;
  * - Globales, en settings: cobertura (§4, §5), seguridad (§6), % de Sin Stock (§24), pesos 7/14/30 (§28), mínimo de
  *   traslado (§68), pesos y rangos del score (§81, §82) y de la confiabilidad (§102). Los valores de partida son los del
  *   documento.
- * - Los que el documento no fija (R8: semáforo, stock muerto, Pausado y tendencia) arrancan con lo que le propusimos a
- *   Fran y se marcan "pendiente de Fran" hasta que él los confirme o los cambie.
+ * - Los que el documento no fija (R8: semáforo, stock muerto, Pausado y tendencia) son los que le propusimos a Fran
+ *   (infra/modulo5/mensaje-para-fran-punto-8.txt) y él aprobó ("Perfecto"). Ya no queda ninguno pendiente; el mecanismo
+ *   de "pendiente de Fran" (PROPOSED) queda por si algún valor nuevo hay que proponérselo.
  * - Por producto: estado comercial (§13), cobertura, seguridad y % de Sin Stock propios (§5, §6, §24), y disponibilidad
  *   por ciudad (§12). Proveedores por producto (§17–20, R5) y rutas (§60–65, R6).
  */
@@ -41,7 +42,7 @@ class ReplenishmentConfig
         'score_ranges' => ['critical' => 90, 'high' => 70, 'monitor' => 40],     // §82
         'reliability_weights' => ['accuracy' => 60, 'stockout' => 25, 'excess' => 15], // §102
         'auto_plan_before_route' => 0,  // §66, §107: generar el plan solo la noche antes de un día de ruta; apagado
-        // R8: propuestos a Fran (infra/modulo5/mensaje-para-fran-punto-8.txt), pendientes de su confirmación
+        // R8: propuestos a Fran (infra/modulo5/mensaje-para-fran-punto-8.txt) y aprobados por él ("Perfecto")
         'paused_demand_pct' => 50,    // §13: Pausado = forecast conservador
         'excess_multiplier' => 2,     // §73, §78: Exceso = más de N veces la cobertura objetivo
         'dead_stock_days' => 30,      // §74
@@ -49,7 +50,7 @@ class ReplenishmentConfig
     ];
 
     /** Los que el documento no fija: hasta que Fran los confirme o los cambie */
-    public const PROPOSED = ['paused_demand_pct', 'excess_multiplier', 'dead_stock_days', 'trend_stable_pct'];
+    public const PROPOSED = [];
 
     /** @return array<string, mixed> */
     public function settings(): array
