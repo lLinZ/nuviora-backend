@@ -65,6 +65,7 @@ class ReplenishmentConfigController extends Controller
             'excess_multiplier' => 'sometimes|numeric',
             'dead_stock_days' => 'sometimes|integer',
             'trend_stable_pct' => 'sometimes|numeric',
+            'auto_plan_before_route' => 'sometimes|boolean',
             'confirm_proposed' => 'sometimes|boolean',
             'reason' => 'nullable|string|max:500',
         ]);

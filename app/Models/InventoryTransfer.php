@@ -82,6 +82,9 @@ class InventoryTransfer extends Model
             'from' => $this->fromWarehouse?->name,
             'to' => $this->toWarehouse?->name,
             'purchase_id' => $this->purchase_id,
+            // Entrega 4 (§58, §118): uno que reparte una compra no sale hasta que la compra se recibe
+            'purchase_status' => $this->purchase_id ? $this->purchase?->status : null,
+            'waiting_purchase' => $this->purchase_id !== null && $this->purchase?->status !== InventoryPurchase::RECEIVED,
             'lines' => $this->lines->map(fn ($l) => [
                 'product' => $l->product?->title,
                 'variant' => $l->variant?->title,
@@ -102,6 +105,9 @@ class InventoryTransfer extends Model
             'to_warehouse_id' => $this->to_warehouse_id,
             'to_warehouse' => $this->toWarehouse?->name,
             'purchase_id' => $this->purchase_id,
+            // Entrega 4 (§58, §118): uno que reparte una compra no sale hasta que la compra se recibe
+            'purchase_status' => $this->purchase_id ? $this->purchase?->status : null,
+            'waiting_purchase' => $this->purchase_id !== null && $this->purchase?->status !== InventoryPurchase::RECEIVED,
             'units' => $this->units(),
             'lines' => $this->lines->map(fn ($l) => [
                 'id' => $l->id,

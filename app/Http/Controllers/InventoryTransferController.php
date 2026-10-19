@@ -31,7 +31,7 @@ class InventoryTransferController extends Controller
         ]);
         $status = $data['status'] ?? InventoryTransfer::IN_TRANSIT;
         $user = Auth::user();
-        $transfers = InventoryTransfer::with(['lines.product:id,title,showable_name', 'lines.variant:id,title', 'fromWarehouse:id,name', 'toWarehouse:id,name', 'creator:id,names'])
+        $transfers = InventoryTransfer::with(['lines.product:id,title,showable_name', 'lines.variant:id,title', 'fromWarehouse:id,name', 'toWarehouse:id,name', 'creator:id,names', 'purchase:id,status'])
             ->when($status === 'open', fn ($q) => $q->whereIn('status', [...InventoryTransfer::NOT_DISPATCHED, InventoryTransfer::IN_TRANSIT]))
             ->when(!in_array($status, ['open', 'all'], true), fn ($q) => $q->where('status', $status))
             ->when($data['warehouse_id'] ?? null, fn ($q, $w) => $q->where(fn ($s) => $s->where('from_warehouse_id', $w)->orWhere('to_warehouse_id', $w)))

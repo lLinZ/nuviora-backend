@@ -75,12 +75,32 @@ class PlanService
     /** Un plan guardado, tal como se generó. */
     public function show(int $id): array
     {
-        $row = DB::table('inventory_forecasts as f')->leftJoin('users as u', 'u.id', '=', 'f.user_id')->where('f.id', $id)
-            ->first(['f.id', 'f.result', 'f.created_at', 'f.algorithm_version', 'u.names']);
+        $row = DB::table('inventory_forecasts as f')->leftJoin('users as u', 'u.id', '=', 'f.user_id')->leftJoin('users as a', 'a.id', '=', 'f.approved_by')
+            ->where('f.id', $id)->first(['f.id', 'f.result', 'f.created_at', 'f.algorithm_version', 'f.approved_at', 'f.evaluated_at', 'f.evaluation', 'u.names', 'a.names as approver']);
         abort_if(!$row, 404);
+        $plan = json_decode($row->result, true);
 
-        return ['id' => (int) $row->id, 'generated_at' => substr((string) $row->created_at, 0, 16), 'generated_by' => $row->names]
-            + json_decode($row->result, true);
+        // Entrega 4 (§89): cada recomendación con su id y lo aprobado (se guardaron en el mismo orden que el resultado)
+        $recP = DB::table('forecast_purchase_recommendations')->where('forecast_id', $id)->orderBy('id')->get()->values();
+        foreach ($plan['purchases'] as $i => &$p) {
+            $r = $recP[$i] ?? null;
+            $p += ['id' => $r?->id, 'approved_qty' => $r?->approved_qty, 'approved_supplier_id' => $r?->approved_supplier_id,
+                'approved_receiving_warehouse_id' => $r?->approved_receiving_warehouse_id, 'approved_unit_cost_usd' => $r?->approved_unit_cost_usd !== null ? (float) $r->approved_unit_cost_usd : null,
+                'approved_expected_at' => $r?->approved_expected_at, 'inventory_purchase_id' => $r?->inventory_purchase_id];
+        }
+        unset($p);
+        $recT = DB::table('forecast_transfer_recommendations')->where('forecast_id', $id)->orderBy('id')->get()->values();
+        foreach ($plan['transfers'] as $i => &$t) {
+            $r = $recT[$i] ?? null;
+            $t += ['id' => $r?->id, 'approved_qty' => $r?->approved_qty, 'approved_from_warehouse_id' => $r?->approved_from_warehouse_id,
+                'approved_to_warehouse_id' => $r?->approved_to_warehouse_id, 'inventory_transfer_id' => $r?->inventory_transfer_id];
+        }
+        unset($t);
+
+        return ['id' => (int) $row->id, 'generated_at' => substr((string) $row->created_at, 0, 16), 'generated_by' => $row->names,
+            'approved_at' => $row->approved_at ? substr((string) $row->approved_at, 0, 16) : null, 'approved_by' => $row->approver,
+            'evaluated_at' => $row->evaluated_at ? substr((string) $row->evaluated_at, 0, 16) : null,
+            'evaluation' => $row->evaluation ? json_decode($row->evaluation, true) : null] + $plan;
     }
 
     /** La lista de planes generados, el más nuevo primero. */

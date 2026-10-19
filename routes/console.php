@@ -67,6 +67,10 @@ try {
     // cada noche, después de recalcular las órdenes, los recientes sacan versión nueva si cambiaron sus cifras (§20, §21)
     Schedule::command('finance:reports')->everyTenMinutes()->withoutOverlapping(30)->runInBackground();
     Schedule::command('finance:reports --refresh')->dailyAt('04:15')->withoutOverlapping(90);
+    // Módulo 5 (entrega 4): autoevaluación de los planes que terminaron su horizonte (§98) y, si el Admin lo enciende, el
+    // plan automático la noche antes de un día de ruta (§66, §107; viene apagado)
+    Schedule::command('replenishment:evaluate')->dailyAt('05:00')->withoutOverlapping(60);
+    Schedule::command('replenishment:auto-plan')->dailyAt('21:00')->withoutOverlapping(30);
 
 } catch (\Throwable $e) {
     // Fail silently if DB not ready

@@ -40,6 +40,7 @@ class ReplenishmentConfig
         'score_weights' => ['stockout' => 35, 'velocity' => 25, 'lead_time' => 15, 'economics' => 15, 'confidence' => 10], // §81
         'score_ranges' => ['critical' => 90, 'high' => 70, 'monitor' => 40],     // §82
         'reliability_weights' => ['accuracy' => 60, 'stockout' => 25, 'excess' => 15], // §102
+        'auto_plan_before_route' => 0,  // §66, §107: generar el plan solo la noche antes de un día de ruta; apagado
         // R8: propuestos a Fran (infra/modulo5/mensaje-para-fran-punto-8.txt), pendientes de su confirmación
         'paused_demand_pct' => 50,    // §13: Pausado = forecast conservador
         'excess_multiplier' => 2,     // §73, §78: Exceso = más de N veces la cobertura objetivo
@@ -256,6 +257,7 @@ class ReplenishmentConfig
             'excess_multiplier' => [1.1, 10, 'Exceso'],
             'dead_stock_days' => [1, 365, 'Stock muerto'],
             'trend_stable_pct' => [1, 100, 'Tendencia estable'],
+            'auto_plan_before_route' => [0, 1, 'Plan automático'],
         ];
         foreach ($ranges as $key => [$min, $max, $label]) {
             if ($s[$key] < $min || $s[$key] > $max) {

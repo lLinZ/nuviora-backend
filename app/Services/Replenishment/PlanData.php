@@ -277,6 +277,38 @@ class PlanData
     }
 
     /**
+     * Las unidades entregadas entre dos fechas, con la misma atribución que el plan: el almacén de la agencia de la orden y
+     * las unidades sin talla repartidas entre las tallas (entrega 4: consumo real del horizonte, §97, §98).
+     *
+     * @return array<string, float> "almacén|producto|variante" => unidades
+     */
+    public function deliveredBetween(string $from, string $to): array
+    {
+        $transit = Warehouse::transitId();
+        $agencyWarehouse = DB::table('warehouses')->whereNotNull('user_id')->where('id', '<>', $transit)->orderByDesc('is_active')->orderBy('id')
+            ->get(['id', 'user_id'])->unique('user_id')->pluck('id', 'user_id');
+        $variantsByProduct = [];
+        foreach (DB::table('product_variants')->where('is_active', true)->get(['id', 'product_id']) as $v) {
+            $variantsByProduct[(int) $v->product_id][] = (int) $v->id;
+        }
+        $series = [];
+        $rows = DB::table('order_financials as f')->join('orders as o', 'o.id', '=', 'f.order_id')->join('order_products as op', 'op.order_id', '=', 'o.id')
+            ->where('f.outcome', 'delivered')->where('f.kind', '<>', 'return')->whereBetween('f.delivered_date', [$from, $to])
+            ->groupBy('o.agency_id', 'o.warehouse_id', 'op.product_id', 'op.variant_id')
+            ->selectRaw('o.agency_id, o.warehouse_id, op.product_id, op.variant_id, SUM(op.quantity) AS units')->get();
+        foreach ($rows as $r) {
+            $w = $r->agency_id !== null ? ($agencyWarehouse[$r->agency_id] ?? null) : ($r->warehouse_id !== null ? (int) $r->warehouse_id : null);
+            if ($w === null || (int) $w === $transit) {
+                continue;
+            }
+            $k = "{$w}|{$r->product_id}|" . (int) $r->variant_id;
+            $series[$k][0] = ($series[$k][0] ?? 0) + (float) $r->units;
+        }
+
+        return array_map(fn ($days) => array_sum($days), $this->spreadUnsized($series, $variantsByProduct));
+    }
+
+    /**
      * Las unidades sin talla de un producto que tiene tallas se reparten entre sus tallas según lo que se vende de cada una
      * (en ese almacén o ciudad; si no hay, en todo el producto; si tampoco, en partes iguales).
      *
