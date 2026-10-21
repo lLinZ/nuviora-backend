@@ -239,6 +239,12 @@ class OrderController extends Controller
                 'novedad_description'  => $order->novedad_description,
                 'novedad_resolution'   => $order->novedad_resolution,
                 'location'             => $order->location,
+                // Envío por encomienda (Fran, 2026-10-12): la agencia ve a quién se manda y la vendedora ve lo que guardó
+                // (sin esto, al abrir la orden el check salía vacío y la agencia no veía los datos: 21/10, #9079)
+                'courier_shipment'            => $order->courier_shipment,
+                'courier_recipient_name'      => $order->courier_recipient_name,
+                'courier_recipient_id_number' => $order->courier_recipient_id_number,
+                'courier_recipient_phone'     => $order->courier_recipient_phone,
                 'cash_received'        => $order->cash_received,
                 'change_amount'        => $order->change_amount,
                 'change_covered_by'    => $order->change_covered_by,
