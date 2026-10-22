@@ -93,6 +93,9 @@ class LogisticsRiderController extends Controller
         $busy = LogisticsOrder::with('order:id,name')->whereIn('status', Candidates::BUSY)->whereIn('rider_id', $profiles->pluck('user_id'))
             ->get()->groupBy('rider_id');
         $gpsMaxAge = (int) $this->settings->for($center)['gps_max_age_seconds'];
+        // §21.2 "rutas del día": las que salieron hoy con ese rider (hoy cada ruta es de una parada)
+        $routesToday = LogisticsOrder::whereIn('rider_id', $profiles->pluck('user_id'))->whereDate('departed_at', now()->toDateString())
+            ->selectRaw('rider_id, count(*) as total')->groupBy('rider_id')->pluck('total', 'rider_id');
 
         return response()->json([
             'status' => true,
@@ -100,6 +103,7 @@ class LogisticsRiderController extends Controller
             'riders' => $profiles->map(fn (RiderProfile $p) => $this->present($p->fresh(['user', 'center'])) + [
                 'user' => $p->user?->only(['id', 'names', 'phone']),
                 'gps_ok' => $p->hasLocation() && $p->last_location_at->gte(now()->subSeconds($gpsMaxAge)),
+                'routes_today' => (int) ($routesToday[$p->user_id] ?? 0),
                 'current' => ($busy[$p->user_id] ?? collect())->map(fn (LogisticsOrder $r) => [
                     'logistics_order_id' => $r->id, 'order' => $r->order?->name, 'status' => $r->status, 'status_label' => LogisticsStatus::label($r->status),
                 ])->values(),

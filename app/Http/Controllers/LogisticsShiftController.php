@@ -8,7 +8,9 @@ use App\Models\LogisticsCenter;
 use App\Models\LogisticsOrder;
 use App\Models\User;
 use App\Services\Logistics\Centers;
+use App\Services\Logistics\LogisticsSettings;
 use App\Services\Logistics\Shifts;
+use App\Services\Logistics\Tower;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -71,24 +73,19 @@ class LogisticsShiftController extends Controller
         return response()->json(['status' => true, 'pending' => $this->shifts->pending($center)]);
     }
 
-    /** Las órdenes del centro que siguen en curso, con su reloj de SLA (§5, §21). */
-    public function orders(Request $request, LogisticsCenter $center)
+    /** Las órdenes del centro que siguen en curso, con su reloj de SLA, en el orden de la cola de prioridad (§5, §21). */
+    public function orders(Request $request, LogisticsCenter $center, Tower $tower)
     {
         $this->authorizeCenter($center);
-        $rows = LogisticsOrder::with(['order:id,name,order_number,current_total_price,client_id,status_id,location', 'order.client:id,first_name,last_name,phone,address1', 'order.status:id,description', 'rider:id,names', 'agency:id,names'])
-            ->where('center_id', $center->id)
-            ->when(!$request->boolean('all'), fn ($q) => $q->whereNotIn('status', LogisticsStatus::FINISHED))
-            ->orderBy('id')->limit(500)->get();
-        $settings = app(\App\Services\Logistics\LogisticsSettings::class)->for($center);
+        $rows = $tower->orders($center, $request->boolean('all'));
+        $settings = app(LogisticsSettings::class)->for($center);
 
         return response()->json([
             'status' => true,
-            'orders' => $rows->map(fn (LogisticsOrder $r) => $r->toArray() + [
-                'status_label' => LogisticsStatus::label($r->status),
-                'sla_minutes' => $r->slaMinutes(),
-                'sla_level' => $this->slaLevel($r->slaMinutes(), $settings),
-            ]),
-            'settings' => ['sla_target_minutes' => $settings['sla_target_minutes'], 'sla_limit_minutes' => $settings['sla_limit_minutes']],
+            'orders' => $rows,
+            'summary' => $tower->summary($rows),
+            'settings' => array_intersect_key($settings, array_flip(['sla_target_minutes', 'sla_limit_minutes', 'manual_calls_at_seconds', 'hard_cap_seconds', 'cash_limit_usd'])),
+            'server_time' => now()->toIso8601String(),
         ]);
     }
 
@@ -99,19 +96,6 @@ class LogisticsShiftController extends Controller
         $alert->update(['resolved_at' => now(), 'resolved_by' => Auth::id()]);
 
         return response()->json(['status' => true, 'message' => 'Alerta cerrada.']);
-    }
-
-    private function slaLevel(?float $minutes, array $settings): ?string
-    {
-        if ($minutes === null) {
-            return null;
-        }
-
-        return match (true) {
-            $minutes >= $settings['sla_limit_minutes'] => 'vencido',
-            $minutes >= $settings['sla_target_minutes'] => 'riesgo',
-            default => 'ok',
-        };
     }
 
     private function summary(LogisticsCenter $center): array
