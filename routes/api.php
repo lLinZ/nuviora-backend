@@ -757,5 +757,30 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
      * WEBHOOKS (OUTGOING) — solo Admin: pueden enviar datos de clientes a cualquier URL
      * ---------------------**/
     Route::apiResource('webhooks', \App\Http\Controllers\WebhookController::class)->middleware('role:Admin,Master');
+
+    /**---------------------
+     * LOGÍSTICA PROPIA (documento de Fran del 2026-10-21 y sus respuestas R1–R8). La configuración de los centros es
+     * del Admin (§23); el turno, las órdenes y las alertas, del operador de su centro (§3, §4.2, §21).
+     * ---------------------**/
+    Route::middleware('role:Admin,Master')->prefix('logistics')->group(function () {
+        Route::get('/centers', [\App\Http\Controllers\LogisticsCenterController::class, 'index']);
+        Route::post('/centers', [\App\Http\Controllers\LogisticsCenterController::class, 'store']);
+        Route::put('/centers/{center}', [\App\Http\Controllers\LogisticsCenterController::class, 'update']);
+        Route::put('/centers/{center}/active', [\App\Http\Controllers\LogisticsCenterController::class, 'setActive']);
+        Route::put('/centers/{center}/operators', [\App\Http\Controllers\LogisticsCenterController::class, 'syncOperators']);
+        Route::post('/centers/{center}/exceptions', [\App\Http\Controllers\LogisticsCenterController::class, 'storeException']);
+        Route::delete('/centers/{center}/exceptions/{exception}', [\App\Http\Controllers\LogisticsCenterController::class, 'destroyException']);
+        Route::get('/settings', [\App\Http\Controllers\LogisticsCenterController::class, 'settings']);
+        Route::put('/settings', [\App\Http\Controllers\LogisticsCenterController::class, 'updateSettings']);
+    });
+    Route::middleware('role:Admin,Master,Operador logístico')->prefix('logistics')->group(function () {
+        Route::get('/my-centers', [\App\Http\Controllers\LogisticsShiftController::class, 'mine']);
+        Route::get('/centers/{center}/board', [\App\Http\Controllers\LogisticsShiftController::class, 'show']);
+        Route::get('/centers/{center}/orders', [\App\Http\Controllers\LogisticsShiftController::class, 'orders']);
+        Route::post('/centers/{center}/shift/start', [\App\Http\Controllers\LogisticsShiftController::class, 'start']);
+        Route::get('/centers/{center}/shift/pending', [\App\Http\Controllers\LogisticsShiftController::class, 'pending']);
+        Route::post('/centers/{center}/shift/close', [\App\Http\Controllers\LogisticsShiftController::class, 'close']);
+        Route::post('/centers/{center}/alerts/{alert}/resolve', [\App\Http\Controllers\LogisticsShiftController::class, 'resolveAlert']);
+    });
 });
 

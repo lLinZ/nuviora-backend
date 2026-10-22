@@ -159,6 +159,10 @@ class AgencyRouter
         if ($order->agency_locked || $order->isStockDeducted()) {
             return false;
         }
+        // Logística propia (Fran, 21/10): en una ciudad con centro activo el stock está en el centro, no en sus agencias
+        if (app(\App\Services\Logistics\Centers::class)->forOrder($order)) {
+            return false;
+        }
         if ($order->agency_id && $this->hasStockAt($order, (int) $order->agency_id)) {
             return false;
         }

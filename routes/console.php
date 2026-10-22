@@ -32,6 +32,9 @@ try {
     Schedule::command('orders:assign-agencies')->everyMinute()->withoutOverlapping();
     // Órdenes que esperaban que su ciudad volviera a trabajar: apagada o fuera de horario (Fran, 2026-10-17)
     Schedule::command('agencies:release-waiting')->everyMinute()->withoutOverlapping();
+    // Logística propia (Fran, 21/10): sin operador y órdenes que esperan ventana. Una pasada por minuto hasta que el
+    // proceso de supervisor (logistics:tick --loop) corra las rondas de 90 s (paso S4 del plan)
+    Schedule::command('logistics:tick')->everyMinute()->withoutOverlapping();
     // Conciliación de pagos digitales: cada mañana, la del día anterior (documento de Fran del 2026-10-06, §12)
     Schedule::command('reconciliation:prepare')->dailyAt('06:00');
     // Meta Ads, solo lectura (documento de Fran del 2026-10-08, Módulo 2): cada 30 minutos (§7), y los días recientes

@@ -55,13 +55,28 @@ return [
         ]
     ],
 
+    // Logística propia (Fran, 21/10): el rider sale con "Confirmar salida" del operador y marca la entrega desde la app.
+    // Su novedad le llega al operador, no a la vendedora (§13): no pasa la orden a "Novedades" él mismo.
     'Repartidor' => [
         'visible_columns' => [
             'Asignar repartidor', 'En ruta', 'Entregado', 'Novedades', 'Novedad Solucionada'
         ],
         'transitions' => [
             'Asignar repartidor'    => ['En ruta'],
-            'En ruta'               => ['Entregado', 'Novedades'],
+            'En ruta'               => ['Entregado'],
         ]
-    ]
+    ],
+
+    // §3: el operador escala a ventas lo comercial (§13) y puede cerrar una entrega; la salida la marca su pantalla.
+    // Sin esta entrada tendría todo permitido.
+    'Operador logístico' => [
+        'visible_columns' => [
+            'Asignar a agencia', 'En ruta', 'Novedades', 'Novedad Solucionada', 'Entregado'
+        ],
+        'transitions' => [
+            'Asignar a agencia'     => ['Novedades'],
+            'En ruta'               => ['Entregado', 'Novedades'],
+            'Novedad Solucionada'   => ['Entregado', 'En ruta', 'Novedades'],
+        ]
+    ],
 ];

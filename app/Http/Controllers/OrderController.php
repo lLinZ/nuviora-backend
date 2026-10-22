@@ -375,12 +375,25 @@ class OrderController extends Controller
                 return response()->json(['status' => false, 'message' => $problem], 422);
             }
 
+            // 🏬 Logística propia (Fran, 21/10, R3): en una ciudad con centro activo, "Asignar a agencia" manda la orden al
+            // centro, que la da a un rider o, si no hay, a la agencia de respaldo (§19). Sale del almacén del centro y sin
+            // agencia; la fila logística la crea LogisticsOrderObserver. Una agencia elegida a mano se respeta.
+            $center = null;
+            if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
+                && (int) $order->status_id !== (int) $statusAsignarAgencia->id && !$order->agency_locked
+                && ($center = app(\App\Services\Logistics\Centers::class)->forOrder($order))) {
+                $order->agency_id = null;
+                $order->warehouse_id = $center->warehouse_id;
+                $order->city_id = $center->city_id;
+                $order->delivery_cost = $center->city?->delivery_cost_usd ?? $order->delivery_cost;
+            }
+
             // 🚚 Reparto entre las agencias de la ciudad (tareas 3c y 6): al pasar a "Asignar a agencia",
             // si nadie eligió la agencia a mano, se elige por % y cupo entre las que tienen stock.
             // Si todas las que tienen stock están llenas, no espera: se elige en partes iguales (Fran, 2026-09-30 y 2026-10-02).
             // Sin ciudad, sin agencias configuradas o sin stock en ninguna, sigue como antes.
             if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id
-                && (int) $order->status_id !== (int) $statusAsignarAgencia->id && !$order->agency_locked) {
+                && (int) $order->status_id !== (int) $statusAsignarAgencia->id && !$order->agency_locked && !$center) {
                 $router = app(\App\Services\Agencies\AgencyRouter::class);
                 [$agency, $reason, $info] = $router->pick($order);
                 if ($agency) {
@@ -579,8 +592,8 @@ class OrderController extends Controller
             }
         }
 
-        // 4. 🛑 INTERCEPCIÓN PARA ASIGNAR A AGENCIA (AUTO) 🛑
-        if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id) {
+        // 4. 🛑 INTERCEPCIÓN PARA ASIGNAR A AGENCIA (AUTO) 🛑 (no con centro logístico: la orden va al centro)
+        if ($statusAsignarAgencia && (int) $statusAsignarAgencia->id === (int) $request->status_id && !$center) {
             // Si ya tiene agencia, no hacemos nada extra, solo seguimos
             if (!$order->agency_id) {
                 $clientCityName = $order->client?->city;
@@ -700,8 +713,9 @@ class OrderController extends Controller
             $order->was_shipped = true;
             $order->shipped_at = now();
 
-            // Agencia por ciudad solo si la orden no tiene una: la asignada a mano se respeta (tarea 3, punto 3)
-            if (!$order->agency_id && $order->city_id) {
+            // Agencia por ciudad solo si la orden no tiene una: la asignada a mano se respeta (tarea 3, punto 3).
+            // Una orden del centro logístico que sale con un rider propio no lleva agencia (§11).
+            if (!$order->agency_id && $order->city_id && !app(\App\Services\Logistics\LogisticsOrders::class)->active($order)) {
                 $city = \App\Models\City::find($order->city_id);
                 if ($city && $city->agency_id) {
                     $order->agency_id = $city->agency_id;

@@ -11,6 +11,7 @@ use App\Models\User;
  *  - Vendedora: los suyos. La Líder, además, los de su grupo.
  *  - Agencia: los de su agencia, nunca los cancelados.
  *  - Repartidor: los suyos.
+ *  - Operador logístico: los que pasan por su centro (logística propia, §3).
  *  - Otros roles internos: permitido (como hasta ahora).
  */
 final class OrderAccess
@@ -44,6 +45,13 @@ final class OrderAccess
 
         if ($role === 'repartidor') {
             return (int) $order->deliverer_id === (int) $user->id;
+        }
+
+        // Logística propia (§3): el operador, las órdenes que pasan por su centro
+        if ($role === 'operador logístico') {
+            return \App\Models\LogisticsOrder::where('order_id', $order->id)
+                ->whereIn('center_id', \Illuminate\Support\Facades\DB::table('logistics_center_operators')->where('user_id', $user->id)->select('center_id'))
+                ->exists();
         }
 
         return true;
