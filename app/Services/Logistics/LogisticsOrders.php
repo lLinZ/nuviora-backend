@@ -114,7 +114,14 @@ class LogisticsOrders
     /** La orden salió del centro sin entregarse (cancelada, devuelta a la vendedora…). */
     public function close(LogisticsOrder $row, string $reason, ?int $actorId = null): LogisticsOrder
     {
-        return $this->transition($row, LogisticsStatus::CLOSED, 'cerrada', $actorId, $reason, [], ['closed_at' => now()]);
+        $wasSearching = $row->status === LogisticsStatus::SEARCHING;
+        $row = $this->transition($row, LogisticsStatus::CLOSED, 'cerrada', $actorId, $reason, [], ['closed_at' => now()]);
+        if ($wasSearching) {
+            app(Dispatcher::class)->cancelOpenOffers($row);
+            app(Alerts::class)->resolve("ronda:{$row->id}:*", $actorId);
+        }
+
+        return $row;
     }
 
     public function transition(LogisticsOrder $row, string $to, string $action, ?int $actorId = null, ?string $reason = null,

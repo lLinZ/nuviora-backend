@@ -63,7 +63,7 @@ return new class extends Migration
             // null = los de todos los centros; un centro puede tener los suyos (§23: "por centro")
             $table->foreignId('center_id')->nullable()->constrained('logistics_centers')->cascadeOnDelete();
             $table->json('values');
-            $table->timestamp('valid_from');
+            $table->timestamp('valid_from')->useCurrent();
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();
             $table->index(['center_id', 'valid_from']);
@@ -73,7 +73,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('center_id')->constrained('logistics_centers')->cascadeOnDelete();
             $table->foreignId('user_id')->constrained('users');
-            $table->timestamp('started_at');
+            $table->timestamp('started_at')->useCurrent();
             $table->timestamp('ended_at')->nullable();
             // §31.1: "cierre limpio" o "cerrar con pendientes/traspaso", con motivo
             $table->string('close_type', 20)->nullable();

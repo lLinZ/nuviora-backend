@@ -14,7 +14,7 @@ class LogisticsOrder extends Model
 {
     protected $fillable = [
         'order_id', 'center_id', 'status', 'rider_id', 'agency_id', 'overflow_reason',
-        'center_client_seconds', 'center_client_meters', 'center_client_at',
+        'center_client_seconds', 'center_client_meters', 'center_client_at', 'assigned_via', 'assigned_by', 'assignment_note',
         'released_at', 'sla_started_at', 'searching_started_at', 'rider_confirmed_at', 'ready_at',
         'departed_at', 'delivered_at', 'returned_at', 'review_resolved_at', 'closed_at',
     ];
@@ -51,6 +51,16 @@ class LogisticsOrder extends Model
     public function agency()
     {
         return $this->belongsTo(User::class, 'agency_id');
+    }
+
+    public function rounds()
+    {
+        return $this->hasMany(DispatchRound::class)->orderBy('number');
+    }
+
+    public function offers()
+    {
+        return $this->hasMany(DispatchOffer::class)->orderBy('id');
     }
 
     public function events()

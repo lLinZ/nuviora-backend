@@ -786,12 +786,19 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/centers/{center}/alerts/{alert}/resolve', [\App\Http\Controllers\LogisticsShiftController::class, 'resolveAlert']);
         Route::get('/centers/{center}/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'forCenter']);
         Route::get('/orders/{logisticsOrder}/candidates', [\App\Http\Controllers\LogisticsRiderController::class, 'candidates']);
+        Route::get('/orders/{logisticsOrder}', [\App\Http\Controllers\LogisticsDispatchController::class, 'show']);
+        Route::post('/orders/{logisticsOrder}/assign', [\App\Http\Controllers\LogisticsDispatchController::class, 'assign']);
+        Route::post('/orders/{logisticsOrder}/to-agency', [\App\Http\Controllers\LogisticsDispatchController::class, 'toAgency']);
     });
     // La app del rider (logística propia, §22): solo lo suyo
     Route::middleware('role:Repartidor')->prefix('rider')->group(function () {
         Route::get('/me', [\App\Http\Controllers\RiderAppController::class, 'me']);
         Route::post('/device', [\App\Http\Controllers\RiderAppController::class, 'device']);
         Route::post('/locations', [\App\Http\Controllers\RiderAppController::class, 'locations']);
+        Route::get('/offers', [\App\Http\Controllers\RiderAppController::class, 'offers']);
+        Route::post('/offers/{offer}/seen', [\App\Http\Controllers\RiderAppController::class, 'seen']);
+        Route::post('/offers/{offer}/confirm', [\App\Http\Controllers\RiderAppController::class, 'confirm']);
+        Route::get('/assignment', [\App\Http\Controllers\RiderAppController::class, 'assignment']);
     });
 });
 

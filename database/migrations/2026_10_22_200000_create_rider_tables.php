@@ -54,7 +54,7 @@ return new class extends Migration
             $table->decimal('lng', 10, 7);
             $table->float('accuracy')->nullable();
             $table->float('speed')->nullable();
-            $table->timestamp('recorded_at');
+            $table->timestamp('recorded_at')->useCurrent();
             $table->timestamp('created_at')->useCurrent();
             $table->index(['user_id', 'recorded_at']);
         });

@@ -81,8 +81,9 @@ class AgencyRouter
      * @return array{0: ?User, 1: string, 2: array}  agencia, motivo (ok, sin_ciudad, sin_agencias,
      *         sin_stock, todas_llenas) y detalle.
      */
-    public function pick(Order $order, ?array $onlyIds = null, bool $ignoreCapacity = false, bool $overflow = true): array
+    public function pick(Order $order, ?array $onlyIds = null, bool $ignoreCapacity = false, bool $overflow = true, bool $checkStock = true): array
     {
+        // $checkStock = false: la agencia de respaldo de un centro logístico recoge en el centro, no en su almacén (§19)
         $city = $this->cityFor($order);
         if (!$city) {
             return [null, 'sin_ciudad', []];
@@ -95,7 +96,7 @@ class AgencyRouter
             return [null, 'sin_agencias', ['city' => $city->name]];
         }
 
-        $withStock = $agencies->filter(fn (User $a) => $this->hasStockAt($order, $a->id))->values();
+        $withStock = $checkStock ? $agencies->filter(fn (User $a) => $this->hasStockAt($order, $a->id))->values() : $agencies;
         if ($withStock->isEmpty()) {
             return [null, 'sin_stock', ['city' => $city->name]];
         }

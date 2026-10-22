@@ -2,8 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Constants\LogisticsStatus;
+use App\Models\DispatchOffer;
+use App\Models\LogisticsOrder;
 use App\Models\RiderLocation;
 use App\Models\RiderProfile;
+use App\Services\Delivery\TariffBook;
+use App\Services\Logistics\Candidates;
+use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\LogisticsSettings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -122,6 +128,112 @@ class RiderAppController extends Controller
 
         return response()->json(['status' => true, 'saved' => count($rows)]);
     }
+
+    /**
+     * Las oportunidades abiertas del rider (§8, §22.1). Sin nada del destino: ni zona, ni cliente, ni km, ni pago, ni
+     * monto, ni producto (§8.1). Solo el centro, al que tiene que poder ir de inmediato.
+     */
+    public function offers()
+    {
+        $profile = $this->profile();
+        $center = $profile->center;
+        $offers = DispatchOffer::with('round:id,number')->where('rider_id', $profile->user_id)->whereNull('response')
+            ->where('expires_at', '>', now())->orderBy('id')->get();
+
+        return response()->json([
+            'status' => true,
+            'offers' => $offers->map(fn (DispatchOffer $o) => [
+                'id' => $o->id,
+                'round' => $o->round?->number,
+                'expires_at' => $o->expires_at->toIso8601String(),
+                'seconds_left' => max(0, (int) now()->diffInSeconds($o->expires_at, false)),
+                'message' => 'Nueva asignación disponible. Debes poder dirigirte al centro logístico inmediatamente. Confirmar disponibilidad.',
+                'center' => ['name' => $center?->name, 'address' => $center?->address],
+            ]),
+        ]);
+    }
+
+    /** §26: "seen_at si existe". */
+    public function seen(DispatchOffer $offer)
+    {
+        $profile = $this->profile();
+        abort_unless((int) $offer->rider_id === (int) $profile->user_id, 403);
+        if (!$offer->seen_at) {
+            $offer->forceFill(['seen_at' => now()])->save();
+        }
+
+        return response()->json(['status' => true]);
+    }
+
+    /** §8.2: el primero que confirma gana; a los demás, "Ya otro rider aceptó". */
+    public function confirm(DispatchOffer $offer, Dispatcher $dispatcher)
+    {
+        $this->profile();
+        $out = $dispatcher->confirm($offer, Auth::user());
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
+    }
+
+    /**
+     * Lo que el rider ve después de confirmar (§9.1): el centro para recoger, el cliente, la dirección y su GPS, el cobro y
+     * cómo pagó, y su pago estimado si ya tiene tarifario. Solo sus órdenes en curso (§3).
+     */
+    public function assignment(TariffBook $tariffs)
+    {
+        $profile = $this->profile();
+        $rows = LogisticsOrder::with(['center.warehouse', 'order.client', 'order.payments'])
+            ->where('rider_id', $profile->user_id)->whereIn('status', Candidates::BUSY)->orderBy('id')->get();
+
+        return response()->json([
+            'status' => true,
+            'assignments' => $rows->map(function (LogisticsOrder $row) use ($tariffs, $profile) {
+                $order = $row->order;
+                $client = $order?->client;
+                $tariff = $row->center ? $tariffs->find((int) $profile->user_id, (int) $row->center->city_id, now(config('app.timezone'))->toDateString()) : null;
+                $quote = $tariff && $row->center_client_meters !== null ? $tariffs->quote($tariff, (int) $row->center_client_meters) : null;
+
+                return [
+                    'logistics_order_id' => $row->id,
+                    'status' => $row->status,
+                    'status_label' => LogisticsStatus::label($row->status),
+                    'next_action' => self::NEXT_ACTION[$row->status] ?? null,
+                    'center' => [
+                        'name' => $row->center?->name,
+                        'address' => $row->center?->address,
+                        'latitude' => $row->center?->warehouse?->latitude,
+                        'longitude' => $row->center?->warehouse?->longitude,
+                        'maps_url' => $row->center?->warehouse?->maps_url,
+                    ],
+                    'order' => [
+                        'id' => $order?->id,
+                        'name' => $order?->name,
+                        'total' => (float) $order?->current_total_price,
+                        'currency' => $order?->currency,
+                        'payment_method' => $order?->payment_method,
+                        'payments' => $order?->payments->map(fn ($p) => ['method' => $p->method, 'amount' => (float) $p->amount])->values(),
+                        'courier_shipment' => (bool) $order?->courier_shipment,
+                    ],
+                    'client' => [
+                        'name' => trim(($client?->first_name ?? '') . ' ' . ($client?->last_name ?? '')),
+                        'phone' => $client?->phone,
+                        'address' => $client?->address1,
+                        'location' => $order?->location,
+                        'latitude' => $order?->location_lat,
+                        'longitude' => $order?->location_lng,
+                    ],
+                    'estimated_pay' => $quote ? (float) $quote['price'] : null,
+                ];
+            }),
+        ]);
+    }
+
+    public const NEXT_ACTION = [
+        LogisticsStatus::RIDER_CONFIRMED => 'Ve al centro a recoger el paquete.',
+        LogisticsStatus::PREPARING => 'Ve al centro: el operador está preparando el paquete.',
+        LogisticsStatus::READY => 'El paquete está listo: recógelo en el centro.',
+        LogisticsStatus::EN_ROUTE => 'Lleva el paquete al cliente y marca "Entregado" con la foto del comprobante.',
+        LogisticsStatus::INCIDENT => 'Novedad abierta: espera las instrucciones del operador.',
+    ];
 
     private function profile(): RiderProfile
     {
