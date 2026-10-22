@@ -326,7 +326,9 @@ class Dispatcher
     {
         $this->closeOpen($row, DispatchOffer::COVERED);
         Order::whereKey($row->order_id)->first()?->forceFill(['deliverer_id' => $riderId])->save();
-        $this->orders->transition($row, LogisticsStatus::RIDER_CONFIRMED, $via === 'manual' ? 'asignada_a_mano' : 'confirmada',
+        // §20.1: RIDER CONFIRMADO → PREPARANDO o LISTO; si el operador ya lo tenía listo, queda listo para que lo recoja
+        $to = $row->ready_at ? LogisticsStatus::READY : LogisticsStatus::RIDER_CONFIRMED;
+        $this->orders->transition($row, $to, $via === 'manual' ? 'asignada_a_mano' : 'confirmada',
             $byId ?? $riderId, $comment, $data + ['rider_id' => $riderId], [
                 'rider_id' => $riderId,
                 'rider_confirmed_at' => now(),

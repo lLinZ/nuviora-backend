@@ -64,6 +64,8 @@ return [
         'transitions' => [
             'Asignar repartidor'    => ['En ruta'],
             'En ruta'               => ['Entregado'],
+            // La vendedora solucionó la novedad que escaló el operador (§13): el rider sigue y entrega
+            'Novedad Solucionada'   => ['Entregado'],
         ]
     ],
 

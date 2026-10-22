@@ -63,6 +63,16 @@ class LogisticsOrder extends Model
         return $this->hasMany(DispatchOffer::class)->orderBy('id');
     }
 
+    public function novelties()
+    {
+        return $this->hasMany(LogisticsNovelty::class)->orderBy('id');
+    }
+
+    public function custody()
+    {
+        return $this->hasMany(LogisticsCustodyEvent::class)->orderBy('id');
+    }
+
     public function events()
     {
         return $this->hasMany(LogisticsOrderEvent::class)->orderBy('id');

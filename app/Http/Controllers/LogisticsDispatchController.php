@@ -3,8 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Constants\LogisticsStatus;
+use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
+use App\Services\Logistics\Departures;
 use App\Services\Logistics\Dispatcher;
+use App\Services\Logistics\Novelties;
 use App\Services\Logistics\Shifts;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -24,7 +27,7 @@ class LogisticsDispatchController extends Controller
     {
         $this->authorizeCenter($logisticsOrder);
         $logisticsOrder->load(['order:id,name,current_total_price,status_id', 'order.status:id,description', 'rider:id,names', 'agency:id,names',
-            'rounds.offers.rider:id,names', 'events.actor:id,names']);
+            'rounds.offers.rider:id,names', 'events.actor:id,names', 'novelties.reporter:id,names', 'custody']);
 
         return response()->json([
             'status' => true,
@@ -54,6 +57,67 @@ class LogisticsDispatchController extends Controller
         $data = $request->validate(['reason' => 'required|string|max:250']);
         $out = $this->dispatcher->toAgency($logisticsOrder, Auth::user(), 'forzada_por_operador', $data['reason']);
 
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
+    }
+
+    /** §9.2: picking y packing. */
+    public function prepare(LogisticsOrder $logisticsOrder, Departures $departures)
+    {
+        $this->authorizeCenter($logisticsOrder);
+
+        return $this->reply($departures->prepare($logisticsOrder, Auth::user()));
+    }
+
+    /** §9.2: "Listo para despacho". */
+    public function ready(LogisticsOrder $logisticsOrder, Departures $departures)
+    {
+        $this->authorizeCenter($logisticsOrder);
+
+        return $this->reply($departures->ready($logisticsOrder, Auth::user()));
+    }
+
+    /** §11: "Confirmar salida", con el rider ya en el centro y los paquetes de su ruta en la mano. */
+    public function depart(LogisticsOrder $logisticsOrder, Departures $departures)
+    {
+        $this->authorizeCenter($logisticsOrder);
+
+        return $this->reply($departures->depart($logisticsOrder, Auth::user()));
+    }
+
+    /** §19: el paquete se le entrega a la agencia de respaldo en el centro. */
+    public function handToAgency(LogisticsOrder $logisticsOrder, Departures $departures)
+    {
+        $this->authorizeCenter($logisticsOrder);
+
+        return $this->reply($departures->handToAgency($logisticsOrder, Auth::user()));
+    }
+
+    public function commentNovelty(Request $request, LogisticsNovelty $novelty, Novelties $novelties)
+    {
+        $this->authorizeCenter($novelty->logisticsOrder);
+        $data = $request->validate(['text' => 'required|string|max:1000']);
+
+        return response()->json(['status' => true, 'message' => 'Comentario guardado.', 'novelty' => $novelties->comment($novelty, Auth::user(), $data['text'])]);
+    }
+
+    public function resolveNovelty(Request $request, LogisticsNovelty $novelty, Novelties $novelties)
+    {
+        $this->authorizeCenter($novelty->logisticsOrder);
+        $data = $request->validate(['result' => 'required|string|max:250']);
+
+        return $this->reply($novelties->resolve($novelty, Auth::user(), $data['result']));
+    }
+
+    public function escalateNovelty(Request $request, LogisticsNovelty $novelty, Novelties $novelties)
+    {
+        $this->authorizeCenter($novelty->logisticsOrder);
+        $data = $request->validate(['comment' => 'nullable|string|max:500']);
+
+        return $this->reply($novelties->escalate($novelty, Auth::user(), $data['comment'] ?? null));
+    }
+
+    private function reply(array $out)
+    {
         return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
     }
 

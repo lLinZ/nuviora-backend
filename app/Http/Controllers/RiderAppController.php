@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Constants\LogisticsStatus;
 use App\Models\DispatchOffer;
+use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
 use App\Models\RiderLocation;
 use App\Models\RiderProfile;
@@ -11,6 +12,7 @@ use App\Services\Delivery\TariffBook;
 use App\Services\Logistics\Candidates;
 use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\LogisticsSettings;
+use App\Services\Logistics\Novelties;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -222,9 +224,31 @@ class RiderAppController extends Controller
                         'longitude' => $order?->location_lng,
                     ],
                     'estimated_pay' => $quote ? (float) $quote['price'] : null,
+                    'open_novelty' => LogisticsNovelty::where('logistics_order_id', $row->id)->whereNull('resolved_at')->latest('id')->first()?->only(['id', 'type', 'description', 'owner', 'opened_at', 'escalated_at']),
                 ];
             }),
         ]);
+    }
+
+    /** §13, §22.2: "Reportar novedad". Le llega al operador, no a la vendedora. */
+    public function novelty(Request $request, LogisticsOrder $logisticsOrder, Novelties $novelties)
+    {
+        $this->profile();
+        $data = $request->validate([
+            'type' => 'required|in:' . implode(',', array_keys(LogisticsNovelty::TYPES)),
+            'description' => 'nullable|string|max:500',
+            'lat' => 'nullable|numeric|between:-90,90',
+            'lng' => 'nullable|numeric|between:-180,180',
+        ]);
+        $out = $novelties->report($logisticsOrder, Auth::user(), $data['type'], $data['description'] ?? null, $data['lat'] ?? null, $data['lng'] ?? null);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
+    }
+
+    /** Los tipos de novedad para la pantalla del rider (§13). */
+    public function noveltyTypes()
+    {
+        return response()->json(['status' => true, 'types' => collect(LogisticsNovelty::TYPES)->map(fn ($t, $k) => ['value' => $k, 'label' => $t['label']])->values()]);
     }
 
     public const NEXT_ACTION = [

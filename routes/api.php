@@ -789,6 +789,13 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/orders/{logisticsOrder}', [\App\Http\Controllers\LogisticsDispatchController::class, 'show']);
         Route::post('/orders/{logisticsOrder}/assign', [\App\Http\Controllers\LogisticsDispatchController::class, 'assign']);
         Route::post('/orders/{logisticsOrder}/to-agency', [\App\Http\Controllers\LogisticsDispatchController::class, 'toAgency']);
+        Route::post('/orders/{logisticsOrder}/prepare', [\App\Http\Controllers\LogisticsDispatchController::class, 'prepare']);
+        Route::post('/orders/{logisticsOrder}/ready', [\App\Http\Controllers\LogisticsDispatchController::class, 'ready']);
+        Route::post('/orders/{logisticsOrder}/depart', [\App\Http\Controllers\LogisticsDispatchController::class, 'depart']);
+        Route::post('/orders/{logisticsOrder}/hand-to-agency', [\App\Http\Controllers\LogisticsDispatchController::class, 'handToAgency']);
+        Route::post('/novelties/{novelty}/comment', [\App\Http\Controllers\LogisticsDispatchController::class, 'commentNovelty']);
+        Route::post('/novelties/{novelty}/resolve', [\App\Http\Controllers\LogisticsDispatchController::class, 'resolveNovelty']);
+        Route::post('/novelties/{novelty}/escalate', [\App\Http\Controllers\LogisticsDispatchController::class, 'escalateNovelty']);
     });
     // La app del rider (logística propia, §22): solo lo suyo
     Route::middleware('role:Repartidor')->prefix('rider')->group(function () {
@@ -799,6 +806,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/offers/{offer}/seen', [\App\Http\Controllers\RiderAppController::class, 'seen']);
         Route::post('/offers/{offer}/confirm', [\App\Http\Controllers\RiderAppController::class, 'confirm']);
         Route::get('/assignment', [\App\Http\Controllers\RiderAppController::class, 'assignment']);
+        Route::get('/novelty-types', [\App\Http\Controllers\RiderAppController::class, 'noveltyTypes']);
+        Route::post('/assignment/{logisticsOrder}/novelty', [\App\Http\Controllers\RiderAppController::class, 'novelty']);
     });
 });
 

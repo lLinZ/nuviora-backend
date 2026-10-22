@@ -7,13 +7,16 @@ use App\Constants\OrderStatus;
 use App\Models\Order;
 use App\Models\Status;
 use App\Services\Logistics\Centers;
+use App\Services\Logistics\Departures;
 use App\Services\Logistics\LogisticsOrders;
+use App\Services\Logistics\Novelties;
 use Illuminate\Support\Facades\Auth;
 
 /**
  * Lleva el estado logístico al ritmo de la orden, venga de donde venga el cambio (logística propia, R3):
  * - "Asignar a agencia" sin agencia, en una ciudad con centro activo: la orden entra al centro (§5);
- * - "Entregado": queda entregada (§12);
+ * - "Entregado": queda entregada y se cierra la custodia (§12, §16.2.2);
+ * - "Novedad Solucionada": la vendedora resolvió lo que el operador escaló; la orden vuelve a la calle (§13);
  * - si vuelve atrás (a la vendedora, cancelada, rechazada, reprogramada…) antes de salir del almacén, sale del centro;
  *   si ya había salido con el rider, la pieza queda como retorno pendiente (§16.1; R5: una reprogramada la guarda);
  * - "Novedades": la novedad ya la tiene la vendedora (el operador la escaló, §13).
@@ -55,11 +58,21 @@ class LogisticsOrderObserver
         }
 
         if ($status === OrderStatus::ENTREGADO) {
+            // §16.2.2 punto 5: la custodia se cierra como salida definitiva (de quien la tenía al cliente)
+            [$fromType, $fromId] = $row->rider_id ? ['rider', $row->rider_id] : ['agencia', $row->agency_id];
+            if ($row->departed_at || $row->agency_id) {
+                app(Departures::class)->custody($row, $order, $fromType, $fromId, 'cliente', $order->client_id, $actor);
+            }
             $this->orders->transition($row, LogisticsStatus::DELIVERED, 'entregada', $actor, null, [], ['delivered_at' => now()]);
 
             return;
         }
-        if ($status === OrderStatus::EN_RUTA || $status === OrderStatus::NOVEDAD_SOLUCIONADA) {
+        if ($status === OrderStatus::NOVEDAD_SOLUCIONADA) {
+            app(Novelties::class)->solvedBySales($row, $actor);
+
+            return;
+        }
+        if ($status === OrderStatus::EN_RUTA) {
             return;
         }
         if ($status === OrderStatus::NOVEDADES) {
