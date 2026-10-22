@@ -62,21 +62,32 @@ class Centers
                 return [substr($exception->opens_at, 0, 5), substr($exception->closes_at, 0, 5)];
             }
         }
-        $hours = ($center->opening_hours ?? self::DEFAULT_HOURS)[(string) $day->dayOfWeekIso] ?? null;
+        return self::hoursIn($center->opening_hours ?? self::DEFAULT_HOURS, $day);
+    }
+
+    /** El horario de ese día en un horario por día ISO (el del centro o las franjas de un rider). */
+    public static function hoursIn(array $schedule, CarbonInterface $day): ?array
+    {
+        $hours = $schedule[(string) $day->dayOfWeekIso] ?? null;
 
         return is_array($hours) && count($hours) === 2 ? [$hours[0], $hours[1]] : null;
     }
 
-    public function inWindow(LogisticsCenter $center, ?CarbonInterface $at = null): bool
+    public static function inHours(?array $hours, CarbonInterface $at): bool
     {
-        $at ??= now();
-        $hours = $this->hoursOn($center, $at);
         if (!$hours) {
             return false;
         }
         $time = $at->format('H:i');
 
         return $time >= $hours[0] && $time < $hours[1];
+    }
+
+    public function inWindow(LogisticsCenter $center, ?CarbonInterface $at = null): bool
+    {
+        $at ??= now();
+
+        return self::inHours($this->hoursOn($center, $at), $at);
     }
 
     public function state(LogisticsCenter $center, ?CarbonInterface $at = null): string

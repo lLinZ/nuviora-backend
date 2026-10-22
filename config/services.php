@@ -45,6 +45,12 @@ return [
     'google_routes' => [
         'key' => env('GOOGLE_ROUTES_API_KEY'),
     ],
+    // La alarma de las rondas de la logística propia (Firebase Cloud Messaging, API HTTP v1). La cuenta de servicio de
+    // Firebase es un archivo JSON fuera de Git, solo en el servidor; aquí va su ruta.
+    'fcm' => [
+        'project_id' => env('FCM_PROJECT_ID'),
+        'credentials' => env('FCM_CREDENTIALS'),
+    ],
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],

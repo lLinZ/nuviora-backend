@@ -772,6 +772,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::delete('/centers/{center}/exceptions/{exception}', [\App\Http\Controllers\LogisticsCenterController::class, 'destroyException']);
         Route::get('/settings', [\App\Http\Controllers\LogisticsCenterController::class, 'settings']);
         Route::put('/settings', [\App\Http\Controllers\LogisticsCenterController::class, 'updateSettings']);
+        Route::get('/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'index']);
+        Route::put('/riders/{user}', [\App\Http\Controllers\LogisticsRiderController::class, 'update']);
+        Route::post('/riders/{user}/test-push', [\App\Http\Controllers\LogisticsRiderController::class, 'testPush']);
     });
     Route::middleware('role:Admin,Master,Operador logístico')->prefix('logistics')->group(function () {
         Route::get('/my-centers', [\App\Http\Controllers\LogisticsShiftController::class, 'mine']);
@@ -781,6 +784,14 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/centers/{center}/shift/pending', [\App\Http\Controllers\LogisticsShiftController::class, 'pending']);
         Route::post('/centers/{center}/shift/close', [\App\Http\Controllers\LogisticsShiftController::class, 'close']);
         Route::post('/centers/{center}/alerts/{alert}/resolve', [\App\Http\Controllers\LogisticsShiftController::class, 'resolveAlert']);
+        Route::get('/centers/{center}/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'forCenter']);
+        Route::get('/orders/{logisticsOrder}/candidates', [\App\Http\Controllers\LogisticsRiderController::class, 'candidates']);
+    });
+    // La app del rider (logística propia, §22): solo lo suyo
+    Route::middleware('role:Repartidor')->prefix('rider')->group(function () {
+        Route::get('/me', [\App\Http\Controllers\RiderAppController::class, 'me']);
+        Route::post('/device', [\App\Http\Controllers\RiderAppController::class, 'device']);
+        Route::post('/locations', [\App\Http\Controllers\RiderAppController::class, 'locations']);
     });
 });
 

@@ -40,17 +40,7 @@ class GoogleRoutesClient
         }
 
         if ($response->failed()) {
-            $status = $response->status();
-            $reason = (string) ($response->json('error.status') ?? '');
-            $kind = match (true) {
-                $status === 401 || $status === 403 || $reason === 'PERMISSION_DENIED' || $reason === 'UNAUTHENTICATED' => GoogleRoutesException::AUTH,
-                $status === 429 || $reason === 'RESOURCE_EXHAUSTED' => GoogleRoutesException::QUOTA,
-                $status >= 500 => GoogleRoutesException::NETWORK,
-                default => GoogleRoutesException::REQUEST,
-            };
-            // El mensaje de Google no trae la clave, pero por si acaso se corta y se limpia
-            $message = str_replace($key, '***', mb_substr((string) ($response->json('error.message') ?? ''), 0, 160));
-            throw new GoogleRoutesException($kind, "Google Routes respondió {$status}" . ($reason ? " ({$reason})" : '') . ($message ? ": {$message}" : '.'), $status);
+            throw self::failure($response, $key);
         }
 
         $routes = $response->json('routes');
@@ -59,6 +49,23 @@ class GoogleRoutesClient
         }
         // En JSON de Google un 0 no se manda: sin el campo, la distancia es 0 (mismo punto)
         return (int) ($routes[0]['distanceMeters'] ?? 0);
+    }
+
+    /** Una respuesta de error de Google como excepción, sin la clave (también la usa la matriz de la logística propia). */
+    public static function failure(\Illuminate\Http\Client\Response $response, string $key): GoogleRoutesException
+    {
+        $status = $response->status();
+        $reason = (string) ($response->json('error.status') ?? $response->json('0.error.status') ?? '');
+        $kind = match (true) {
+            $status === 401 || $status === 403 || $reason === 'PERMISSION_DENIED' || $reason === 'UNAUTHENTICATED' => GoogleRoutesException::AUTH,
+            $status === 429 || $reason === 'RESOURCE_EXHAUSTED' => GoogleRoutesException::QUOTA,
+            $status >= 500 => GoogleRoutesException::NETWORK,
+            default => GoogleRoutesException::REQUEST,
+        };
+        // El mensaje de Google no trae la clave, pero por si acaso se corta y se limpia
+        $message = str_replace($key, '***', mb_substr((string) ($response->json('error.message') ?? $response->json('0.error.message') ?? ''), 0, 160));
+
+        return new GoogleRoutesException($kind, "Google Routes respondió {$status}" . ($reason ? " ({$reason})" : '') . ($message ? ": {$message}" : '.'), $status);
     }
 
     /** El cuerpo de la petición, como lo pide el §4. */

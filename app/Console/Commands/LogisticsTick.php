@@ -7,13 +7,15 @@ use App\Models\LogisticsCenter;
 use App\Services\Logistics\Alerts;
 use App\Services\Logistics\Centers;
 use App\Services\Logistics\LogisticsOrders;
+use App\Services\Logistics\MorningCheck;
 use Illuminate\Console\Command;
 
 /**
  * El reloj de la logística propia (§33: "los temporizadores deben calcularse en backend"). Cada pasada mira lo que venció
  * según las marcas guardadas, así que un reinicio no pierde nada:
  * - SIN OPERADOR: dentro del horario y sin turno abierto, alerta crítica al Admin (§4.2 punto 4, §25);
- * - las órdenes que esperaban ventana se sueltan cuando el centro ya puede (§4.2 punto 5).
+ * - las órdenes que esperaban ventana se sueltan cuando el centro ya puede (§4.2 punto 5);
+ * - el chequeo de la mañana de los riders (§6), una vez por día.
  * Las rondas de riders (S4) se suman aquí. Con --loop corre sin parar bajo supervisor (las rondas son de 90 s y el
  * scheduler va de minuto en minuto); sin --loop hace una sola pasada.
  */
@@ -55,6 +57,8 @@ class LogisticsTick extends Command
             if ($state === Centers::OPEN) {
                 $orders->releaseWaiting($center);
             }
+            // §6: el chequeo de la mañana, una vez por día
+            app(MorningCheck::class)->runIfDue($center);
         }
     }
 }

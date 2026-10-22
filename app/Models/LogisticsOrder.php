@@ -14,6 +14,7 @@ class LogisticsOrder extends Model
 {
     protected $fillable = [
         'order_id', 'center_id', 'status', 'rider_id', 'agency_id', 'overflow_reason',
+        'center_client_seconds', 'center_client_meters', 'center_client_at',
         'released_at', 'sla_started_at', 'searching_started_at', 'rider_confirmed_at', 'ready_at',
         'departed_at', 'delivered_at', 'returned_at', 'review_resolved_at', 'closed_at',
     ];
@@ -29,6 +30,7 @@ class LogisticsOrder extends Model
         'returned_at' => 'datetime',
         'review_resolved_at' => 'datetime',
         'closed_at' => 'datetime',
+        'center_client_at' => 'datetime',
     ];
 
     public function order()
