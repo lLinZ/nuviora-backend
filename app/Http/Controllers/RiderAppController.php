@@ -173,7 +173,8 @@ class RiderAppController extends Controller
         $this->profile();
         $out = $dispatcher->confirm($offer, Auth::user());
 
-        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']]
+            + ($out['ok'] ? ['logistics_order_id' => $offer->logistics_order_id] : []), $out['code']);
     }
 
     /**
