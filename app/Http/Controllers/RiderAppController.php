@@ -9,6 +9,7 @@ use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
 use App\Models\RiderLocation;
 use App\Models\RiderProfile;
+use App\Models\RoadReport;
 use App\Services\Delivery\TariffBook;
 use App\Services\Logistics\Candidates;
 use App\Services\Logistics\Dispatcher;
@@ -16,6 +17,7 @@ use App\Services\Logistics\Incidents;
 use App\Services\Logistics\LogisticsSettings;
 use App\Services\Logistics\Novelties;
 use App\Services\Logistics\RiderCash;
+use App\Services\Logistics\RoadReports;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -301,6 +303,48 @@ class RiderAppController extends Controller
             'lng' => 'nullable|numeric|between:-180,180',
         ]);
         $out = $incidents->report($logisticsOrder, Auth::user(), $data['type'], $data['comment'] ?? null, $data['lat'] ?? null, $data['lng'] ?? null);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
+    }
+
+    /** §15: las incidencias viales activas del centro del rider, y los tipos para reportar una. */
+    public function roadReports(RoadReports $reports)
+    {
+        $profile = $this->profile();
+
+        return response()->json([
+            'status' => true,
+            'reports' => $profile->center ? $reports->active($profile->center)->values() : [],
+            'types' => collect(RoadReport::TYPES)->map(fn ($label, $k) => ['value' => $k, 'label' => $label])->values(),
+        ]);
+    }
+
+    /** §15: el rider reporta algo en la vía; "el GPS toma la ubicación del reporte" (o su última ubicación). */
+    public function roadReport(Request $request, RoadReports $reports)
+    {
+        $profile = $this->profile();
+        $data = $request->validate([
+            'type' => 'required|in:' . implode(',', array_keys(RoadReport::TYPES)),
+            'comment' => 'nullable|string|max:300',
+            'lat' => 'nullable|numeric|between:-90,90',
+            'lng' => 'nullable|numeric|between:-180,180',
+        ]);
+        $lat = $data['lat'] ?? $profile->last_lat;
+        $lng = $data['lng'] ?? $profile->last_lng;
+        if ($lat === null || $lng === null || !$profile->center) {
+            return response()->json(['status' => false, 'message' => 'No tenemos tu ubicación: activa el GPS y vuelve a intentar.'], 422);
+        }
+        $reports->report($profile->center, Auth::user(), $data['type'], $data['comment'] ?? null, (float) $lat, (float) $lng);
+
+        return response()->json(['status' => true, 'message' => 'Gracias: los demás riders y el operador ya lo ven.']);
+    }
+
+    public function roadReportVote(Request $request, RoadReport $report, RoadReports $reports)
+    {
+        $profile = $this->profile();
+        abort_unless((int) $report->center_id === (int) $profile->center_id, 403);
+        $data = $request->validate(['vote' => 'required|in:activo,despejado']);
+        $out = $reports->vote($report, Auth::user(), $data['vote']);
 
         return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
     }

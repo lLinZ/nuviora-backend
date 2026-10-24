@@ -784,6 +784,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/centers/{center}/shift/pending', [\App\Http\Controllers\LogisticsShiftController::class, 'pending']);
         Route::post('/centers/{center}/shift/close', [\App\Http\Controllers\LogisticsShiftController::class, 'close']);
         Route::post('/centers/{center}/alerts/{alert}/resolve', [\App\Http\Controllers\LogisticsShiftController::class, 'resolveAlert']);
+        Route::post('/road-reports/{report}/vote', [\App\Http\Controllers\LogisticsShiftController::class, 'voteRoadReport']);
         Route::get('/centers/{center}/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'forCenter']);
         Route::post('/centers/{center}/riders/{user}/cash', [\App\Http\Controllers\LogisticsRiderController::class, 'receiveCash']);
         Route::get('/centers/{center}/payouts', [\App\Http\Controllers\LogisticsRiderController::class, 'payouts']);
@@ -817,6 +818,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/novelty-types', [\App\Http\Controllers\RiderAppController::class, 'noveltyTypes']);
         Route::post('/assignment/{logisticsOrder}/novelty', [\App\Http\Controllers\RiderAppController::class, 'novelty']);
         Route::get('/incident-types', [\App\Http\Controllers\RiderAppController::class, 'incidentTypes']);
+        Route::get('/road-reports', [\App\Http\Controllers\RiderAppController::class, 'roadReports']);
+        Route::post('/road-reports', [\App\Http\Controllers\RiderAppController::class, 'roadReport']);
+        Route::post('/road-reports/{report}/vote', [\App\Http\Controllers\RiderAppController::class, 'roadReportVote']);
         Route::post('/assignment/{logisticsOrder}/incident', [\App\Http\Controllers\RiderAppController::class, 'incident']);
         Route::post('/assignment/{logisticsOrder}/transfer', [\App\Http\Controllers\RiderAppController::class, 'transfer']);
     });

@@ -6,9 +6,11 @@ use App\Constants\LogisticsStatus;
 use App\Models\LogisticsAlert;
 use App\Models\LogisticsCenter;
 use App\Models\LogisticsOrder;
+use App\Models\RoadReport;
 use App\Models\User;
 use App\Services\Logistics\Centers;
 use App\Services\Logistics\LogisticsSettings;
+use App\Services\Logistics\RoadReports;
 use App\Services\Logistics\Shifts;
 use App\Services\Logistics\Tower;
 use Illuminate\Http\Request;
@@ -85,8 +87,20 @@ class LogisticsShiftController extends Controller
             'orders' => $rows,
             'summary' => $tower->summary($rows, $center),
             'settings' => array_intersect_key($settings, array_flip(['sla_target_minutes', 'sla_limit_minutes', 'manual_calls_at_seconds', 'hard_cap_seconds', 'cash_limit_usd'])),
+            // §15: lo que reportaron los riders en la vía, mientras siga activo
+            'road_reports' => app(RoadReports::class)->active($center)->values(),
             'server_time' => now()->toIso8601String(),
         ]);
+    }
+
+    /** §15: el operador marca una incidencia vial "sigue activo" o "ya despejado". POST { vote } */
+    public function voteRoadReport(Request $request, RoadReport $report, RoadReports $reports)
+    {
+        $this->authorizeCenter($report->center);
+        $data = $request->validate(['vote' => 'required|in:activo,despejado']);
+        $out = $reports->vote($report, Auth::user(), $data['vote']);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
     }
 
     public function resolveAlert(LogisticsCenter $center, LogisticsAlert $alert)

@@ -38,6 +38,7 @@ class LogisticsSettings
         'gps_max_age_seconds' => 300,        // §6.1: "GPS reciente suficiente". Decisión nuestra; confirmar con Fran
         'morning_check_at' => '08:45',       // §6
         'morning_check_max_eta_minutes' => null, // §6: "ETA máximo… configurable"; sin valor de Fran
+        'road_report_minutes' => 60,         // §15: "caducidad automática configurable". Decisión nuestra; confirmar con Fran
     ];
 
     public const RULES = [
@@ -59,6 +60,7 @@ class LogisticsSettings
         'gps_max_age_seconds' => 'integer|min:30|max:3600',
         'morning_check_at' => 'nullable|date_format:H:i',
         'morning_check_max_eta_minutes' => 'nullable|integer|min:1|max:240',
+        'road_report_minutes' => 'integer|min:5|max:720',
     ];
 
     /** Los valores vigentes para un centro en un momento: la última versión del centro o, si no tiene, la general. */
