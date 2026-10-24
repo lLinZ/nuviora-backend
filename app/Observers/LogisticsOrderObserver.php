@@ -11,6 +11,7 @@ use App\Services\Logistics\Departures;
 use App\Services\Logistics\LogisticsOrders;
 use App\Services\Logistics\Novelties;
 use App\Services\Logistics\RiderCash;
+use App\Services\Logistics\RiderPay;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -98,6 +99,8 @@ class LogisticsOrderObserver
             }
             $this->orders->transition($row, LogisticsStatus::RETURN_PENDING, 'retorno_pendiente', $actor, "La orden pasó a \"{$status}\" con la pieza fuera del almacén.",
                 [], ['return_pending_at' => now()]);
+            // §18.4, R7: si llegó al cliente y no le recibieron, se le paga la ida
+            app(RiderPay::class)->recordFailedLeg($row);
 
             return;
         }

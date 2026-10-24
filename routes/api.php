@@ -786,6 +786,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/centers/{center}/alerts/{alert}/resolve', [\App\Http\Controllers\LogisticsShiftController::class, 'resolveAlert']);
         Route::get('/centers/{center}/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'forCenter']);
         Route::post('/centers/{center}/riders/{user}/cash', [\App\Http\Controllers\LogisticsRiderController::class, 'receiveCash']);
+        Route::get('/centers/{center}/payouts', [\App\Http\Controllers\LogisticsRiderController::class, 'payouts']);
+        Route::post('/centers/{center}/riders/{user}/payout', [\App\Http\Controllers\LogisticsRiderController::class, 'payRider']);
         Route::get('/orders/{logisticsOrder}/candidates', [\App\Http\Controllers\LogisticsRiderController::class, 'candidates']);
         Route::get('/orders/{logisticsOrder}', [\App\Http\Controllers\LogisticsDispatchController::class, 'show']);
         Route::post('/orders/{logisticsOrder}/assign', [\App\Http\Controllers\LogisticsDispatchController::class, 'assign']);

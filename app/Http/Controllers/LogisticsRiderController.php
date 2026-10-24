@@ -10,7 +10,9 @@ use App\Models\User;
 use App\Services\Logistics\Candidates;
 use App\Services\Logistics\LogisticsSettings;
 use App\Services\Logistics\PushSender;
+use App\Models\DelivererCostSetting;
 use App\Services\Logistics\RiderCash;
+use App\Services\Logistics\RiderPay;
 use App\Services\Logistics\RiderEta;
 use App\Services\Logistics\Shifts;
 use Illuminate\Http\Request;
@@ -66,6 +68,12 @@ class LogisticsRiderController extends Controller
             'suspended_at' => $data['suspended'] ? ($wasSuspended ? $profile->suspended_at : now()) : null,
             'suspended_reason' => $data['suspended'] ? $data['suspended_reason'] : null,
         ])->save();
+        // §18: el rider de un centro se paga por tarifario, desde el almacén del centro (R11, OwnDelivererCost)
+        $warehouseId = LogisticsCenter::whereKey($data['center_id'])->value('warehouse_id');
+        $cost = DelivererCostSetting::firstOrNew(['user_id' => $user->id]);
+        if ($cost->mode !== DelivererCostSetting::TARIFF || (int) $cost->warehouse_id !== (int) $warehouseId) {
+            $cost->fill(['mode' => DelivererCostSetting::TARIFF, 'warehouse_id' => $warehouseId, 'updated_by' => Auth::id()])->save();
+        }
 
         return response()->json(['status' => true, 'message' => 'Rider guardado.', 'profile' => $this->present($profile->fresh('center'))]);
     }
@@ -138,6 +146,32 @@ class LogisticsRiderController extends Controller
         $out = $this->cash->receive($center, $user->id, $by, (float) ($data['usd'] ?? 0), (float) ($data['ves'] ?? 0), $data['note'] ?? null);
 
         return response()->json(['status' => $out['ok'], 'message' => $out['message'], 'balance' => $out['balance'] ?? null], $out['code']);
+    }
+
+    /** §18.5: las carreras del día de cada rider del centro, lo pagado, lo pendiente y el fondo que hace falta. ?date=AAAA-MM-DD */
+    public function payouts(Request $request, LogisticsCenter $center, RiderPay $pay)
+    {
+        $by = Auth::user();
+        if (!Shifts::isAdmin($by) && !$this->shifts->isOperatorOf($by, $center)) {
+            return response()->json(['status' => false, 'message' => 'No eres operador de este centro.'], 403);
+        }
+        $data = $request->validate(['date' => 'nullable|date_format:Y-m-d|before_or_equal:today']);
+
+        return response()->json(['status' => true] + $pay->day($center, $data['date'] ?? now()->toDateString()));
+    }
+
+    /** §18.5: el operador le paga al rider exactamente lo indicado. POST { date, amount, method, note? } */
+    public function payRider(Request $request, LogisticsCenter $center, User $user, RiderPay $pay)
+    {
+        $by = Auth::user();
+        if (!Shifts::isAdmin($by) && !$this->shifts->isOperatorOf($by, $center)) {
+            return response()->json(['status' => false, 'message' => 'No eres operador de este centro.'], 403);
+        }
+        $data = $request->validate(['date' => 'required|date_format:Y-m-d|before_or_equal:today', 'amount' => 'required|numeric|min:0.01|max:10000',
+            'method' => 'required|string|max:40', 'note' => 'nullable|string|max:250']);
+        $out = $pay->pay($center, $user->id, $data['date'], $by, (float) $data['amount'], $data['method'], $data['note'] ?? null);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
     }
 
     /** Operador: a quién le llegaría la ronda de esta orden ahora, y por qué no a los demás (§7: explicable). No guarda nada. */

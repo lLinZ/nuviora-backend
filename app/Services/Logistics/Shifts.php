@@ -62,6 +62,12 @@ class Shifts
             $items[] = ['tipo' => 'efectivo', 'texto' => 'Riders con efectivo sin entregar (USD ' . number_format(array_sum(array_column($holding, 'total_usd')), 2, ',', '.') . ')',
                 'total' => count($holding)];
         }
+        // §31.1: "Pagos de riders pendientes" (§18.5: el cierre diario de honorarios)
+        $unpaid = array_filter(app(RiderPay::class)->day($center, now()->toDateString())['riders'], fn ($r) => $r['pending'] >= 0.01);
+        if ($unpaid) {
+            $items[] = ['tipo' => 'pagos', 'texto' => 'Riders sin cobrar sus carreras de hoy (USD ' . number_format(array_sum(array_column($unpaid, 'pending')), 2, ',', '.') . ')',
+                'total' => count($unpaid)];
+        }
         $alerts = LogisticsAlert::where('center_id', $center->id)->whereNull('resolved_at')->count();
         if ($alerts > 0) {
             $items[] = ['tipo' => 'alertas', 'texto' => 'Alertas abiertas', 'total' => $alerts];
