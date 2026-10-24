@@ -94,7 +94,7 @@ class Tower
         $sla = in_array($r->status, [LogisticsStatus::RETURN_PENDING, LogisticsStatus::IN_REVIEW], true) ? null : $r->slaMinutes();
         $searching = $r->searching_started_at && $r->status === LogisticsStatus::SEARCHING
             ? (int) $r->searching_started_at->diffInSeconds(now()) : null;
-        $round = $r->rounds->sortByDesc('number')->first();
+        $round = $r->rounds->sortByDesc('id')->first(); // la última (una orden que vuelve a buscar empieza en R1 otra vez)
         $novelty = $r->novelties->sortByDesc('id')->first();
         $handed = $r->custody->contains(fn ($c) => $c->to_type === 'agencia');
         $returnDeadline = $r->status === LogisticsStatus::RETURN_PENDING && $r->center ? Returns::deadline($r, $r->center) : null;

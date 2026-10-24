@@ -59,13 +59,15 @@ class Dispatcher
         $settings = $this->settings->for($row->center);
         $now = now();
         $elapsed = (int) $row->searching_started_at->diffInSeconds($now);
-        $rounds = $row->rounds()->get()->keyBy('number');
+        // Solo las rondas de esta búsqueda: una orden que vuelve a buscar rider (reingreso, reemplazo) empieza en R1 otra vez
+        $cycle = fn () => $row->rounds()->where('started_at', '>=', $row->searching_started_at)->get()->keyBy('number');
+        $rounds = $cycle();
 
         // Las rondas que vencieron sin confirmación
         foreach ($rounds as $round) {
             if (!$round->ended_at && $now->gte($round->expires_at)) {
                 $this->closeRound($row, $round, 'sin_confirmar');
-                $rounds = $row->rounds()->get()->keyBy('number');
+                $rounds = $cycle();
             }
         }
         if ($row->fresh()->status !== LogisticsStatus::SEARCHING) {
@@ -116,7 +118,8 @@ class Dispatcher
 
         $created = DB::transaction(function () use ($row, $number, $chosen, $expiresAt) {
             $locked = LogisticsOrder::whereKey($row->id)->lockForUpdate()->first();
-            if ($locked->status !== LogisticsStatus::SEARCHING || $locked->rounds()->where('number', $number)->exists()) {
+            if ($locked->status !== LogisticsStatus::SEARCHING
+                || $locked->rounds()->where('number', $number)->where('started_at', '>=', $locked->searching_started_at)->exists()) {
                 return null;
             }
             $now = now();
