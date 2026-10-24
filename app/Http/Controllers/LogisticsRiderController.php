@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\Logistics\Candidates;
 use App\Services\Logistics\LogisticsSettings;
 use App\Services\Logistics\PushSender;
+use App\Services\Logistics\RiderCash;
 use App\Services\Logistics\RiderEta;
 use App\Services\Logistics\Shifts;
 use Illuminate\Http\Request;
@@ -22,7 +23,7 @@ use Illuminate\Support\Facades\Auth;
  */
 class LogisticsRiderController extends Controller
 {
-    public function __construct(private Shifts $shifts, private RiderEta $eta, private LogisticsSettings $settings)
+    public function __construct(private Shifts $shifts, private RiderEta $eta, private LogisticsSettings $settings, private RiderCash $cash)
     {
     }
 
@@ -96,19 +97,47 @@ class LogisticsRiderController extends Controller
         // §21.2 "rutas del día": las que salieron hoy con ese rider (hoy cada ruta es de una parada)
         $routesToday = LogisticsOrder::whereIn('rider_id', $profiles->pluck('user_id'))->whereDate('departed_at', now()->toDateString())
             ->selectRaw('rider_id, count(*) as total')->groupBy('rider_id')->pluck('total', 'rider_id');
+        // §21.2: "efectivo bajo custodia, retornos bajo custodia"
+        $cash = $this->cash->balances($profiles->pluck('user_id'));
+        $cashLimit = $this->cash->limit($center);
+        $returns = LogisticsOrder::where('status', LogisticsStatus::RETURN_PENDING)->whereIn('rider_id', $profiles->pluck('user_id'))
+            ->selectRaw('rider_id, count(*) as total')->groupBy('rider_id')->pluck('total', 'rider_id');
 
         return response()->json([
             'status' => true,
             'warning' => $warning,
+            'cash_limit_usd' => $cashLimit,
             'riders' => $profiles->map(fn (RiderProfile $p) => $this->present($p->fresh(['user', 'center'])) + [
                 'user' => $p->user?->only(['id', 'names', 'phone']),
                 'gps_ok' => $p->hasLocation() && $p->last_location_at->gte(now()->subSeconds($gpsMaxAge)),
                 'routes_today' => (int) ($routesToday[$p->user_id] ?? 0),
+                'cash' => $cash[$p->user_id],
+                'cash_over_limit' => $cashLimit > 0 && $cash[$p->user_id]['total_usd'] >= $cashLimit,
+                'returns_pending' => (int) ($returns[$p->user_id] ?? 0),
                 'current' => ($busy[$p->user_id] ?? collect())->map(fn (LogisticsOrder $r) => [
                     'logistics_order_id' => $r->id, 'order' => $r->order?->name, 'status' => $r->status, 'status_label' => LogisticsStatus::label($r->status),
                 ])->values(),
             ]),
         ]);
+    }
+
+    /**
+     * Operador: el rider le entrega el efectivo que cobró (§17 puntos 4 y 5). Lo esperado es su saldo; si lo recibido no
+     * cuadra, queda una incidencia de caja y la diferencia sigue en su saldo. POST { usd, ves, note? }
+     */
+    public function receiveCash(Request $request, LogisticsCenter $center, User $user)
+    {
+        $by = Auth::user();
+        if (!Shifts::isAdmin($by) && !$this->shifts->isOperatorOf($by, $center)) {
+            return response()->json(['status' => false, 'message' => 'No eres operador de este centro.'], 403);
+        }
+        if (!RiderProfile::where('user_id', $user->id)->where('center_id', $center->id)->exists()) {
+            return response()->json(['status' => false, 'message' => 'Ese rider no es de este centro.'], 422);
+        }
+        $data = $request->validate(['usd' => 'nullable|numeric|min:0|max:100000', 'ves' => 'nullable|numeric|min:0|max:1000000000', 'note' => 'nullable|string|max:250']);
+        $out = $this->cash->receive($center, $user->id, $by, (float) ($data['usd'] ?? 0), (float) ($data['ves'] ?? 0), $data['note'] ?? null);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message'], 'balance' => $out['balance'] ?? null], $out['code']);
     }
 
     /** Operador: a quién le llegaría la ronda de esta orden ahora, y por qué no a los demás (§7: explicable). No guarda nada. */

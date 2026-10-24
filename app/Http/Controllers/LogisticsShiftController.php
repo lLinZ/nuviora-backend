@@ -83,7 +83,7 @@ class LogisticsShiftController extends Controller
         return response()->json([
             'status' => true,
             'orders' => $rows,
-            'summary' => $tower->summary($rows),
+            'summary' => $tower->summary($rows, $center),
             'settings' => array_intersect_key($settings, array_flip(['sla_target_minutes', 'sla_limit_minutes', 'manual_calls_at_seconds', 'hard_cap_seconds', 'cash_limit_usd'])),
             'server_time' => now()->toIso8601String(),
         ]);

@@ -10,6 +10,7 @@ use App\Services\Logistics\Centers;
 use App\Services\Logistics\Departures;
 use App\Services\Logistics\LogisticsOrders;
 use App\Services\Logistics\Novelties;
+use App\Services\Logistics\RiderCash;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -64,6 +65,10 @@ class LogisticsOrderObserver
                 app(Departures::class)->custody($row, $order, $fromType, $fromId, 'cliente', $order->client_id, $actor);
             }
             $this->orders->transition($row, LogisticsStatus::DELIVERED, 'entregada', $actor, null, [], ['delivered_at' => now()]);
+            // §17: si cobró en efectivo, ese efectivo queda bajo su custodia
+            if ($row->rider_id && $row->departed_at) {
+                app(RiderCash::class)->recordDelivery($row, $order, $actor);
+            }
 
             return;
         }

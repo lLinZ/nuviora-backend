@@ -76,6 +76,12 @@ class Departures
                 return ['ok' => false, 'message' => "Primero recibe el retorno pendiente de este rider (orden {$pendingReturn->order?->name}): "
                     . 'no puede salir con paquetes nuevos sin entregarlo (§16.1).', 'code' => 409];
             }
+            // §17 punto 2 y §6.1: con USD 60 o más, entrega el efectivo antes de llevarse otra ruta
+            $cash = app(RiderCash::class);
+            if ($row->center && $cash->overLimit((int) $row->rider_id, $row->center)) {
+                return ['ok' => false, 'message' => 'Primero recibe el efectivo del rider: lleva USD ' . number_format($cash->balance((int) $row->rider_id)['total_usd'], 2, ',', '.')
+                    . ' y el tope es USD ' . number_format($cash->limit($row->center), 0) . ' (§17).', 'code' => 409];
+            }
             $order = Order::whereKey($row->order_id)->lockForUpdate()->first();
             if (!$order->isStockDeducted()) {
                 return ['ok' => false, 'message' => 'La orden no tiene su producto apartado en el centro: no puede salir (§16.2).', 'code' => 422];

@@ -13,6 +13,7 @@ use App\Services\Logistics\Candidates;
 use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\LogisticsSettings;
 use App\Services\Logistics\Novelties;
+use App\Services\Logistics\RiderCash;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -48,6 +49,11 @@ class RiderAppController extends Controller
             ] : null,
             'location' => ['every_seconds' => self::LOCATION_EVERY_SECONDS, 'every_meters' => self::LOCATION_EVERY_METERS],
             'gps_max_age_seconds' => app(LogisticsSettings::class)->for($center)['gps_max_age_seconds'],
+            // §22.4: "Mostrar efectivo bajo custodia… Mostrar obligación de regresar si alcanza USD 60"
+            'cash' => app(RiderCash::class)->balance($profile->user_id) + [
+                'limit_usd' => $center ? app(RiderCash::class)->limit($center) : null,
+                'over_limit' => $center && app(RiderCash::class)->overLimit($profile->user_id, $center),
+            ],
         ]);
     }
 

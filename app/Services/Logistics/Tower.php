@@ -3,9 +3,11 @@
 namespace App\Services\Logistics;
 
 use App\Constants\LogisticsStatus;
+use App\Models\LogisticsAlert;
 use App\Models\LogisticsCenter;
 use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
+use App\Models\RiderProfile;
 
 /**
  * La torre de control del operador (logística propia, §21): las órdenes del centro con su reloj, lo que le toca hacer
@@ -64,11 +66,17 @@ class Tower
     }
 
     /** §21.1, con lo que ya existe. */
-    public function summary(array $rows): array
+    public function summary(array $rows, ?LogisticsCenter $center = null): array
     {
         $count = fn (array $statuses) => count(array_filter($rows, fn ($r) => in_array($r['status'], $statuses, true)));
+        $cash = app(RiderCash::class);
+        $balances = $center ? $cash->balances(RiderProfile::where('center_id', $center->id)->pluck('user_id')) : [];
+        $limit = $center ? $cash->limit($center) : 0;
 
         return [
+            // §21.1: "Riders con efectivo ≥ USD 60" y "Diferencias de caja… pendientes"
+            'efectivo_limite' => $limit > 0 ? count(array_filter($balances, fn ($b) => $b['total_usd'] >= $limit)) : 0,
+            'diferencias' => $center ? LogisticsAlert::where('center_id', $center->id)->where('type', 'caja_diferencia')->whereNull('resolved_at')->count() : 0,
             'sin_rider' => $count(LogisticsStatus::UNASSIGNED),
             'preparando_listos' => $count([LogisticsStatus::RIDER_CONFIRMED, LogisticsStatus::PREPARING, LogisticsStatus::READY]),
             'rutas_activas' => count(array_unique(array_filter(array_map(

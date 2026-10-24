@@ -55,6 +55,13 @@ class Shifts
         foreach ($byStatus as $status => $total) {
             $items[] = ['tipo' => 'ordenes', 'estado' => $status, 'texto' => LogisticsStatus::label($status), 'total' => (int) $total];
         }
+        // §31.1: "Efectivo esperado vs recibido por rider" (§17 punto 6: al cierre, todos en USD 0)
+        $holding = array_filter(app(RiderCash::class)->balances(\App\Models\RiderProfile::where('center_id', $center->id)->pluck('user_id')),
+            fn ($b) => abs($b['usd']) >= 0.01 || abs($b['ves']) >= 0.01);
+        if ($holding) {
+            $items[] = ['tipo' => 'efectivo', 'texto' => 'Riders con efectivo sin entregar (USD ' . number_format(array_sum(array_column($holding, 'total_usd')), 2, ',', '.') . ')',
+                'total' => count($holding)];
+        }
         $alerts = LogisticsAlert::where('center_id', $center->id)->whereNull('resolved_at')->count();
         if ($alerts > 0) {
             $items[] = ['tipo' => 'alertas', 'texto' => 'Alertas abiertas', 'total' => $alerts];

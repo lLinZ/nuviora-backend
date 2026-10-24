@@ -10,6 +10,7 @@ use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\LogisticsOrders;
 use App\Services\Logistics\MorningCheck;
 use App\Services\Logistics\Returns;
+use App\Services\Logistics\RiderCash;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 
@@ -20,7 +21,8 @@ use Illuminate\Support\Facades\Cache;
  * - las órdenes que esperaban ventana se sueltan cuando el centro ya puede (§4.2 punto 5);
  * - las rondas de las órdenes que buscan rider: R1, R2, el minuto 3 y el paso a la agencia en el minuto 5 (§8, R4);
  * - el chequeo de la mañana de los riders (§6), una vez por día;
- * - los retornos que vencieron el plazo (§16.1, R7): alerta al operador.
+ * - los retornos que vencieron el plazo (§16.1, R7): alerta al operador;
+ * - los riders con USD 60 o más en efectivo: la alerta sigue abierta hasta que entreguen (§17, §25).
  * Con --loop corre sin parar bajo supervisor, una pasada cada 2 s (las rondas son de 90 s y el scheduler va de minuto en
  * minuto); sin --loop hace una sola. Dos pasadas nunca corren a la vez.
  */
@@ -71,6 +73,7 @@ class LogisticsTick extends Command
             // §6: el chequeo de la mañana, una vez por día
             app(MorningCheck::class)->runIfDue($center);
             app(Returns::class)->checkOverdue($center);
+            app(RiderCash::class)->checkCenter($center);
         }
     }
 }
