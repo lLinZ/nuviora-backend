@@ -23,7 +23,7 @@ class LogisticsSettings
         'sla_target_minutes' => 45,          // §1.1, §31
         'sla_limit_minutes' => 55,           // §1.1: límite de planificación de la flota propia
         'round1_seconds' => 90,              // §8
-        'round1_candidates' => 2,
+        'round1_candidates' => 2,            // mínimo: la R1 va a todos los que llegan en 45 min (Fran, 23/10)
         'round2_seconds' => 90,
         'round2_new_candidates' => 2,        // §8: R2 = los de R1 + hasta 2 nuevos
         'manual_calls_at_seconds' => 180,    // §8: T=3:00, alerta roja y llamadas

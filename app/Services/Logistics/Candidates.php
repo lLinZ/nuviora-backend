@@ -52,6 +52,7 @@ class Candidates
         $center = $row->center()->with('warehouse')->first();
         $settings = $this->settings->for($center, $at);
         $limitSeconds = (int) $settings['sla_limit_minutes'] * 60;
+        $targetSeconds = (int) $settings['sla_target_minutes'] * 60;
         $pickingSeconds = (int) ($settings['picking_minutes'] ?? 0) * 60;
         $gpsMaxAge = (int) $settings['gps_max_age_seconds'];
         $consumed = $row->sla_started_at ? max(0, (int) $row->sla_started_at->diffInSeconds($at)) : 0;
@@ -112,6 +113,8 @@ class Candidates
                 'consumed_seconds' => $consumed,
                 'picking_seconds' => $pickingSeconds,
                 'projected_minutes' => round($projected / 60, 1),
+                // Llega dentro del objetivo (45 min): la R1 va a todos estos (audio de Fran del 23/10)
+                'within_target' => $projected <= $targetSeconds,
                 'delivered_today' => (int) ($deliveredToday[$p->user_id] ?? 0),
                 'gps_age_seconds' => (int) $p->last_location_at->diffInSeconds($at),
             ];
@@ -144,7 +147,7 @@ class Candidates
     public function record(LogisticsOrder $row, array $result, ?int $actorId = null, string $action = 'candidatos'): void
     {
         app(LogisticsOrders::class)->event($row, $action, $row->status, $row->status, $actorId, $result['warning'], [
-            'elegibles' => array_map(fn ($l) => array_intersect_key($l, array_flip(['rider_id', 'name', 'rank', 'eta_center_seconds', 'projected_minutes', 'delivered_today'])), $result['eligible']),
+            'elegibles' => array_map(fn ($l) => array_intersect_key($l, array_flip(['rider_id', 'name', 'rank', 'eta_center_seconds', 'projected_minutes', 'within_target', 'delivered_today'])), $result['eligible']),
             'descartados' => array_map(fn ($l) => array_intersect_key($l, array_flip(['rider_id', 'name', 'reason', 'projected_minutes'])), $result['excluded']),
             'consumido_s' => $result['consumed_seconds'],
             'centro_cliente_s' => $result['center_client']['seconds'] ?? null,

@@ -18,7 +18,8 @@ use Illuminate\Support\Facades\Log;
 /**
  * Las rondas de asignación de una orden (§8, §19, §24; Fran R4). Con T contado desde que la orden entró a "Buscando
  * rider" (§8: "T=0:00"):
- * - R1 (0:00–1:30): a los 2 mejores elegibles (§7);
+ * - R1 (0:00–1:30): a todos los elegibles que llegan dentro de los 45 min, y como mínimo a los 2 mejores (§7; audio de
+ *   Fran del 23/10: "el sistema se lo envía a todos los riders que puedan cumplir con el tiempo");
  * - R2 (1:30–3:00): otra vez a los de R1 que siguen elegibles, más hasta 2 nuevos (§8, §8.3);
  * - T=3:00: alerta roja al operador para las llamadas (§8, §25); puede asignar a mano en cualquier momento (§8.4);
  * - T=5:00: pasa sola a la agencia de respaldo (R4: "que pase sola a Rapi2"); el operador puede pasarla antes (§19.1).
@@ -97,7 +98,9 @@ class Dispatcher
         $result = $this->candidates->for($row);
         $eligible = collect($result['eligible']);
         if ($number === 1) {
-            $chosen = $eligible->take((int) $settings['round1_candidates']);
+            // Los que llegan en 45 min son los primeros de la lista: para una misma orden, el tiempo proyectado solo
+            // cambia con el ETA al centro, que es el orden de la lista. Si son menos de N, se completa con los siguientes
+            $chosen = $eligible->take(max($eligible->where('within_target', true)->count(), (int) $settings['round1_candidates']));
         } else {
             // §8.3: los de R1 vuelven a recibirla (si siguen elegibles), más hasta N nuevos
             $before = $previous->offers()->pluck('rider_id')->map(fn ($id) => (int) $id)->all();
@@ -170,19 +173,28 @@ class Dispatcher
 
     private function closeRound(LogisticsOrder $row, DispatchRound $round, string $result): void
     {
-        DB::transaction(function () use ($row, $round, $result) {
+        $open = DB::transaction(function () use ($row, $round, $result) {
             // Siempre la orden primero, como confirm(): así un cierre y una confirmación al mismo tiempo no se traban
             LogisticsOrder::whereKey($row->id)->lockForUpdate()->first();
             $round = DispatchRound::whereKey($round->id)->lockForUpdate()->first();
             if ($round->ended_at) {
-                return;
+                return collect();
             }
+            $open = $round->offers()->whereNull('response')->get(['id', 'rider_id']);
             $round->offers()->whereNull('response')->update(['response' => $result === 'sin_confirmar' ? DispatchOffer::UNCONFIRMED : DispatchOffer::CANCELLED]);
             $round->update(['ended_at' => now(), 'result' => $result]);
             // §8: "registrar para cada uno 'No aceptó R1 / sin confirmación en ventana'"
             $this->orders->event($row, "ronda_{$round->number}_fin", $row->status, $row->status, null, $result,
                 ['sin_confirmar' => $round->offers()->where('response', DispatchOffer::UNCONFIRMED)->pluck('rider_id')->all()]);
+
+            return $open;
         });
+        // El tono de la app dura 90 s: si la ronda vence antes, se apaga en el teléfono (audio de Fran del 23/10)
+        foreach ($open as $offer) {
+            if ($profile = RiderProfile::where('user_id', $offer->rider_id)->first()) {
+                $this->push->send($profile, ['type' => 'vencida', 'offer_id' => $offer->id], 60);
+            }
+        }
     }
 
     /**
