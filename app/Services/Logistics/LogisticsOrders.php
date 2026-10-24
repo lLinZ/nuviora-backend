@@ -63,6 +63,7 @@ class LogisticsOrders
                 'ready_at' => null,
                 'departed_at' => null,
                 'delivered_at' => null,
+                'return_pending_at' => null,
                 'returned_at' => null,
                 'review_resolved_at' => null,
                 'closed_at' => null,

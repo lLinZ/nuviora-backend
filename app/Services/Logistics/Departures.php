@@ -69,6 +69,13 @@ class Departures
             if (!in_array($row->status, self::DEPARTABLE, true) || !$row->rider_id) {
                 return $this->refuse($row, 'confirmar la salida');
             }
+            // §16.1 punto 3: "debe entregar primero el retorno pendiente antes de recibir nuevos paquetes"
+            $pendingReturn = LogisticsOrder::with('order:id,name')->where('rider_id', $row->rider_id)
+                ->where('status', LogisticsStatus::RETURN_PENDING)->first();
+            if ($pendingReturn) {
+                return ['ok' => false, 'message' => "Primero recibe el retorno pendiente de este rider (orden {$pendingReturn->order?->name}): "
+                    . 'no puede salir con paquetes nuevos sin entregarlo (§16.1).', 'code' => 409];
+            }
             $order = Order::whereKey($row->order_id)->lockForUpdate()->first();
             if (!$order->isStockDeducted()) {
                 return ['ok' => false, 'message' => 'La orden no tiene su producto apartado en el centro: no puede salir (§16.2).', 'code' => 422];

@@ -8,6 +8,7 @@ use App\Models\LogisticsOrder;
 use App\Services\Logistics\Departures;
 use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\Novelties;
+use App\Services\Logistics\Returns;
 use App\Services\Logistics\Shifts;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -90,6 +91,24 @@ class LogisticsDispatchController extends Controller
         $this->authorizeCenter($logisticsOrder);
 
         return $this->reply($departures->handToAgency($logisticsOrder, Auth::user()));
+    }
+
+    /** §16.1 punto 4: el operador recibe físicamente el retorno del rider. */
+    public function receiveReturn(Request $request, LogisticsOrder $logisticsOrder, Returns $returns)
+    {
+        $this->authorizeCenter($logisticsOrder);
+        $data = $request->validate(['note' => 'nullable|string|max:250']);
+
+        return $this->reply($returns->receive($logisticsOrder, Auth::user(), $data['note'] ?? null));
+    }
+
+    /** §16.1 punto 7: administración reingresa la pieza a disponible o la da de baja. */
+    public function resolveReturn(Request $request, LogisticsOrder $logisticsOrder, Returns $returns)
+    {
+        $this->authorizeCenter($logisticsOrder);
+        $data = $request->validate(['action' => 'required|in:restock,discard', 'note' => 'nullable|string|max:250']);
+
+        return $this->reply($returns->resolveReview($logisticsOrder, Auth::user(), $data['action'], $data['note'] ?? null));
     }
 
     public function commentNovelty(Request $request, LogisticsNovelty $novelty, Novelties $novelties)

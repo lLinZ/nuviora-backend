@@ -43,6 +43,9 @@ class LogisticsStatus
     /** Ya no se mueve en la torre de control. */
     public const FINISHED = [self::DELIVERED, self::CLOSED];
 
+    /** La pieza salió del centro con el rider y no se entregó (con `departed_at`): sigue bajo su custodia (§16.2.1). */
+    public const WITH_RIDER = [self::EN_ROUTE, self::INCIDENT, self::RETURN_PENDING];
+
     public static function label(?string $status): string
     {
         return self::LABELS[$status] ?? (string) $status;

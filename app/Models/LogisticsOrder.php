@@ -16,7 +16,7 @@ class LogisticsOrder extends Model
         'order_id', 'center_id', 'status', 'rider_id', 'agency_id', 'overflow_reason',
         'center_client_seconds', 'center_client_meters', 'center_client_at', 'assigned_via', 'assigned_by', 'assignment_note',
         'released_at', 'sla_started_at', 'searching_started_at', 'rider_confirmed_at', 'ready_at',
-        'departed_at', 'delivered_at', 'returned_at', 'review_resolved_at', 'closed_at',
+        'departed_at', 'delivered_at', 'return_pending_at', 'returned_at', 'review_resolved_at', 'closed_at',
     ];
 
     protected $casts = [
@@ -27,6 +27,7 @@ class LogisticsOrder extends Model
         'ready_at' => 'datetime',
         'departed_at' => 'datetime',
         'delivered_at' => 'datetime',
+        'return_pending_at' => 'datetime',
         'returned_at' => 'datetime',
         'review_resolved_at' => 'datetime',
         'closed_at' => 'datetime',

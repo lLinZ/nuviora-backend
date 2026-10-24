@@ -2,9 +2,12 @@
 
 namespace App\Services\Inventory;
 
+use App\Constants\LogisticsStatus;
 use App\Constants\OrderStatus;
+use App\Http\Controllers\DefectiveStockController;
 use App\Models\Inventory;
 use App\Models\InventoryMovement;
+use App\Models\LogisticsOrder;
 use App\Models\Order;
 use App\Models\OrderActivityLog;
 use App\Models\Product;
@@ -40,6 +43,11 @@ class OrderStock
      */
     public function sync(Order $order): array
     {
+        // Logística propia (§16.1, §16.2.2): con la pieza fuera, en manos del rider, el stock no se mueve. Vuelve cuando
+        // el operador recibe el retorno (Returns::receive), no cuando la orden cambia de estado
+        if ($this->withRider($order)) {
+            return [];
+        }
         $status = Status::whereKey($order->status_id)->value('description');
         $held = $this->held($order);
 
@@ -139,6 +147,58 @@ class OrderStock
         }
 
         return $count;
+    }
+
+    /**
+     * Logística propia (§16.1 puntos 4 a 7, §16.2.2 puntos 7 y 8; R5): el retorno de una orden cancelada o rechazada llega
+     * al centro y queda EN REVISIÓN (defective_stock): está físicamente, pero no se vende hasta que administración lo
+     * apruebe. Son dos movimientos, como los que ya lee la contabilidad de lotes: el reingreso de la orden (vuelve a su
+     * lote, con su costo, y la orden queda sin stock) y el "Pasa a revisión" (ReviewIntake: de disponible a revisión).
+     *
+     * @return array<int, array{warehouse_id:int, product_id:int, variant_id:?int, quantity:int}>
+     */
+    public function returnToReview(Order $order, string $why): array
+    {
+        $held = $this->held($order)->filter(fn ($h) => $h['quantity'] > 0)->values()->all();
+        if (!$held) {
+            return [];
+        }
+        DB::transaction(function () use ($order, $held, $why) {
+            foreach ($held as $h) {
+                $this->move($order, ['type' => 'in'] + $h, $why);
+                $inv = $this->lockedInventory($h['warehouse_id'], $h['product_id']);
+                DB::table('inventories')->where('id', $inv->id)->update(['defective_stock' => $inv->defective_stock + $h['quantity'], 'updated_at' => now()]);
+                if ($h['variant_id']) {
+                    $this->variants->add($h['warehouse_id'], $h['product_id'], $h['variant_id'], 0, $h['quantity']);
+                }
+                $size = $h['variant_id'] ? ProductVariant::whereKey($h['variant_id'])->value('title') : null;
+                InventoryMovement::create([
+                    'product_id' => $h['product_id'],
+                    'variant_id' => $h['variant_id'],
+                    'size' => $size,
+                    'from_warehouse_id' => null,
+                    'to_warehouse_id' => $h['warehouse_id'],
+                    'quantity' => $h['quantity'],
+                    'movement_type' => 'adjustment',
+                    'status' => 'completed',
+                    'reference_type' => DefectiveStockController::INTAKE_REFERENCE,
+                    'user_id' => Auth::id(),
+                    // El total no cambia: "(Old/New)" con la misma cantidad, como lo lee inventory:audit
+                    'notes' => "Pasa a revisión: {$h['quantity']} pieza(s). Motivo: retorno del rider por la orden {$order->number_label} ({$why})."
+                        . " (Old: {$inv->quantity}, New: {$inv->quantity})",
+                ]);
+            }
+        });
+        $total = array_sum(array_column($held, 'quantity'));
+        $this->activity($order, "Stock: volvieron {$total} pieza(s) al centro como retorno ({$why}); quedan en revisión.", ['stock_moves' => $held]);
+
+        return $held;
+    }
+
+    private function withRider(Order $order): bool
+    {
+        return LogisticsOrder::where('order_id', $order->id)->whereNotNull('departed_at')->whereNotNull('rider_id')
+            ->whereIn('status', LogisticsStatus::WITH_RIDER)->exists();
     }
 
     /**

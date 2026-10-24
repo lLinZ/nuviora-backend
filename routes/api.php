@@ -793,6 +793,8 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/orders/{logisticsOrder}/ready', [\App\Http\Controllers\LogisticsDispatchController::class, 'ready']);
         Route::post('/orders/{logisticsOrder}/depart', [\App\Http\Controllers\LogisticsDispatchController::class, 'depart']);
         Route::post('/orders/{logisticsOrder}/hand-to-agency', [\App\Http\Controllers\LogisticsDispatchController::class, 'handToAgency']);
+        Route::post('/orders/{logisticsOrder}/receive-return', [\App\Http\Controllers\LogisticsDispatchController::class, 'receiveReturn']);
+        Route::post('/orders/{logisticsOrder}/review', [\App\Http\Controllers\LogisticsDispatchController::class, 'resolveReturn']);
         Route::post('/novelties/{novelty}/comment', [\App\Http\Controllers\LogisticsDispatchController::class, 'commentNovelty']);
         Route::post('/novelties/{novelty}/resolve', [\App\Http\Controllers\LogisticsDispatchController::class, 'resolveNovelty']);
         Route::post('/novelties/{novelty}/escalate', [\App\Http\Controllers\LogisticsDispatchController::class, 'escalateNovelty']);

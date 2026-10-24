@@ -185,13 +185,15 @@ class RiderAppController extends Controller
     public function assignment(TariffBook $tariffs)
     {
         $profile = $this->profile();
+        // También sus retornos pendientes: tiene que devolver la pieza al centro (§16.1)
         $rows = LogisticsOrder::with(['center.warehouse', 'order.client', 'order.payments'])
-            ->where('rider_id', $profile->user_id)->whereIn('status', Candidates::BUSY)->orderBy('id')->get();
+            ->where('rider_id', $profile->user_id)->whereIn('status', [...Candidates::BUSY, LogisticsStatus::RETURN_PENDING])->orderBy('id')->get();
 
         return response()->json([
             'status' => true,
             'assignments' => $rows->map(function (LogisticsOrder $row) use ($tariffs, $profile) {
                 $order = $row->order;
+                $returning = $row->status === LogisticsStatus::RETURN_PENDING;
                 $client = $order?->client;
                 $tariff = $row->center ? $tariffs->find((int) $profile->user_id, (int) $row->center->city_id, now(config('app.timezone'))->toDateString()) : null;
                 $quote = $tariff && $row->center_client_meters !== null ? $tariffs->quote($tariff, (int) $row->center_client_meters) : null;
@@ -217,7 +219,8 @@ class RiderAppController extends Controller
                         'payments' => $order?->payments->map(fn ($p) => ['method' => $p->method, 'amount' => (float) $p->amount])->values(),
                         'courier_shipment' => (bool) $order?->courier_shipment,
                     ],
-                    'client' => [
+                    // Un retorno ya no va al cliente: no se le muestran sus datos
+                    'client' => $returning ? null : [
                         'name' => trim(($client?->first_name ?? '') . ' ' . ($client?->last_name ?? '')),
                         'phone' => $client?->phone,
                         'address' => $client?->address1,
@@ -225,7 +228,7 @@ class RiderAppController extends Controller
                         'latitude' => $order?->location_lat,
                         'longitude' => $order?->location_lng,
                     ],
-                    'estimated_pay' => $quote ? (float) $quote['price'] : null,
+                    'estimated_pay' => $quote && !$returning ? (float) $quote['price'] : null,
                     'open_novelty' => LogisticsNovelty::where('logistics_order_id', $row->id)->whereNull('resolved_at')->latest('id')->first()?->only(['id', 'type', 'description', 'owner', 'opened_at', 'escalated_at']),
                 ];
             }),
@@ -259,6 +262,7 @@ class RiderAppController extends Controller
         LogisticsStatus::READY => 'El paquete está listo: recógelo en el centro.',
         LogisticsStatus::EN_ROUTE => 'Lleva el paquete al cliente y marca "Entregado" con la foto del comprobante.',
         LogisticsStatus::INCIDENT => 'Novedad abierta: espera las instrucciones del operador.',
+        LogisticsStatus::RETURN_PENDING => 'No se entregó: devuelve el producto al centro hoy. Si vas a recoger otra orden, entrégalo primero.',
     ];
 
     private function profile(): RiderProfile

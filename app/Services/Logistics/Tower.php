@@ -16,19 +16,22 @@ class Tower
 {
     /**
      * §21.3: "ruta interrumpida > SLA crítico > novedad con rider esperando > efectivo sobre límite > pedido sin rider
-     * cerca del minuto 5 > retorno vencido > tareas normales de picking". Los puestos 1, 4 y 6 llegan con las incidencias
-     * (§14), la caja (§17) y los retornos (§16); por eso faltan. "Buscando rider" antes de la alerta del minuto 3 va al
-     * final: las rondas corren solas y el operador todavía no tiene que hacer nada.
+     * cerca del minuto 5 > retorno vencido > tareas normales de picking". Los puestos 1 y 4 llegan con las incidencias
+     * (§14) y la caja (§17); por eso faltan. "Buscando rider" antes de la alerta del minuto 3 va al final: las rondas
+     * corren solas y el operador todavía no tiene que hacer nada. Lo que está en revisión lo decide administración.
      */
     public const PRIORITY = [
         'sla_vencido' => [2, 'SLA vencido'],
         'novedad' => [3, 'Novedad: el rider espera'],
         'sin_rider' => [5, 'Sin rider: llamar y asignar a mano'],
+        'retorno_vencido' => [6, 'Retorno vencido: pedir que lo traigan'],
         'preparar' => [7, 'Preparar el paquete'],
         'marcar_listo' => [7, 'Marcar listo para despacho'],
         'confirmar_salida' => [7, 'Confirmar salida cuando llegue el rider'],
         'entregar_agencia' => [7, 'Entregar el paquete a la agencia'],
+        'recibir_retorno' => [7, 'Recibir el retorno cuando llegue el rider'],
         'buscando' => [8, 'Buscando rider (rondas en curso)'],
+        'revision' => [9, 'En revisión: decide administración'],
     ];
 
     public function __construct(private LogisticsSettings $settings)
@@ -40,7 +43,8 @@ class Tower
     {
         $settings = $this->settings->for($center);
         $rows = LogisticsOrder::with([
-            'order:id,name,order_number,current_total_price,client_id,status_id,location',
+            'order:id,name,order_number,current_total_price,client_id,status_id,location,is_return',
+            'center',
             'order.client:id,first_name,last_name,phone,address1',
             'order.status:id,description',
             'rider:id,names,phone',
@@ -78,13 +82,16 @@ class Tower
 
     public function row(LogisticsOrder $r, array $settings): array
     {
-        $sla = $r->slaMinutes();
+        // Un retorno o una pieza en revisión ya no se entregan: su SLA no se muestra ni cuenta como riesgo
+        $sla = in_array($r->status, [LogisticsStatus::RETURN_PENDING, LogisticsStatus::IN_REVIEW], true) ? null : $r->slaMinutes();
         $searching = $r->searching_started_at && $r->status === LogisticsStatus::SEARCHING
             ? (int) $r->searching_started_at->diffInSeconds(now()) : null;
         $round = $r->rounds->sortByDesc('number')->first();
         $novelty = $r->novelties->sortByDesc('id')->first();
         $handed = $r->custody->contains(fn ($c) => $c->to_type === 'agencia');
-        $key = $this->priorityKey($r, $sla, $searching, $novelty, $handed, $settings);
+        $returnDeadline = $r->status === LogisticsStatus::RETURN_PENDING && $r->center ? Returns::deadline($r, $r->center) : null;
+        $returnOverdue = $returnDeadline !== null && now()->gt($returnDeadline);
+        $key = $this->priorityKey($r, $sla, $searching, $novelty, $handed, $returnOverdue, $settings);
 
         return $r->toArray() + [
             'status_label' => LogisticsStatus::label($r->status),
@@ -96,6 +103,11 @@ class Tower
             'round' => $round && !$round->ended_at ? ['number' => $round->number, 'expires_at' => $round->expires_at] : null,
             'ready' => $r->ready_at !== null,
             'handed_to_agency' => $handed,
+            'return_deadline' => $returnDeadline,
+            'return_overdue' => $returnOverdue,
+            // Lo que pasa al recibirlo: apartada para la misma orden (R5) o a revisión (§16.1)
+            'return_to_review' => $r->status === LogisticsStatus::RETURN_PENDING && $r->order
+                ? !Returns::keepsPiece($r->order, (string) $r->order->status?->description) : null,
             'open_novelty' => $novelty ? [
                 'id' => $novelty->id,
                 'type' => $novelty->type,
@@ -127,8 +139,16 @@ class Tower
         };
     }
 
-    private function priorityKey(LogisticsOrder $r, ?float $sla, ?int $searching, ?LogisticsNovelty $novelty, bool $handed, array $settings): ?string
+    private function priorityKey(LogisticsOrder $r, ?float $sla, ?int $searching, ?LogisticsNovelty $novelty, bool $handed,
+        bool $returnOverdue, array $settings): ?string
     {
+        // Un retorno o una pieza en revisión ya no se entregan: el SLA no cuenta
+        if ($r->status === LogisticsStatus::RETURN_PENDING) {
+            return $returnOverdue ? 'retorno_vencido' : 'recibir_retorno';
+        }
+        if ($r->status === LogisticsStatus::IN_REVIEW) {
+            return 'revision';
+        }
         $open = !in_array($r->status, [...LogisticsStatus::FINISHED, LogisticsStatus::PENDING_WINDOW], true);
         if ($open && self::slaLevel($sla, $settings) === 'vencido') {
             return 'sla_vencido';

@@ -85,7 +85,14 @@ class LogisticsOrderObserver
 
         // Cualquier otro estado la saca del flujo logístico
         if ($row->departed_at && $row->status !== LogisticsStatus::AGENCY) {
-            $this->orders->transition($row, LogisticsStatus::RETURN_PENDING, 'retorno_pendiente', $actor, "La orden pasó a \"{$status}\" con la pieza fuera del almacén.");
+            // Ya era un retorno (por ejemplo, reprogramada y después cancelada): el plazo no vuelve a empezar
+            if ($row->status === LogisticsStatus::RETURN_PENDING) {
+                $this->orders->event($row, 'retorno_pendiente', $row->status, $row->status, $actor, "La orden pasó a \"{$status}\"; la pieza sigue fuera.");
+
+                return;
+            }
+            $this->orders->transition($row, LogisticsStatus::RETURN_PENDING, 'retorno_pendiente', $actor, "La orden pasó a \"{$status}\" con la pieza fuera del almacén.",
+                [], ['return_pending_at' => now()]);
 
             return;
         }
