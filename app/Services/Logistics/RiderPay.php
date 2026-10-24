@@ -4,6 +4,7 @@ namespace App\Services\Logistics;
 
 use App\Models\Earning;
 use App\Models\LogisticsCenter;
+use App\Models\LogisticsIncident;
 use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
 use App\Models\Order;
@@ -48,7 +49,8 @@ class RiderPay
             return null;
         }
         $novelty = LogisticsNovelty::where('logistics_order_id', $row->id)->where('reported_by', $row->rider_id)->latest('id')->first();
-        if (!$novelty) {
+        // §14: "si una avería, accidente… impide completar un tramo, ese tramo incompleto NO se paga"
+        if (!$novelty || LogisticsIncident::where('logistics_order_id', $row->id)->where('rider_id', $row->rider_id)->exists()) {
             return null;
         }
         $date = now()->toDateString();

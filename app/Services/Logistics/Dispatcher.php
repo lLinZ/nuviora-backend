@@ -75,6 +75,14 @@ class Dispatcher
         }
 
         if ($elapsed >= (int) $settings['hard_cap_seconds']) {
+            // §14: si el paquete sigue con el rider que tuvo la incidencia, la agencia no lo puede recoger en el centro (§19)
+            if ($row->pickup_rider_id) {
+                $this->alerts->raise($row->center, 'sin_reemplazo', LogisticsAlert::RED,
+                    "{$this->label($row)}: nadie tomó el reemplazo y el paquete sigue con el rider de la incidencia. Asígnalo a mano o pide que lo traiga al centro.",
+                    "ronda:{$row->id}:sin_reemplazo", $row->order_id);
+
+                return;
+            }
             $this->toAgency($row, null, 'minuto_5', 'Sin rider propio confirmado a los ' . round($settings['hard_cap_seconds'] / 60) . ' minutos (§8, R4).');
 
             return;

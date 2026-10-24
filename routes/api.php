@@ -798,6 +798,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/orders/{logisticsOrder}/hand-to-agency', [\App\Http\Controllers\LogisticsDispatchController::class, 'handToAgency']);
         Route::post('/orders/{logisticsOrder}/receive-return', [\App\Http\Controllers\LogisticsDispatchController::class, 'receiveReturn']);
         Route::post('/orders/{logisticsOrder}/review', [\App\Http\Controllers\LogisticsDispatchController::class, 'resolveReturn']);
+        Route::post('/orders/{logisticsOrder}/transfer', [\App\Http\Controllers\LogisticsDispatchController::class, 'transfer']);
+        Route::post('/incidents/{incident}/continue', [\App\Http\Controllers\LogisticsDispatchController::class, 'incidentContinue']);
+        Route::post('/incidents/{incident}/interrupt', [\App\Http\Controllers\LogisticsDispatchController::class, 'incidentInterrupt']);
         Route::post('/novelties/{novelty}/comment', [\App\Http\Controllers\LogisticsDispatchController::class, 'commentNovelty']);
         Route::post('/novelties/{novelty}/resolve', [\App\Http\Controllers\LogisticsDispatchController::class, 'resolveNovelty']);
         Route::post('/novelties/{novelty}/escalate', [\App\Http\Controllers\LogisticsDispatchController::class, 'escalateNovelty']);
@@ -813,6 +816,9 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::get('/assignment', [\App\Http\Controllers\RiderAppController::class, 'assignment']);
         Route::get('/novelty-types', [\App\Http\Controllers\RiderAppController::class, 'noveltyTypes']);
         Route::post('/assignment/{logisticsOrder}/novelty', [\App\Http\Controllers\RiderAppController::class, 'novelty']);
+        Route::get('/incident-types', [\App\Http\Controllers\RiderAppController::class, 'incidentTypes']);
+        Route::post('/assignment/{logisticsOrder}/incident', [\App\Http\Controllers\RiderAppController::class, 'incident']);
+        Route::post('/assignment/{logisticsOrder}/transfer', [\App\Http\Controllers\RiderAppController::class, 'transfer']);
     });
 });
 

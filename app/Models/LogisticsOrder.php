@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Model;
 class LogisticsOrder extends Model
 {
     protected $fillable = [
-        'order_id', 'center_id', 'status', 'rider_id', 'agency_id', 'overflow_reason',
+        'order_id', 'center_id', 'status', 'rider_id', 'pickup_rider_id', 'agency_id', 'overflow_reason',
         'center_client_seconds', 'center_client_meters', 'center_client_at', 'assigned_via', 'assigned_by', 'assignment_note',
         'released_at', 'sla_started_at', 'searching_started_at', 'rider_confirmed_at', 'ready_at',
         'departed_at', 'delivered_at', 'return_pending_at', 'returned_at', 'review_resolved_at', 'closed_at',
@@ -77,6 +77,17 @@ class LogisticsOrder extends Model
     public function events()
     {
         return $this->hasMany(LogisticsOrderEvent::class)->orderBy('id');
+    }
+
+    /** El rider que todavía tiene el paquete mientras se busca reemplazo (§14.2 punto 5). */
+    public function pickupRider()
+    {
+        return $this->belongsTo(User::class, 'pickup_rider_id');
+    }
+
+    public function incidents()
+    {
+        return $this->hasMany(LogisticsIncident::class);
     }
 
     public function isFinished(): bool

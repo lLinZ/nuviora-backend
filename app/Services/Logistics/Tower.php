@@ -5,6 +5,7 @@ namespace App\Services\Logistics;
 use App\Constants\LogisticsStatus;
 use App\Models\LogisticsAlert;
 use App\Models\LogisticsCenter;
+use App\Models\LogisticsIncident;
 use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
 use App\Models\RiderProfile;
@@ -18,11 +19,12 @@ class Tower
 {
     /**
      * §21.3: "ruta interrumpida > SLA crítico > novedad con rider esperando > efectivo sobre límite > pedido sin rider
-     * cerca del minuto 5 > retorno vencido > tareas normales de picking". Los puestos 1 y 4 llegan con las incidencias
-     * (§14) y la caja (§17); por eso faltan. "Buscando rider" antes de la alerta del minuto 3 va al final: las rondas
-     * corren solas y el operador todavía no tiene que hacer nada. Lo que está en revisión lo decide administración.
+     * cerca del minuto 5 > retorno vencido > tareas normales de picking". El puesto 4 (efectivo sobre el límite) es del
+     * rider, no de una orden: va en las alertas y en Riders. "Buscando rider" antes de la alerta del minuto 3 va al final:
+     * las rondas corren solas y el operador todavía no tiene que hacer nada. Lo que está en revisión lo decide administración.
      */
     public const PRIORITY = [
+        'incidencia' => [1, 'Incidencia de ruta: decidir'],
         'sla_vencido' => [2, 'SLA vencido'],
         'novedad' => [3, 'Novedad: el rider espera'],
         'sin_rider' => [5, 'Sin rider: llamar y asignar a mano'],
@@ -32,6 +34,7 @@ class Tower
         'confirmar_salida' => [7, 'Confirmar salida cuando llegue el rider'],
         'entregar_agencia' => [7, 'Entregar el paquete a la agencia'],
         'recibir_retorno' => [7, 'Recibir el retorno cuando llegue el rider'],
+        'traspaso' => [7, 'Confirmar el traspaso entre riders'],
         'buscando' => [8, 'Buscando rider (rondas en curso)'],
         'revision' => [9, 'En revisión: decide administración'],
     ];
@@ -54,6 +57,8 @@ class Tower
             'rounds',
             'custody',
             'novelties' => fn ($q) => $q->whereNull('resolved_at')->with('reporter:id,names'),
+            'incidents' => fn ($q) => $q->whereIn('status', LogisticsIncident::ACTIVE)->with('rider:id,names,phone'),
+            'pickupRider:id,names,phone',
         ])
             ->where('center_id', $center->id)
             ->when(!$all, fn ($q) => $q->whereNotIn('status', LogisticsStatus::FINISHED))
@@ -77,6 +82,8 @@ class Tower
             // §21.1: "Riders con efectivo ≥ USD 60" y "Diferencias de caja… pendientes"
             'efectivo_limite' => $limit > 0 ? count(array_filter($balances, fn ($b) => $b['total_usd'] >= $limit)) : 0,
             'diferencias' => $center ? LogisticsAlert::where('center_id', $center->id)->where('type', 'caja_diferencia')->whereNull('resolved_at')->count() : 0,
+            // §21.1: "Incidencias graves"
+            'incidencias' => count(array_filter($rows, fn ($r) => $r['open_incident'] !== null)),
             'sin_rider' => $count(LogisticsStatus::UNASSIGNED),
             'preparando_listos' => $count([LogisticsStatus::RIDER_CONFIRMED, LogisticsStatus::PREPARING, LogisticsStatus::READY]),
             'rutas_activas' => count(array_unique(array_filter(array_map(
@@ -99,7 +106,8 @@ class Tower
         $handed = $r->custody->contains(fn ($c) => $c->to_type === 'agencia');
         $returnDeadline = $r->status === LogisticsStatus::RETURN_PENDING && $r->center ? Returns::deadline($r, $r->center) : null;
         $returnOverdue = $returnDeadline !== null && now()->gt($returnDeadline);
-        $key = $this->priorityKey($r, $sla, $searching, $novelty, $handed, $returnOverdue, $settings);
+        $incident = $r->incidents->sortByDesc('id')->first();
+        $key = $this->priorityKey($r, $sla, $searching, $novelty, $handed, $returnOverdue, $settings, $incident);
 
         return $r->toArray() + [
             'status_label' => LogisticsStatus::label($r->status),
@@ -111,6 +119,20 @@ class Tower
             'round' => $round && !$round->ended_at ? ['number' => $round->number, 'expires_at' => $round->expires_at] : null,
             'ready' => $r->ready_at !== null,
             'handed_to_agency' => $handed,
+            // §14: la incidencia de ruta abierta (o interrumpida, esperando el traspaso) y quién tiene el paquete
+            'open_incident' => $incident ? [
+                'id' => $incident->id,
+                'type' => $incident->type,
+                'type_label' => $incident->typeLabel(),
+                'comment' => $incident->comment,
+                'status' => $incident->status,
+                'pickup' => $incident->pickup,
+                'rider' => $incident->rider?->only(['id', 'names', 'phone']),
+                'lat' => $incident->lat,
+                'lng' => $incident->lng,
+                'reported_at' => $incident->reported_at,
+            ] : null,
+            'pickup_rider' => $r->pickupRider?->only(['id', 'names', 'phone']),
             'return_deadline' => $returnDeadline,
             'return_overdue' => $returnOverdue,
             // Lo que pasa al recibirlo: apartada para la misma orden (R5) o a revisión (§16.1)
@@ -148,8 +170,15 @@ class Tower
     }
 
     private function priorityKey(LogisticsOrder $r, ?float $sla, ?int $searching, ?LogisticsNovelty $novelty, bool $handed,
-        bool $returnOverdue, array $settings): ?string
+        bool $returnOverdue, array $settings, ?LogisticsIncident $incident = null): ?string
     {
+        // §21.3: "ruta interrumpida" va primero
+        if ($incident && $incident->status === LogisticsIncident::OPEN) {
+            return 'incidencia';
+        }
+        if ($r->pickup_rider_id && $r->rider_id && in_array($r->status, [LogisticsStatus::RIDER_CONFIRMED, LogisticsStatus::PREPARING, LogisticsStatus::READY], true)) {
+            return 'traspaso';
+        }
         // Un retorno o una pieza en revisión ya no se entregan: el SLA no cuenta
         if ($r->status === LogisticsStatus::RETURN_PENDING) {
             return $returnOverdue ? 'retorno_vencido' : 'recibir_retorno';

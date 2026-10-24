@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Constants\LogisticsStatus;
 use App\Models\DispatchOffer;
+use App\Models\LogisticsIncident;
 use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
 use App\Models\RiderLocation;
@@ -11,6 +12,7 @@ use App\Models\RiderProfile;
 use App\Services\Delivery\TariffBook;
 use App\Services\Logistics\Candidates;
 use App\Services\Logistics\Dispatcher;
+use App\Services\Logistics\Incidents;
 use App\Services\Logistics\LogisticsSettings;
 use App\Services\Logistics\Novelties;
 use App\Services\Logistics\RiderCash;
@@ -146,7 +148,7 @@ class RiderAppController extends Controller
     {
         $profile = $this->profile();
         $center = $profile->center;
-        $offers = DispatchOffer::with('round:id,number')->where('rider_id', $profile->user_id)->whereNull('response')
+        $offers = DispatchOffer::with(['round:id,number', 'logisticsOrder:id,pickup_rider_id'])->where('rider_id', $profile->user_id)->whereNull('response')
             ->where('expires_at', '>', now())->orderBy('id')->get();
 
         return response()->json([
@@ -156,7 +158,11 @@ class RiderAppController extends Controller
                 'round' => $o->round?->number,
                 'expires_at' => $o->expires_at->toIso8601String(),
                 'seconds_left' => max(0, (int) now()->diffInSeconds($o->expires_at, false)),
-                'message' => 'Nueva asignación disponible. Debes poder dirigirte al centro logístico inmediatamente. Confirmar disponibilidad.',
+                // §14.2: un reemplazo recoge el paquete donde está el rider que tuvo la incidencia, no en el centro
+                'replacement' => (bool) $o->logisticsOrder?->pickup_rider_id,
+                'message' => $o->logisticsOrder?->pickup_rider_id
+                    ? 'Reemplazo disponible: recoges el paquete donde está otro rider. Confirmar disponibilidad.'
+                    : 'Nueva asignación disponible. Debes poder dirigirte al centro logístico inmediatamente. Confirmar disponibilidad.',
                 'center' => ['name' => $center?->name, 'address' => $center?->address],
             ]),
         ]);
@@ -191,24 +197,46 @@ class RiderAppController extends Controller
     public function assignment(TariffBook $tariffs)
     {
         $profile = $this->profile();
-        // También sus retornos pendientes: tiene que devolver la pieza al centro (§16.1)
-        $rows = LogisticsOrder::with(['center.warehouse', 'order.client', 'order.payments'])
-            ->where('rider_id', $profile->user_id)->whereIn('status', [...Candidates::BUSY, LogisticsStatus::RETURN_PENDING])->orderBy('id')->get();
+        // También sus retornos pendientes (§16.1) y la orden cuyo paquete todavía tiene mientras llega su reemplazo (§14)
+        $me = (int) $profile->user_id;
+        $rows = LogisticsOrder::with(['center.warehouse', 'order.client', 'order.payments', 'pickupRider:id,names,phone',
+            'incidents' => fn ($q) => $q->whereIn('status', LogisticsIncident::ACTIVE)])
+            ->where(fn ($q) => $q->where(fn ($w) => $w->where('rider_id', $me)->whereIn('status', [...Candidates::BUSY, LogisticsStatus::RETURN_PENDING]))
+                ->orWhere(fn ($w) => $w->where('pickup_rider_id', $me)->whereNotIn('status', LogisticsStatus::FINISHED)))
+            ->orderBy('id')->get();
 
         return response()->json([
             'status' => true,
-            'assignments' => $rows->map(function (LogisticsOrder $row) use ($tariffs, $profile) {
+            'assignments' => $rows->map(function (LogisticsOrder $row) use ($tariffs, $profile, $me) {
                 $order = $row->order;
-                $returning = $row->status === LogisticsStatus::RETURN_PENDING;
+                $incident = $row->incidents->sortByDesc('id')->first();
+                // §14: el que tuvo la incidencia espera a su reemplazo con el paquete; el reemplazo lo recoge donde está él
+                $handingOver = (int) $row->pickup_rider_id === $me && (int) $row->rider_id !== $me;
+                $pickingUp = $row->pickup_rider_id && (int) $row->rider_id === $me;
+                $returning = $row->status === LogisticsStatus::RETURN_PENDING || $handingOver;
                 $client = $order?->client;
-                $tariff = $row->center ? $tariffs->find((int) $profile->user_id, (int) $row->center->city_id, now(config('app.timezone'))->toDateString()) : null;
+                $tariff = $row->center ? $tariffs->find($me, (int) $row->center->city_id, now(config('app.timezone'))->toDateString()) : null;
                 $quote = $tariff && $row->center_client_meters !== null ? $tariffs->quote($tariff, (int) $row->center_client_meters) : null;
 
                 return [
                     'logistics_order_id' => $row->id,
-                    'status' => $row->status,
-                    'status_label' => LogisticsStatus::label($row->status),
-                    'next_action' => self::NEXT_ACTION[$row->status] ?? null,
+                    'status' => $handingOver ? 'reemplazo' : $row->status,
+                    'status_label' => $handingOver ? 'Reemplazo en camino' : LogisticsStatus::label($row->status),
+                    'next_action' => match (true) {
+                        $handingOver => $row->rider_id
+                            ? 'Otro rider va a recoger el paquete donde estás: entrégaselo cuando llegue.'
+                            : 'El operador está buscando quién recoja el paquete donde estás. Espera sus instrucciones.',
+                        (bool) $pickingUp => 'Recoge el paquete donde está ' . ($row->pickupRider?->names ?? 'el otro rider') . ' y toca "Recibí el paquete".',
+                        default => self::NEXT_ACTION[$row->status] ?? null,
+                    },
+                    'pickup' => $pickingUp ? [
+                        'name' => $row->pickupRider?->names,
+                        'phone' => $row->pickupRider?->phone,
+                        'latitude' => $incident?->lat,
+                        'longitude' => $incident?->lng,
+                    ] : null,
+                    'open_incident' => $incident && (int) $incident->rider_id === $me
+                        ? ['id' => $incident->id, 'type' => $incident->type, 'type_label' => $incident->typeLabel(), 'status' => $incident->status] : null,
                     'center' => [
                         'name' => $row->center?->name,
                         'address' => $row->center?->address,
@@ -260,6 +288,36 @@ class RiderAppController extends Controller
     public function noveltyTypes()
     {
         return response()->json(['status' => true, 'types' => collect(LogisticsNovelty::TYPES)->map(fn ($t, $k) => ['value' => $k, 'label' => $t['label']])->values()]);
+    }
+
+    /** §14.1: "Reportar incidencia de ruta", con motivo, comentario y GPS. */
+    public function incident(Request $request, LogisticsOrder $logisticsOrder, Incidents $incidents)
+    {
+        $this->profile();
+        $data = $request->validate([
+            'type' => 'required|in:' . implode(',', array_keys(LogisticsIncident::TYPES)),
+            'comment' => 'nullable|string|max:500',
+            'lat' => 'nullable|numeric|between:-90,90',
+            'lng' => 'nullable|numeric|between:-180,180',
+        ]);
+        $out = $incidents->report($logisticsOrder, Auth::user(), $data['type'], $data['comment'] ?? null, $data['lat'] ?? null, $data['lng'] ?? null);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
+    }
+
+    public function incidentTypes()
+    {
+        return response()->json(['status' => true, 'types' => collect(LogisticsIncident::TYPES)->map(fn ($label, $k) => ['value' => $k, 'label' => $label])->values()]);
+    }
+
+    /** §14.3: el reemplazo confirma que recibió el paquete del rider que tuvo la incidencia. */
+    public function transfer(Request $request, LogisticsOrder $logisticsOrder, Incidents $incidents)
+    {
+        $this->profile();
+        $data = $request->validate(['lat' => 'nullable|numeric|between:-90,90', 'lng' => 'nullable|numeric|between:-180,180']);
+        $out = $incidents->transfer($logisticsOrder, Auth::user(), $data['lat'] ?? null, $data['lng'] ?? null);
+
+        return response()->json(['status' => $out['ok'], 'message' => $out['message']], $out['code']);
     }
 
     public const NEXT_ACTION = [

@@ -197,8 +197,11 @@ class OrderStock
 
     private function withRider(Order $order): bool
     {
-        return LogisticsOrder::where('order_id', $order->id)->whereNotNull('departed_at')->whereNotNull('rider_id')
-            ->whereIn('status', LogisticsStatus::WITH_RIDER)->exists();
+        return LogisticsOrder::where('order_id', $order->id)
+            ->where(fn ($q) => $q->where(fn ($w) => $w->whereNotNull('departed_at')->whereNotNull('rider_id')->whereIn('status', LogisticsStatus::WITH_RIDER))
+                // §14: mientras se busca reemplazo, el paquete sigue con el rider que tuvo la incidencia
+                ->orWhere(fn ($w) => $w->whereNotNull('pickup_rider_id')->whereNotIn('status', LogisticsStatus::FINISHED)))
+            ->exists();
     }
 
     /**

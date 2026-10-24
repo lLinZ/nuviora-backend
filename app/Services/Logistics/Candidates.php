@@ -3,6 +3,7 @@
 namespace App\Services\Logistics;
 
 use App\Constants\LogisticsStatus;
+use App\Models\LogisticsIncident;
 use App\Models\LogisticsOrder;
 use App\Models\RiderProfile;
 use Carbon\CarbonInterface;
@@ -31,6 +32,7 @@ class Candidates
         'suspendido' => 'Suspendido por administración',
         'fuera_de_franja' => 'Fuera de su franja',
         'ocupado' => 'Ya tiene una orden en curso',
+        'incidencia' => 'Tiene una incidencia de ruta sin cerrar',
         'sin_gps' => 'Sin GPS reciente',
         'sin_alarma' => 'La app no puede recibir la alarma',
         'sin_eta' => 'Google no dio el tiempo al centro',
@@ -60,6 +62,8 @@ class Candidates
         $profiles = RiderProfile::with('user:id,names')->where('center_id', $center->id)->orderBy('id')->get();
         $busy = LogisticsOrder::whereIn('status', self::BUSY)->whereNotNull('rider_id')->where('id', '!=', $row->id)
             ->pluck('rider_id')->map(fn ($id) => (int) $id)->all();
+        // §14: el que tuvo una incidencia (y todavía tiene el paquete, o espera que el operador decida) no recibe rondas
+        $withIncident = LogisticsIncident::whereIn('status', LogisticsIncident::ACTIVE)->pluck('rider_id')->map(fn ($id) => (int) $id)->all();
         $deliveredToday = LogisticsOrder::where('status', LogisticsStatus::DELIVERED)->whereNotNull('rider_id')
             ->where('delivered_at', '>=', $at->copy()->startOfDay())
             ->selectRaw('rider_id, count(*) as total')->groupBy('rider_id')->pluck('total', 'rider_id');
@@ -72,6 +76,7 @@ class Candidates
                 $p->suspended_at !== null => 'suspendido',
                 !Centers::inHours(Centers::hoursIn($p->schedule ?? ($center->opening_hours ?? Centers::DEFAULT_HOURS), $at), $at) => 'fuera_de_franja',
                 in_array((int) $p->user_id, $busy, true) => 'ocupado',
+                in_array((int) $p->user_id, $withIncident, true) => 'incidencia',
                 !$p->hasLocation() || $p->last_location_at->lt($at->copy()->subSeconds($gpsMaxAge)) => 'sin_gps',
                 !$p->hasPushTarget() || $p->notifications_enabled === false => 'sin_alarma',
                 default => null,

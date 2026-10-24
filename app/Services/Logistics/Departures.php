@@ -69,6 +69,10 @@ class Departures
             if (!in_array($row->status, self::DEPARTABLE, true) || !$row->rider_id) {
                 return $this->refuse($row, 'confirmar la salida');
             }
+            // §14.3: el paquete no está en el centro sino con el rider que tuvo la incidencia
+            if ($row->pickup_rider_id) {
+                return ['ok' => false, 'message' => 'El paquete está con el rider que tuvo la incidencia: confirma el traspaso cuando el reemplazo lo reciba (§14.3).', 'code' => 409];
+            }
             // §16.1 punto 3: "debe entregar primero el retorno pendiente antes de recibir nuevos paquetes"
             $pendingReturn = LogisticsOrder::with('order:id,name')->where('rider_id', $row->rider_id)
                 ->where('status', LogisticsStatus::RETURN_PENDING)->first();

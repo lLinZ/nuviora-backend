@@ -54,6 +54,7 @@ class LogisticsOrders
                 'center_id' => $center->id,
                 'status' => LogisticsStatus::PENDING_WINDOW,
                 'rider_id' => null,
+                'pickup_rider_id' => null,
                 'agency_id' => null,
                 'overflow_reason' => null,
                 'released_at' => null,

@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Constants\LogisticsStatus;
+use App\Models\LogisticsIncident;
 use App\Models\LogisticsNovelty;
 use App\Models\LogisticsOrder;
 use App\Services\Logistics\Departures;
 use App\Services\Logistics\Dispatcher;
+use App\Services\Logistics\Incidents;
 use App\Services\Logistics\Novelties;
 use App\Services\Logistics\Returns;
 use App\Services\Logistics\Shifts;
@@ -28,7 +30,7 @@ class LogisticsDispatchController extends Controller
     {
         $this->authorizeCenter($logisticsOrder);
         $logisticsOrder->load(['order:id,name,current_total_price,status_id', 'order.status:id,description', 'rider:id,names', 'agency:id,names',
-            'rounds.offers.rider:id,names', 'events.actor:id,names', 'novelties.reporter:id,names', 'custody']);
+            'rounds.offers.rider:id,names', 'events.actor:id,names', 'novelties.reporter:id,names', 'custody', 'incidents.rider:id,names']);
 
         return response()->json([
             'status' => true,
@@ -109,6 +111,32 @@ class LogisticsDispatchController extends Controller
         $data = $request->validate(['action' => 'required|in:restock,discard', 'note' => 'nullable|string|max:250']);
 
         return $this->reply($returns->resolveReview($logisticsOrder, Auth::user(), $data['action'], $data['note'] ?? null));
+    }
+
+    /** §14.2: el operador decide que el rider sigue con la ruta. */
+    public function incidentContinue(Request $request, LogisticsIncident $incident, Incidents $incidents)
+    {
+        $this->authorizeCenter($incident->logisticsOrder);
+        $data = $request->validate(['note' => 'nullable|string|max:250']);
+
+        return $this->reply($incidents->keepGoing($incident, Auth::user(), $data['note'] ?? null));
+    }
+
+    /** §14.2 puntos 3 a 5: "Interrumpir ruta" y buscar reemplazo; pickup = rider (donde está él) o almacen. */
+    public function incidentInterrupt(Request $request, LogisticsIncident $incident, Incidents $incidents)
+    {
+        $this->authorizeCenter($incident->logisticsOrder);
+        $data = $request->validate(['pickup' => 'required|in:rider,almacen', 'note' => 'nullable|string|max:250']);
+
+        return $this->reply($incidents->interrupt($incident, Auth::user(), $data['pickup'], $data['note'] ?? null));
+    }
+
+    /** §14.3: el operador confirma el traspaso rider → rider (si no lo confirmó el reemplazo en la app). */
+    public function transfer(LogisticsOrder $logisticsOrder, Incidents $incidents)
+    {
+        $this->authorizeCenter($logisticsOrder);
+
+        return $this->reply($incidents->transfer($logisticsOrder, Auth::user()));
     }
 
     public function commentNovelty(Request $request, LogisticsNovelty $novelty, Novelties $novelties)

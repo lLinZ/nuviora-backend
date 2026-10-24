@@ -10,6 +10,8 @@ use App\Services\Logistics\Centers;
 use App\Services\Logistics\Departures;
 use App\Services\Logistics\LogisticsOrders;
 use App\Services\Logistics\Novelties;
+use App\Models\LogisticsIncident;
+use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\RiderCash;
 use App\Services\Logistics\RiderPay;
 use Illuminate\Support\Facades\Auth;
@@ -97,8 +99,18 @@ class LogisticsOrderObserver
 
                 return;
             }
+            // §14: si buscaba reemplazo, el retorno lo hace el rider que todavía tiene el paquete
+            $wasSearching = $row->status === LogisticsStatus::SEARCHING;
+            $holder = $row->pickup_rider_id ? ['rider_id' => $row->pickup_rider_id, 'pickup_rider_id' => null] : [];
             $this->orders->transition($row, LogisticsStatus::RETURN_PENDING, 'retorno_pendiente', $actor, "La orden pasó a \"{$status}\" con la pieza fuera del almacén.",
-                [], ['return_pending_at' => now()]);
+                [], ['return_pending_at' => now()] + $holder);
+            if ($holder) {
+                if ($wasSearching) {
+                    app(Dispatcher::class)->cancelOpenOffers($row);
+                }
+                LogisticsIncident::where('logistics_order_id', $row->id)->where('status', LogisticsIncident::INTERRUPTED)
+                    ->update(['status' => LogisticsIncident::CLOSED, 'resolved_at' => now(), 'result' => "La orden pasó a \"{$status}\": el paquete vuelve al centro."]);
+            }
             // §18.4, R7: si llegó al cliente y no le recibieron, se le paga la ida
             app(RiderPay::class)->recordFailedLeg($row);
 
