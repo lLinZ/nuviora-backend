@@ -98,7 +98,8 @@ class RiderAppController extends Controller
         $rows = [];
         $latest = null;
         foreach ($data['points'] as $point) {
-            $at = Carbon::parse($point['recorded_at']);
+            // La app manda la hora en UTC ("…Z"); la base guarda la hora de Caracas. Sin pasarla, quedaba 4 h adelantada
+            $at = Carbon::parse($point['recorded_at'])->setTimezone(config('app.timezone'));
             // Un reloj del teléfono adelantado no puede dejar una ubicación "del futuro" como la más reciente
             if ($at->gt($now->copy()->addMinutes(2))) {
                 $at = $now->copy();
