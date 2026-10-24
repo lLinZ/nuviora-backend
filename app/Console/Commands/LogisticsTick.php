@@ -9,6 +9,7 @@ use App\Services\Logistics\Centers;
 use App\Services\Logistics\Dispatcher;
 use App\Services\Logistics\LogisticsOrders;
 use App\Services\Logistics\MorningCheck;
+use App\Services\Logistics\OperatorCalendar;
 use App\Services\Logistics\Returns;
 use App\Services\Logistics\RiderCash;
 use Illuminate\Console\Command;
@@ -62,8 +63,11 @@ class LogisticsTick extends Command
         foreach (LogisticsCenter::where('is_active', true)->get() as $center) {
             $state = $centers->state($center);
             if ($state === Centers::NO_OPERATOR) {
+                // §4.1: se nombra a quien estaba programado hoy
+                $scheduled = app(OperatorCalendar::class)->on($center, now())['name'];
                 $alerts->raise($center, 'sin_operador', LogisticsAlert::CRITICAL,
-                    "{$center->name}: es hora de abrir y ningún operador inició turno. No se despacha nada, tampoco por agencia.",
+                    "{$center->name}: es hora de abrir y ningún operador inició turno" . ($scheduled ? " (hoy le toca a {$scheduled})" : '')
+                    . '. No se despacha nada, tampoco por agencia.',
                     "sin_operador:{$center->id}:" . now()->toDateString());
             }
             if ($state === Centers::OPEN) {

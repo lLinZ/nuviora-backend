@@ -36,7 +36,10 @@ class Shifts
                 throw ValidationException::withMessages(['turno' => "Ya hay un turno abierto de {$open->user?->names}, desde las {$open->started_at->format('H:i')}."]);
             }
 
-            return LogisticsShift::create(['center_id' => $center->id, 'user_id' => $user->id, 'started_at' => now()]);
+            // §4.1: queda quién estaba programado, aunque abra otro
+            $scheduled = app(OperatorCalendar::class)->on($center, now())['user_id'];
+
+            return LogisticsShift::create(['center_id' => $center->id, 'user_id' => $user->id, 'scheduled_user_id' => $scheduled, 'started_at' => now()]);
         });
 
         $this->alerts->resolve("sin_operador:{$center->id}:*", $user->id);
@@ -94,6 +97,7 @@ class Shifts
 
         $shift->update([
             'ended_at' => now(),
+            'closed_by' => $user->id,
             'close_type' => $pending === [] ? LogisticsShift::CLOSE_CLEAN : LogisticsShift::CLOSE_WITH_PENDING,
             'close_reason' => $reason ?: null,
             'pending_at_close' => $pending ?: null,

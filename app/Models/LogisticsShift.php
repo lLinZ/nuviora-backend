@@ -10,7 +10,7 @@ class LogisticsShift extends Model
     public const CLOSE_CLEAN = 'limpio';
     public const CLOSE_WITH_PENDING = 'con_pendientes';
 
-    protected $fillable = ['center_id', 'user_id', 'started_at', 'ended_at', 'close_type', 'close_reason', 'pending_at_close'];
+    protected $fillable = ['center_id', 'user_id', 'scheduled_user_id', 'started_at', 'ended_at', 'closed_by', 'close_type', 'close_reason', 'pending_at_close'];
 
     protected $casts = [
         'started_at' => 'datetime',
@@ -26,5 +26,16 @@ class LogisticsShift extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** Quién estaba programado cuando se abrió (§4.1). */
+    public function scheduledUser()
+    {
+        return $this->belongsTo(User::class, 'scheduled_user_id');
+    }
+
+    public function closer()
+    {
+        return $this->belongsTo(User::class, 'closed_by');
     }
 }

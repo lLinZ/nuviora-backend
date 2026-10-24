@@ -10,6 +10,7 @@ use App\Models\RoadReport;
 use App\Models\User;
 use App\Services\Logistics\Centers;
 use App\Services\Logistics\LogisticsSettings;
+use App\Services\Logistics\OperatorCalendar;
 use App\Services\Logistics\RoadReports;
 use App\Services\Logistics\Shifts;
 use App\Services\Logistics\Tower;
@@ -91,6 +92,20 @@ class LogisticsShiftController extends Controller
             'road_reports' => app(RoadReports::class)->active($center)->values(),
             'server_time' => now()->toIso8601String(),
         ]);
+    }
+
+    /** §4.1: quién está programado cada día y, en los que ya pasaron, quién abrió y cerró. ?from=&to= (hasta 62 días). */
+    public function calendar(Request $request, LogisticsCenter $center, OperatorCalendar $calendar)
+    {
+        $this->authorizeCenter($center);
+        $data = $request->validate(['from' => 'nullable|date', 'to' => 'nullable|date|after_or_equal:from']);
+        $from = $data['from'] ?? now()->subDays(7)->toDateString();
+        $to = $data['to'] ?? now()->addDays(27)->toDateString();
+        if (\Carbon\Carbon::parse($from)->diffInDays(\Carbon\Carbon::parse($to)) > 62) {
+            return response()->json(['status' => false, 'message' => 'Elige hasta dos meses.'], 422);
+        }
+
+        return response()->json(['status' => true, 'days' => $calendar->range($center, $from, $to)]);
     }
 
     /** §15: el operador marca una incidencia vial "sigue activo" o "ya despejado". POST { vote } */

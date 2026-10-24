@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\LogisticsCenter;
 use App\Models\LogisticsCenterException;
 use App\Models\LogisticsSetting;
+use App\Models\OperatorOverride;
+use App\Models\OperatorPattern;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\Logistics\Centers;
@@ -118,6 +120,69 @@ class LogisticsCenterController extends Controller
         $exception->delete();
 
         return response()->json(['status' => true, 'message' => 'Excepción borrada.']);
+    }
+
+    /** §4.1: los patrones recurrentes de los operadores del centro (12/4 u otro) y los cambios por fecha. */
+    public function calendarSetup(LogisticsCenter $center)
+    {
+        return response()->json([
+            'status' => true,
+            'patterns' => OperatorPattern::with('user:id,names')->where('center_id', $center->id)->orderByDesc('is_active')->orderBy('id')->get(),
+            'overrides' => OperatorOverride::with('user:id,names')->where('center_id', $center->id)->whereDate('date', '>=', now()->subDays(30)->toDateString())
+                ->orderBy('date')->get(),
+            'reasons' => OperatorOverride::REASONS,
+            'operators' => $center->operators()->get(['users.id', 'users.names'])->map(fn ($u) => ['id' => $u->id, 'names' => $u->names, 'coverage' => $u->pivot->coverage]),
+        ]);
+    }
+
+    /** §4.1: "Soportar patrones recurrentes, incluido 12 días trabajados / 4 días libres", desde una fecha. */
+    public function storePattern(Request $request, LogisticsCenter $center)
+    {
+        $data = $request->validate([
+            'user_id' => ['required', 'integer', Rule::exists('logistics_center_operators', 'user_id')->where('center_id', $center->id)],
+            'starts_on' => 'required|date',
+            'days_on' => 'required|integer|min:1|max:60',
+            'days_off' => 'required|integer|min:0|max:60',
+            'start_time' => 'nullable|date_format:H:i',
+            'end_time' => 'nullable|date_format:H:i|after:start_time',
+        ], ['user_id.exists' => 'Ese usuario no es operador de este centro.']);
+        $pattern = OperatorPattern::create($data + ['center_id' => $center->id, 'is_active' => true, 'created_by' => Auth::id()]);
+
+        return response()->json(['status' => true, 'message' => 'Patrón guardado.', 'pattern' => $pattern]);
+    }
+
+    /** Se apaga, no se borra: el historial de quién estaba programado sigue (§4.1). */
+    public function disablePattern(LogisticsCenter $center, OperatorPattern $pattern)
+    {
+        abort_unless((int) $pattern->center_id === (int) $center->id, 404);
+        $pattern->update(['is_active' => false]);
+
+        return response()->json(['status' => true, 'message' => 'Patrón apagado.']);
+    }
+
+    /** §4.1: "sustituciones manuales por fecha, vacaciones, ausencias y cambios de último minuto". Uno por día. */
+    public function storeOverride(Request $request, LogisticsCenter $center)
+    {
+        $data = $request->validate([
+            'date' => 'required|date',
+            'user_id' => ['nullable', 'integer', Rule::exists('logistics_center_operators', 'user_id')->where('center_id', $center->id)],
+            'reason' => ['required', Rule::in(array_keys(OperatorOverride::REASONS))],
+            'start_time' => 'nullable|date_format:H:i',
+            'end_time' => 'nullable|date_format:H:i|after:start_time',
+            'note' => 'nullable|string|max:255',
+        ], ['user_id.exists' => 'Ese usuario no es operador de este centro.']);
+        $override = OperatorOverride::updateOrCreate(['center_id' => $center->id, 'date' => $data['date']],
+            collect($data)->except('date')->all() + ['user_id' => null, 'created_by' => Auth::id()]);
+
+        return response()->json(['status' => true, 'message' => 'Cambio del día guardado.', 'override' => $override]);
+    }
+
+    public function destroyOverride(LogisticsCenter $center, OperatorOverride $override)
+    {
+        abort_unless((int) $override->center_id === (int) $center->id, 404);
+        $override->delete();
+
+        return response()->json(['status' => true, 'message' => 'Cambio del día borrado: vale el patrón.']);
     }
 
     /** Parámetros vigentes, de dónde salen (del centro o generales) y sus versiones anteriores (§33). */

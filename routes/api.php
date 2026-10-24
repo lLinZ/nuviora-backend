@@ -770,6 +770,11 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::put('/centers/{center}/operators', [\App\Http\Controllers\LogisticsCenterController::class, 'syncOperators']);
         Route::post('/centers/{center}/exceptions', [\App\Http\Controllers\LogisticsCenterController::class, 'storeException']);
         Route::delete('/centers/{center}/exceptions/{exception}', [\App\Http\Controllers\LogisticsCenterController::class, 'destroyException']);
+        Route::get('/centers/{center}/calendar-setup', [\App\Http\Controllers\LogisticsCenterController::class, 'calendarSetup']);
+        Route::post('/centers/{center}/patterns', [\App\Http\Controllers\LogisticsCenterController::class, 'storePattern']);
+        Route::put('/centers/{center}/patterns/{pattern}/disable', [\App\Http\Controllers\LogisticsCenterController::class, 'disablePattern']);
+        Route::post('/centers/{center}/overrides', [\App\Http\Controllers\LogisticsCenterController::class, 'storeOverride']);
+        Route::delete('/centers/{center}/overrides/{override}', [\App\Http\Controllers\LogisticsCenterController::class, 'destroyOverride']);
         Route::get('/settings', [\App\Http\Controllers\LogisticsCenterController::class, 'settings']);
         Route::put('/settings', [\App\Http\Controllers\LogisticsCenterController::class, 'updateSettings']);
         Route::get('/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'index']);
@@ -785,6 +790,7 @@ Route::middleware(['auth:sanctum', 'agency.gate'])->group(function () {
         Route::post('/centers/{center}/shift/close', [\App\Http\Controllers\LogisticsShiftController::class, 'close']);
         Route::post('/centers/{center}/alerts/{alert}/resolve', [\App\Http\Controllers\LogisticsShiftController::class, 'resolveAlert']);
         Route::post('/road-reports/{report}/vote', [\App\Http\Controllers\LogisticsShiftController::class, 'voteRoadReport']);
+        Route::get('/centers/{center}/calendar', [\App\Http\Controllers\LogisticsShiftController::class, 'calendar']);
         Route::get('/centers/{center}/riders', [\App\Http\Controllers\LogisticsRiderController::class, 'forCenter']);
         Route::post('/centers/{center}/riders/{user}/cash', [\App\Http\Controllers\LogisticsRiderController::class, 'receiveCash']);
         Route::get('/centers/{center}/payouts', [\App\Http\Controllers\LogisticsRiderController::class, 'payouts']);
